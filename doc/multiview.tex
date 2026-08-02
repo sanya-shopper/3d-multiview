@@ -539,7 +539,8 @@ and stacking all views gives a $2N\times4$ homogeneous system solved, once
 more, as in \autoref{ex:nullvec} --- the DLT triangulation
 \cite{HartleyZisserman2004}. The implementation accepts any $N\ge2$, so
 still photographs registered into the rig frame (\autoref{sec:extensions})
-simply extend the same call. DLT minimizes an algebraic residual; the
+simply extend the same call; what additional views and additional pixels
+buy, quantitatively, is analyzed in \autoref{sec:scaling}. DLT minimizes an algebraic residual; the
 reprojection-optimal two-view method of Hartley--Sturm
 \cite{HartleySturm1997} is a planned refinement, worthwhile mainly for
 wide-baseline auxiliary views. The library reports the RMS reprojection
@@ -631,6 +632,193 @@ planned meshing path is classical: volumetric range-image fusion
 \cite{Kazhdan2006} over the accumulated cloud; both consume exactly the
 oriented-point data the pipeline produces, so they attach cleanly as later
 modules.
+
+%----------------------------------------------------------------------
+\section{Scaling the rig: more cameras and more pixels}
+\label{sec:scaling}
+
+The two-camera rig is the minimum that triangulates. This section works out
+what changes when the rig grows --- $N$ cameras around the same volume, or
+higher (possibly unequal) resolutions --- so that hardware decisions can be
+made from the error laws instead of intuition. The library is already
+shaped for this: \code{mv\_triangulate} accepts any $N\ge2$, and every
+camera carries its own $\K$, so heterogeneous rigs need no new code paths in
+the sparse pipeline.
+
+\subsection{$N$ cameras: accuracy}
+\label{sec:ncams}
+
+Adding cameras improves triangulation through two distinct mechanisms.
+
+\paragraph{Geometry (the dominant effect).} The depth law
+\eqref{eq:deptherr} is governed by the baseline: rays from nearby centers
+intersect at grazing angles, and the intersection point slides far along
+the rays for small image perturbations. With cameras spread out, the
+\emph{widest} usable pair sets the leading term: for $N$ collinear cameras
+spaced $B$ apart, the widest baseline is $(N{-}1)B$ and
+\begin{equation}
+\sigma_Z^{\text{widest}} \;=\; \frac{Z^2}{f\,(N{-}1)B}\,\sigma_d,
+\label{eq:multibaseline}
+\end{equation}
+an $(N{-}1)$-fold improvement before any averaging. The catch is
+correspondence: wide pairs see the surface from very different angles, so
+matching is harder --- which is exactly why multi-baseline stereo
+\cite{OkutomiKanade1993} matches \emph{short} pairs (easy, unambiguous) and
+accumulates their evidence in a common inverse-depth parameterization,
+getting wide-pair accuracy at short-pair matching difficulty. Repetitive
+texture that fools one pair (a periodic fence aliases at one baseline) is
+disambiguated by any other baseline whose period does not divide it --- the
+match must be consistent across \emph{all} pairs simultaneously.
+
+\paragraph{Redundancy.} With visibility and geometry held fixed,
+$N$ views of the same point give the usual statistical $\sqrt{N}$: the DLT
+stack \eqref{eq:dlt} grows to $2N\times4$ rows and the estimate averages the
+per-view noise. This is the smaller effect --- doubling $N$ buys
+$\sqrt2\approx1.4\times$; doubling the \emph{spread} buys $2\times$.
+
+\begin{example}[four collinear cameras]
+\label{ex:ncams}
+Extend the experimental rig of \autoref{ex:deptherr} ($f=800$\,px,
+$Z=4.7$\,m, $\sigma_d=0.42$\,px) from two cameras $0.5$\,m apart to four
+cameras at $0,\,0.5,\,1.0,\,1.5$\,m. The widest pair has $B=1.5$\,m, so by
+\eqref{eq:multibaseline}
+$\sigma_Z = 4.7^2\cdot0.42/(800\cdot1.5) \approx 7.7$\,mm --- three times
+better than the 23\,mm of the original pair, from geometry alone; fusing
+the remaining pairs tightens it further. The price: the widest pair's
+viewing directions differ by
+$2\arctan\!\bigl(0.75/4.7\bigr)\approx18^\circ$, and matching windows must
+survive that foreshortening --- the Okutomi--Kanade argument for
+accumulating the short pairs instead.
+\end{example}
+
+\subsection{$N$ cameras: occlusion and topology}
+\label{sec:occlusion}
+
+A point enters the model only if at least two cameras see it. With two
+cameras, anything hidden from either one is lost; the reconstructed surface
+is only the band that is simultaneously front-facing and unobstructed for
+both --- for objects with complex topology (handles, tunnels, deep
+concavities) that band can be a small fraction of the surface, and the
+holes it leaves are the familiar occlusion artifacts.
+
+A useful back-of-envelope model: if a surface point is occluded in any
+single view independently with probability $q$, then
+\begin{equation}
+P(\text{reconstructible}) \;=\; P(\ge2\text{ of }N\text{ see it})
+\;=\; 1-q^N-N\,q^{N-1}(1-q).
+\label{eq:occlusionprob}
+\end{equation}
+Independence is optimistic for clustered cameras (they get occluded
+together) and pessimistic for well-spread ones --- spreading the cameras is
+what makes the assumption approachable.
+
+\begin{example}[occlusion coverage]
+\label{ex:occlusion}
+Take $q=0.3$ (a fairly convoluted scene). By \eqref{eq:occlusionprob}:
+$N=2$: $(1-q)^2=0.49$ --- half the surface. $N=4$:
+$1-0.3^4-4\cdot0.3^3\cdot0.7 = 1-0.0081-0.0756 \approx 0.92$. $N=6$:
+$1-0.3^6-6\cdot0.3^5\cdot0.7 \approx 0.99$. Going from two to four cameras
+nearly doubles the reconstructible surface; four to six mops up the
+remainder. The marginal camera always buys less --- but for high-genus
+objects the last percent \emph{is} the topology.
+\end{example}
+
+Topology sharpens the point. Silhouette-based reasoning can never recover
+concavities: the best any number of silhouettes gives is the visual hull
+\cite{Laurentini1994}, which fills in bowls and blocks handles. Capturing
+the true genus of an object --- the hole of a handle, the tunnel through an
+arch --- requires cameras whose \emph{sightlines pass through the hole},
+seeing background where the hull would put material; photo-consistency
+frameworks (space carving \cite{KutulakosSeitz2000}, patch-based multiview
+stereo \cite{FurukawaPonce2010}) then remove exactly the voxels/patches
+contradicted by those views. So for complex topology, added cameras should
+be \emph{spread to thread the object's openings and look into its
+concavities}, not packed for baseline; the standard benchmark evidence
+\cite{Seitz2006} is that view coverage, more than per-view quality, is what
+separates complete reconstructions from holed ones. In this system's terms:
+the two rig cameras provide the calibrated metric backbone, and
+\autoref{sec:photos}'s registered auxiliary photos are the cheap way to add
+exactly such coverage views.
+
+Two practical costs scale with $N$: (i) calibration and synchronization ---
+each camera needs its own \autoref{sec:calib} session against the same
+target, all cameras a common trigger; (ii) computation --- pairwise
+geometry (fundamental matrices, rectifications) grows as $N(N{-}1)/2$,
+though in practice a hub-and-spoke set against one reference camera
+suffices for gating.
+
+\subsection{Resolution}
+\label{sec:resolution}
+
+For a fixed field of view, the focal length \emph{in pixels} scales with
+the sensor's linear resolution: doubling from $640\times480$ to
+$1280\times960$ doubles $f$ from $800$ to $1600$\,px. Two consequences
+follow directly.
+
+\paragraph{Depth precision.} Matching accuracy $\sigma_d$ is
+an approximately constant \emph{fraction of a pixel} (our block matcher's
+parabolic refinement sits around $0.1$--$0.3$\,px on textured surfaces), so
+in \eqref{eq:deptherr} the denominator's $f$ doubles while $\sigma_d$ stays
+put: $\sigma_Z$ halves. Depth precision is linear in resolution ---
+until lens blur, diffraction, or per-pixel photon noise (smaller pixels
+collect less light) starts inflating $\sigma_d$ and returns diminish.
+
+\paragraph{Lateral detail.} The pixel footprint on the scene (ground
+sampling distance) is $Z/f$ metres per pixel. Surface detail must span at
+least $\sim$2 pixels to be matchable, so the smallest reconstructible
+geometric feature is about $2Z/f$ --- this, not depth noise, is what limits
+how much of a complex object's fine structure (thin ribs, small holes)
+survives into the model. In the fidelity sense of
+\autoref{sec:occlusion}: resolution sets the smallest feature you can
+capture, view coverage sets whether you capture it at all.
+
+\begin{example}[resolution budget]
+\label{ex:resolution}
+Experimental rig, $Z=4.7$\,m: footprint $Z/f = 4.7/800 = 5.9$\,mm/px,
+smallest matchable feature $\approx12$\,mm, $\sigma_Z\approx23$\,mm
+(\autoref{ex:deptherr}). Doubling both cameras' resolution:
+footprint $2.9$\,mm/px, feature floor $\approx6$\,mm,
+$\sigma_Z\approx12$\,mm. Everything improves by the same factor of two.
+\end{example}
+
+\subsection{Unequal resolutions}
+\label{sec:heterogeneous}
+
+Nothing in the model requires the cameras to match: each carries its own
+$\K$ (and distortion), the fundamental matrix \eqref{eq:fundamental} exists
+between any pair, and triangulation consumes pixels through each camera's
+own $\PP$. What changes is the error budget. Each camera contributes
+\emph{angular} noise $\sigma/f_i$ (radians); ray-intersection variance adds
+them, so a pair's effective noise is
+\begin{equation}
+\sigma_\theta \;=\; \sqrt{(\sigma_1/f_1)^2+(\sigma_2/f_2)^2}:
+\label{eq:hetero}
+\end{equation}
+the \emph{coarser camera dominates}, and money spent on one camera is
+mostly wasted unless the other keeps up.
+
+\begin{example}[upgrading one camera vs both]
+\label{ex:hetero}
+Rig of \autoref{ex:deptherr}, $\sigma=0.3$\,px per camera. Both at
+$f=800$: $\sigma_\theta=\sqrt2\,(0.3/800)$. Upgrade \emph{one} camera to
+$f=1600$: $\sigma_\theta=(0.3/800)\sqrt{1+\tfrac14}$, an improvement of
+only $\sqrt{1.25/2}\approx0.79$ --- depth error drops from $23$\,mm to
+$18$\,mm. Upgrade \emph{both}: factor $0.5$, $12$\,mm
+(\autoref{ex:resolution}). Half the hardware upgrade buys about a fifth of
+the benefit.
+\end{example}
+
+Two implementation notes for mixed rigs. First, rectification
+(\autoref{sec:stereo}) forces a \emph{shared} $\K_{\mathrm{new}}$; our
+implementation averages the two intrinsic matrices, which for very unequal
+cameras oversamples the coarse image (interpolated pixels carry no new
+information) --- resampling both to the coarser camera's grid keeps the
+cost of dense matching honest, at the price of discarding the fine
+camera's lateral detail. Second, the DLT \eqref{eq:dlt} as implemented
+weights all rows equally; with strongly unequal cameras the rows of the
+finer camera deserve proportionally more weight ($\propto f_i/\sigma_i$
+after each view's normalization), a small planned refinement alongside the
+Hartley--Sturm step (\autoref{sec:roadmap}).
 
 %----------------------------------------------------------------------
 \section{Planned extensions}

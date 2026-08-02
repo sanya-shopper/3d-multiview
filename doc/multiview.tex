@@ -1118,6 +1118,246 @@ as a new module behind the same conventions (\autoref{tab:modules}) with
 its own noiseless-exact tests and a synthetic experiment extending
 \autoref{sec:results}.
 
+\appendix
+%----------------------------------------------------------------------
+\section{Camera hardware and the quality of data}
+\label{sec:hardware}
+
+The capture hardware determines which error terms enter the pipeline before
+any algorithm runs. The organizing observation: cheap capture hardware
+mostly adds \emph{biases} --- rolling shear, synchronization parallax,
+compression structure, unmodelable distortion, focus creep --- rather than
+noise. Noise we model and budget (\autoref{ex:deptherr}); biases survive
+averaging, masquerade as geometry, and poison calibration silently. The
+specifications below are therefore ranked by which biases they admit.
+
+\subsection{Shutter: global vs rolling}
+\label{sec:shutter}
+
+A global-shutter sensor exposes all pixels over one common interval --- each
+frame is a true snapshot, described by a single $\PP$. A rolling-shutter
+sensor exposes and reads row by row: the bottom row of a frame is captured
+10--30\,ms after the top row. For a static scene the difference vanishes;
+for anything moving, each row samples a different instant and no single
+projection matrix describes the frame --- the camera model of
+\autoref{sec:camera} itself breaks.
+
+\begin{example}[rolling-shutter shear on the rotating target]
+\label{ex:rolling}
+The rotating display of \autoref{sec:rotating} moves at
+$\approx27$\,px/s in the image. A rolling readout of $20$\,ms samples the
+top and bottom of the target $20$\,ms apart: a shear of
+$27\cdot0.02\approx0.5$\,px across the corner grid --- larger than the
+$0.3$\,px noise budget, and \emph{systematic}: it does not average away
+over frames but feeds a consistently wrong homography into calibration.
+\end{example}
+
+\subsection{Synchronization: hardware trigger vs free-running}
+\label{sec:trigger}
+
+A trigger line starts exposure on all cameras from one electrical pulse
+(coincidence to microseconds). Free-running cameras can only be matched by
+software timestamps --- a few \emph{milliseconds} of jitter and drift.
+Triangulation assumes both cameras saw the point at the same instant; a
+time offset $\Delta t$ on a point moving at speed $v$ creates a phantom
+disparity $f\,v\,\Delta t/Z$ that is mathematically indistinguishable from
+depth.
+
+\begin{example}[the price of software synchronization]
+\label{ex:sync}
+An object crossing the experimental rig at $1$\,m/s with $5$\,ms software
+sync: phantom disparity $=800\cdot(1\cdot0.005)/4.7\approx0.85$\,px, which
+the depth law \eqref{eq:deptherr} converts to
+$\approx47$\,mm of depth error --- exceeding the rig's entire
+$23$\,mm error budget at that range. For dynamic scenes, synchronization
+error dominates every other term; a trigger wire outperforms any camera
+upgrade. The trigger also permits phase-locking exposure against mains
+flicker and locking capture to the display's frame counter
+(\autoref{sec:rotating}).
+\end{example}
+
+\subsection{Interface: UVC vs machine-vision stacks}
+\label{sec:uvc}
+
+UVC (USB Video Class) is the ``any webcam just works'' protocol
+(\code{v4l2} on Linux, no vendor SDK). Its convenience reflects its
+purpose --- streaming video to humans: at higher resolutions frames
+usually arrive \emph{MJPEG-compressed}, and JPEG's $8\times8$ block
+artifacts are structured noise at exactly the spatial frequencies where
+sub-pixel corners and block matching live --- a \emph{correlated}
+contribution to $\sigma_d$ that does not average like photon noise. UVC
+also offers only coarse loosely-specified exposure/gain controls,
+imprecise timestamps, and no trigger support in the class. Machine-vision
+interfaces (USB3 Vision/GenICam via vendor SDKs) deliver raw pixels,
+physical-unit controls, per-frame hardware timestamps and trigger I/O.
+Rule of thumb: UVC is acceptable exactly where rolling shutter is
+acceptable --- static bring-up.
+
+\subsection{Optics: M12 vs C/CS mounts}
+\label{sec:lenses}
+
+M12 (``S-mount'') lenses are the small threaded board lenses of
+webcam-class hardware: cheap, fixed aperture, focused by rotating the
+barrel, no standardized flange distance. C-mount and CS-mount are the
+machine-vision standards: metal barrels, multi-element glass, iris and
+focus rings with lock screws, standardized flange distances (C:
+$17.53$\,mm; CS: $12.53$\,mm; a C lens fits a CS body via a 5\,mm spacer,
+not conversely). Three separate data-quality channels:
+
+\begin{enumerate}
+  \item \emph{Sharpness (MTF) is the true floor under $\sigma_d$}:
+        sub-pixel localization precision scales with the optical blur
+        radius; a soft lens can double $\sigma_d$, and via
+        \eqref{eq:deptherr} double $\sigma_Z$ --- equivalent to discarding
+        half the sensor resolution (cf.\ the weakest-link law of
+        \autoref{sec:heterogeneous}: the lens is a full member of that
+        chain).
+  \item \emph{Distortion modelability}: the Brown model
+        \eqref{eq:distortion} absorbs the smooth distortion of decent
+        lenses; cheap wide M12s exhibit higher-order or non-radial terms
+        that leave \emph{systematic} calibration residuals.
+  \item \emph{Stability of $\K$}: thread-focused plastic barrels creep
+        with vibration and temperature --- silent recalibration events,
+        precisely what the $\F$-drift monitor of \autoref{sec:epipolar}
+        exists to catch. Locked C/CS rings hold $\K$ for months.
+        Autofocus is this failure mode as a feature: \emph{a calibrated
+        camera must never refocus}.
+\end{enumerate}
+
+An iris adds one more useful knob: most lenses peak in sharpness around
+f/4--f/8; beyond that diffraction itself blurs (spot
+$\approx1.22\,\lambda N$: at f/8 about $5.4\,\mu$m, already exceeding a
+$3\,\mu$m pixel).
+
+\subsection{Monochrome vs color}
+\label{sec:mono}
+
+A Bayer color sensor samples each color at $\tfrac14$--$\tfrac12$ of the
+pixel grid and interpolates the rest; demosaicing smears exactly the
+high-contrast edges that corners and matching depend on, and costs about
+one stop of sensitivity. This pipeline processes grayscale throughout, so
+monochrome sensors deliver strictly better data; color remains at most a
+redundancy layer in the calibration pattern (\autoref{sec:rotating}).
+
+\subsection{Summary and candidate hardware}
+\label{sec:cameratiers}
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lll}
+\toprule
+Characteristic & Data-quality consequence & When it matters \\
+\midrule
+rolling shutter & $\sim$0.5\,px systematic shear (\autoref{ex:rolling}) & any motion \\
+no trigger      & phantom disparity, $\sim$47\,mm (\autoref{ex:sync})   & dynamic scenes \\
+UVC / MJPEG     & structured artifacts in $\sigma_d$; no trigger        & beyond bring-up \\
+M12 optics      & MTF floor, distortion residuals, $\K$ creep           & always, silently \\
+C/CS optics     & sharp, modelable, mechanically stable $\K$            & the metric rig \\
+color (Bayer)   & demosaic edge artifacts, $-1$ stop sensitivity        & mono preferred \\
+\bottomrule
+\end{tabular}
+\caption{Capture-hardware characteristics and their consequences.}
+\label{tab:hardware}
+\end{table}
+
+Three procurement tiers follow (indicative 2026 prices):
+\begin{enumerate}
+  \item \emph{Bring-up} ($\sim$\$150/pair): two Logitech C920/C930-class
+        UVC webcams. Rolling shutter, no trigger, but focus and exposure
+        lockable via \code{v4l2-ctl}; teaches the pipeline every
+        real-world lesson cheaply. Algorithms yes, metric claims no.
+  \item \emph{Budget metric rig} ($\sim$\$150--250/pair): OV9281-class
+        modules (e.g.\ Arducam) --- $1280\times800$ \emph{monochrome
+        global shutter}, external-trigger variants, interchangeable M12
+        optics (choose the best lens, lock it with thread-lock). With a
+        2.8--4\,mm lens, $f\approx950$--$1300$\,px --- the regime of all
+        worked examples here. Same idea on CSI: the Raspberry~Pi Global
+        Shutter Camera (IMX296, trigger pin, $\sim$\$50).
+  \item \emph{Solid metric rig} ($\sim$\$500--900/pair): entry
+        machine-vision USB3 (FLIR Blackfly~S, Basler ace/dart, or
+        Daheng/HIK equivalents): 1.6--2.3\,MP mono global shutter, real
+        trigger I/O, Linux SDKs, C/CS lenses. The tier where the
+        resolution mathematics of \autoref{sec:resolution} becomes
+        purchasable.
+\end{enumerate}
+A packaged shortcut: the Luxonis OAK-D class devices ($\sim$\$250)
+contain two factory-synchronized global-shutter mono cameras in one USB3
+housing --- the whole hardware problem in one purchase, at the cost of a
+fixed $\sim$7.5\,cm baseline, short for a 4--6\,m working volume
+($\sigma_Z\propto1/B$, \eqref{eq:deptherr}).
+
+\autoref{tab:models} lists concrete representatives, sorted by price;
+prices are indicative mid-2026 street prices per camera and drift, but
+the \emph{characteristics} are fixed properties of each product.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\newcommand{\cm}{$\checkmark$}
+\begin{tabular}{l r l c c c c l}
+\toprule
+Model & $\approx$\$ & Sensor / resolution & Mono & Global & HW & Raw & Lens \\
+      &             &                     &      & shutter & trigger & frames & \\
+\midrule
+Raspberry Pi GS Camera$^{a}$ & 50 & IMX296, $1456\times1088$ & --$^{a}$ & \cm & \cm & \cm & CS \\
+Logitech C920s$^{b}$ & 70 & $1920\times1080$ & -- & -- & -- & --$^{b}$ & fixed \\
+Arducam OV9281 USB & 90 & OV9281, $1280\times800$ & \cm & \cm & \cm & \cm & M12 \\
+HIKrobot MV-CS016-10UM & 230 & IMX273, $1440\times1080$ & \cm & \cm & \cm & \cm & C \\
+Luxonis OAK-D$^{c}$ & 250 & $2\times$OV9282, $1280\times800$ & \cm & \cm & --$^{c}$ & \cm & fixed \\
+Basler dart daA1280-54um & 280 & $1280\times960$ & \cm & \cm & \cm & \cm & S/CS \\
+Intel RealSense D435$^{d}$ & 330 & $2\times$OV9282 IR & \cm & \cm & --$^{d}$ & \cm & fixed \\
+FLIR Blackfly S 16S2M-CS & 465 & IMX273, $1440\times1080$ & \cm & \cm & \cm & \cm & CS \\
+\bottomrule
+\end{tabular}
+\caption{Representative commercial cameras, sorted by indicative 2026
+price per unit. $^{a}$CSI interface (needs a Raspberry~Pi, not USB);
+color filter --- monochrome variants from third parties.
+$^{b}$UVC; uncompressed only at reduced rates, MJPEG otherwise; exposure
+and focus lockable via \code{v4l2-ctl}. $^{c}$No external trigger input,
+but the internal stereo pair is factory-synchronized --- the trigger
+problem is solved \emph{inside} the box; baseline fixed at 7.5\,cm.
+$^{d}$Depth device; the raw synchronized IR pair is accessible and
+usable as a stereo source; projector should be disabled for our
+matcher.}
+\label{tab:models}
+\end{table}
+
+\subsection{Blending heterogeneous cameras}
+\label{sec:blend}
+
+Knowing each camera's characteristics is itself an asset: a
+\emph{modeled} defect is a correctable or at least gateable one. A
+rolling-shutter camera whose row-readout time is known can have its rows
+time-stamped individually and its observations gated out (or motion-
+compensated) whenever the scene moves; a camera with a measured noise
+curve enters the triangulation with an honest weight
+(\autoref{sec:heterogeneous}); a lens with well-fit distortion
+contributes unbiased rays while one with known residuals can be trusted
+only in its image center. The measurement model becomes per-camera, and
+every characteristic in \autoref{tab:hardware} turns from a hidden bias
+into a term of that model.
+
+A deliberate \emph{blend} of camera types then does more than average ---
+it makes artifacts detectable, because most artifacts are
+\emph{camera-specific} while the scene is common. MJPEG block edges,
+rolling shear, demosaic fringes, and specular highlights each live in
+some cameras and not others (highlights move with viewpoint; compression
+artifacts sit on one camera's grid); true structure must be consistent
+across all views. With identical cameras, a shared systematic error is
+invisible --- every unit votes for the same lie; with heterogeneous
+hardware the correlation is broken and disagreement \emph{localizes} the
+artifact, in the same spirit as the $\F$-drift and laser-audit health
+monitors (\autoref{sec:epipolar}, \autoref{sec:range}). Complementary
+pairings fall out naturally: a synchronized global-shutter mono pair as
+the metric backbone; a high-resolution color camera (rolling shutter
+tolerated, gated by motion) contributing fine texture and appearance to
+the model; a wide-FOV unit for coverage and moving-object flagging, its
+geometry weighted down per \autoref{sec:heterogeneous}. Geometry from
+the cameras built for geometry, appearance from the cameras built for
+appearance, and cross-checks from their disagreement --- the
+$N$-camera analysis of \autoref{sec:scaling} applies unchanged, since
+every camera carries its own $\K$, distortion, and noise model.
+
 \bibliographystyle{alpha}
 \bibliography{refs}
 

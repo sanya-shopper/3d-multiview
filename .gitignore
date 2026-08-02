@@ -1,8 +1,10 @@
 *.o
 *.a
 demo_synthetic
+demo_calibrate
 test_mv
 out_cloud.ply
+target_letter.pgm
 doc/*.aux
 doc/*.log
 doc/*.bbl

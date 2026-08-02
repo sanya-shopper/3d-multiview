@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "mv/mv.h"
@@ -166,6 +167,181 @@ static void test_rectify(void)
           "rectification preserves baseline");
 }
 
+static void test_homography(void)
+{
+    /* exact homography recovery: plane at a known pose, no noise */
+    mv_camera c;
+    double C[3] = { 0.05, -0.02, 0.0 };
+    double obj[2 * 12], uv[2 * 12], H[9];
+    double maxerr = 0.0;
+    int i;
+    mv_cam_set_K(&c, 800.0, 805.0, 320.0, 240.0);
+    mv_cam_set_pose_yaw(&c, 0.2, C);
+    c.t[2] += 0.6;
+    memset(c.k, 0, sizeof(c.k));
+    mv_target_checkerboard(obj, 4, 3, 0.03);
+    for (i = 0; i < 12; i++) {
+        double X[3] = { obj[2 * i], obj[2 * i + 1], 0.0 };
+        mv_cam_project(uv + 2 * i, &c, X);
+    }
+    CHECK(mv_homography_dlt(H, obj, uv, 12) == MV_OK, "homography succeeds");
+    for (i = 0; i < 12; i++) {
+        double w = H[6] * obj[2 * i] + H[7] * obj[2 * i + 1] + H[8];
+        double u = (H[0] * obj[2 * i] + H[1] * obj[2 * i + 1] + H[2]) / w;
+        double v = (H[3] * obj[2 * i] + H[4] * obj[2 * i + 1] + H[5]) / w;
+        double e = fabs(u - uv[2 * i]) + fabs(v - uv[2 * i + 1]);
+        if (e > maxerr)
+            maxerr = e;
+    }
+    CHECK(maxerr < 1e-8, "homography exact on noiseless data");
+}
+
+static void test_calib(void)
+{
+    /* Zhang calibration recovers K and poses exactly from noiseless views */
+    const double fx = 800.0, fy = 805.0, cxx = 322.0, cyy = 238.0;
+    double obj[2 * MV_TARGET_LETTER_COLS * MV_TARGET_LETTER_ROWS];
+    double img[5][2 * MV_TARGET_LETTER_COLS * MV_TARGET_LETTER_ROWS];
+    const double angles[5][2] = {
+        { 0.0, 0.0 }, { 0.25, 0.0 }, { -0.2, 0.15 },
+        { 0.15, -0.3 }, { -0.15, -0.2 }
+    };
+    mv_calib_view views[5];
+    mv_camera gt[5], est[5];
+    double K[9], k_radial[2];
+    double kerr, perr = 0.0;
+    int n, v, i, j;
+
+    n = mv_target_checkerboard(obj, MV_TARGET_LETTER_COLS,
+                               MV_TARGET_LETTER_ROWS,
+                               MV_TARGET_LETTER_SQUARE);
+    for (v = 0; v < 5; v++) {
+        double cax = cos(angles[v][0]), sax = sin(angles[v][0]);
+        double cay = cos(angles[v][1]), say = sin(angles[v][1]);
+        double Rx[9], Ry[9];
+        Rx[0] = 1; Rx[1] = 0;   Rx[2] = 0;
+        Rx[3] = 0; Rx[4] = cax; Rx[5] = -sax;
+        Rx[6] = 0; Rx[7] = sax; Rx[8] = cax;
+        Ry[0] = cay; Ry[1] = 0; Ry[2] = -say;
+        Ry[3] = 0;   Ry[4] = 1; Ry[5] = 0;
+        Ry[6] = say; Ry[7] = 0; Ry[8] = cay;
+        mv_cam_set_K(&gt[v], fx, fy, cxx, cyy);
+        mv_mat_mul(gt[v].R, Rx, Ry, 3, 3, 3);
+        for (j = 0; j < 3; j++)
+            gt[v].t[j] = -(gt[v].R[j * 3 + 0] * 0.072
+                           + gt[v].R[j * 3 + 1] * 0.096);
+        gt[v].t[2] += 0.6 + 0.05 * v;
+        memset(gt[v].k, 0, sizeof(gt[v].k));
+        for (i = 0; i < n; i++) {
+            double X[3] = { obj[2 * i], obj[2 * i + 1], 0.0 };
+            mv_cam_project(img[v] + 2 * i, &gt[v], X);
+        }
+        views[v].obj = obj;
+        views[v].img = img[v];
+        views[v].n = n;
+    }
+    CHECK(mv_calib_planar(K, est, k_radial, views, 5, 1) == MV_OK,
+          "zhang calibration succeeds");
+    kerr = fabs(K[0] - fx) + fabs(K[4] - fy) + fabs(K[2] - cxx)
+         + fabs(K[5] - cyy);
+    CHECK(kerr < 1e-5, "zhang: intrinsics exact on noiseless data");
+    CHECK(fabs(k_radial[0]) + fabs(k_radial[1]) < 1e-8,
+          "zhang: radial ~ 0 on undistorted data");
+    for (v = 0; v < 5; v++) {
+        for (j = 0; j < 9; j++)
+            perr += fabs(gt[v].R[j] - est[v].R[j]);
+        for (j = 0; j < 3; j++)
+            perr += fabs(gt[v].t[j] - est[v].t[j]);
+    }
+    CHECK(perr < 1e-5, "zhang: poses exact on noiseless data");
+    CHECK(mv_calib_reproj_rms(est, views, 5) < 1e-6,
+          "zhang: reprojection ~ 0");
+}
+
+static void test_radial(void)
+{
+    /* distorted synthetic views: linear step recovers k1, k2 */
+    double obj[2 * MV_TARGET_LETTER_COLS * MV_TARGET_LETTER_ROWS];
+    double img[3][2 * MV_TARGET_LETTER_COLS * MV_TARGET_LETTER_ROWS];
+    mv_calib_view views[3];
+    mv_camera gt[3];
+    double K[9], k_radial[2];
+    int n, v, i, j;
+
+    n = mv_target_checkerboard(obj, MV_TARGET_LETTER_COLS,
+                               MV_TARGET_LETTER_ROWS,
+                               MV_TARGET_LETTER_SQUARE);
+    for (v = 0; v < 3; v++) {
+        double C[3] = { 0.0, 0.0, 0.0 };
+        mv_cam_set_K(&gt[v], 800.0, 800.0, 320.0, 240.0);
+        mv_cam_set_pose_yaw(&gt[v], 0.15 * (v - 1), C);
+        for (j = 0; j < 3; j++)
+            gt[v].t[j] = -(gt[v].R[j * 3 + 0] * 0.072
+                           + gt[v].R[j * 3 + 1] * 0.096);
+        gt[v].t[2] += 0.55 + 0.1 * v;
+        memset(gt[v].k, 0, sizeof(gt[v].k));
+        gt[v].k[0] = -0.10; /* k1 */
+        gt[v].k[1] = 0.02;  /* k2 */
+        for (i = 0; i < n; i++) {
+            double X[3] = { obj[2 * i], obj[2 * i + 1], 0.0 };
+            mv_cam_project(img[v] + 2 * i, &gt[v], X);
+        }
+        views[v].obj = obj;
+        views[v].img = img[v];
+        views[v].n = n;
+    }
+    /* k1 and k2 are individually near-unidentifiable over the small radius
+     * range a letter-page target covers; what must hold is that the fitted
+     * distortion CURVE matches the data (small reprojection residual), and
+     * that it genuinely models distortion (dropping it makes things much
+     * worse) */
+    {
+        mv_camera est[3];
+        double rms_with, rms_without;
+        CHECK(mv_calib_planar(K, est, k_radial, views, 3, 1) == MV_OK,
+              "calibration on distorted data succeeds");
+        rms_with = mv_calib_reproj_rms(est, views, 3);
+        CHECK(rms_with < 0.1, "radial: distortion curve fits (rms < 0.1 px)");
+        for (v = 0; v < 3; v++)
+            memset(est[v].k, 0, sizeof(est[v].k));
+        rms_without = mv_calib_reproj_rms(est, views, 3);
+        CHECK(rms_without > 2.0 * rms_with,
+              "radial: modeled distortion is significant");
+    }
+}
+
+static void test_graycode(void)
+{
+    /* encode/decode roundtrip for a 1280-wide display axis */
+    enum { W = 1280 };
+    int nbits = mv_graycode_bits(W);
+    unsigned char *frames[11], *invs[11];
+    const unsigned char *cf[11], *ci[11];
+    int coord[W];
+    unsigned char valid[W];
+    int b, x, ok = 1, nvalid;
+
+    CHECK(nbits == 11, "graycode: 11 bits for 1280 columns");
+    for (b = 0; b < nbits; b++) {
+        frames[b] = (unsigned char *)malloc(W);
+        invs[b] = (unsigned char *)malloc(W);
+        mv_graycode_frame(frames[b], W, 1, 0, b, nbits, 0);
+        mv_graycode_frame(invs[b], W, 1, 0, b, nbits, 1);
+        cf[b] = frames[b];
+        ci[b] = invs[b];
+    }
+    nvalid = mv_graycode_decode(coord, valid, cf, ci, nbits, W, 10);
+    CHECK(nvalid == W, "graycode: all pixels decode as valid");
+    for (x = 0; x < W; x++)
+        if (coord[x] != x)
+            ok = 0;
+    CHECK(ok, "graycode: decoded coordinate equals pixel coordinate");
+    for (b = 0; b < nbits; b++) {
+        free(frames[b]);
+        free(invs[b]);
+    }
+}
+
 int main(void)
 {
     test_inv3();
@@ -174,6 +350,10 @@ int main(void)
     test_epipolar();
     test_triangulate();
     test_rectify();
+    test_homography();
+    test_calib();
+    test_radial();
+    test_graycode();
     if (failures) {
         printf("\n%d FAILURE(S)\n", failures);
         return 1;

@@ -8,7 +8,7 @@ SRC = src/mat.c src/cam.c src/epipolar.c src/triangulate.c src/rectify.c \
       src/calib.c
 OBJ = $(SRC:.c=.o)
 
-all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose test_mv
+all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people test_mv
 
 libmv.a: $(OBJ)
 	ar rcs $@ $(OBJ)
@@ -18,6 +18,15 @@ demo_synthetic: demo/synthetic.o libmv.a
 
 demo_calibrate: demo/calibrate.o libmv.a
 	$(CC) $(CFLAGS) -o $@ demo/calibrate.o libmv.a $(LDLIBS)
+
+demo_insects: demo/track_insects.o libmv.a
+	$(CC) $(CFLAGS) -o $@ demo/track_insects.o libmv.a $(LDLIBS)
+
+demo_lightlog: demo/lightlog.o libmv.a
+	$(CC) $(CFLAGS) -o $@ demo/lightlog.o libmv.a $(LDLIBS)
+
+demo_people: demo/track_people.o libmv.a
+	$(CC) $(CFLAGS) -o $@ demo/track_people.o libmv.a $(LDLIBS)
 
 demo_diagnose: demo/diagnose.o libmv.a
 	$(CC) $(CFLAGS) -o $@ demo/diagnose.o libmv.a $(LDLIBS)
@@ -48,8 +57,8 @@ doc/multiview.pdf: doc/multiview.tex doc/refs.bib
 	&& pdflatex -interaction=nonstopmode multiview >/dev/null
 
 clean:
-	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o tests/test_mv.o libmv.a \
-	      demo_synthetic demo_calibrate demo_track demo_diagnose test_mv out_cloud.ply out_track.ply \
+	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o tests/test_mv.o libmv.a \
+	      demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people test_mv out_cloud.ply out_track.ply \
 	      target_letter.pgm \
 	      doc/*.aux doc/*.log doc/*.bbl doc/*.blg doc/*.out doc/*.toc
 

@@ -13,3 +13,4 @@ doc/*.blg
 doc/*.out
 doc/*.toc
 out_track.ply
+demo_diagnose

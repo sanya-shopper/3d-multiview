@@ -4,6 +4,7 @@
 \usepackage{amsmath,amssymb,amsthm,mathtools}
 \usepackage{booktabs}
 \usepackage{tikz}
+\usetikzlibrary{positioning,fit}
 \usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=green!40!black,urlcolor=blue!60!black]{hyperref}
 
 \theoremstyle{definition}
@@ -1636,6 +1637,149 @@ burden. A final scope note befitting the controlled environment: the
 enrollment gallery is the household's own, processing is local, and the
 open-set threshold should be set to prefer ``unknown'' over
 misattribution.
+
+\subsection{Plugin matrix: OSS solutions, features, and license isolation}
+\label{sec:pluginmatrix}
+
+\autoref{tab:plugins} surveys the practical candidates. Feature columns:
+person detection, face detection, landmarks, embeddings, ONNX
+exportability (i.e.\ runs behind the single ONNX Runtime seam), and
+CPU-only viability. The last column states the \emph{required} degree of
+separation to avoid license contamination of the MIT-clean core:
+\begin{itemize}
+  \item \textbf{link} --- permissive license (MIT/BSD/Apache/BSL): may be
+        linked into the same process; no obligations beyond attribution.
+  \item \textbf{process} --- AGPL: never link or import; run as a
+        separate OS process communicating \emph{data only} (frames out,
+        text rows back). The combined system must not be distributed as
+        one work, and if the sidecar is ever offered as a network
+        service, AGPL source obligations attach to the sidecar alone.
+  \item \textbf{weights apart} --- code is permissive but the pretrained
+        \emph{weights} carry a research/non-commercial license: treat
+        weights as user-fetched artifacts at install time, never
+        redistributed with the system.
+\end{itemize}
+Architecturally we put \emph{every} detector behind the sidecar protocol
+of \autoref{sec:sidecar} regardless of license --- hygiene first --- so
+the license question collapses to ``which side of the pipe, and who
+ships the bytes.''
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\newcommand{\cm}{$\checkmark$}
+\begin{tabular}{l l c c c c c c l}
+\toprule
+Solution & License (code/weights) & Person & Face & Lmk & Embed & ONNX & CPU & Isolation \\
+\midrule
+darknet YOLOv3/v4 & MIT-like / same & \cm & -- & -- & -- & part & slow & link \\
+YOLOX & Apache / Apache & \cm & -- & -- & -- & \cm & ok & link \\
+Ultralytics v8/v11 & AGPL / AGPL$^{a}$ & \cm & -- & pose & -- & \cm$^{a}$ & ok & \textbf{process} \\
+OpenCV (HOG/YuNet/SFace) & Apache / Apache & weak & \cm & 5pt & \cm & n/a & \cm & link \\
+MediaPipe & Apache / Apache & pose & \cm & \cm & -- & -- & \cm & link \\
+dlib / face\_recognition & BSL / public & HOG & \cm & 68pt & \cm & -- & slow & link \\
+InsightFace (SCRFD+ArcFace) & MIT / research$^{b}$ & -- & \cm & 5pt & \cm & \cm & \cm & weights apart \\
+facenet-pytorch (MTCNN+FaceNet) & MIT / MIT & -- & \cm & 5pt & \cm & \cm & ok & process$^{c}$ \\
+ONNX Runtime (the seam) & MIT & \multicolumn{6}{c}{--- inference runtime for all ONNX rows ---} & link \\
+\bottomrule
+\end{tabular}
+\caption{OSS plugin candidates. $^{a}$AGPL applies to exported/converted
+weights too --- conversion does not launder the license; mandatory
+process isolation, data-only IPC, no combined distribution.
+$^{b}$InsightFace \emph{code} is MIT but the model-zoo weights are
+research/non-commercial: fine in this controlled personal deployment,
+user-fetched at install, never redistributed. $^{c}$License permits
+linking; the Python runtime makes a separate process the practical
+choice anyway.}
+\label{tab:plugins}
+\end{table}
+
+The current default stack, license-clean end to end: YOLOX (person) and
+YuNet or SCRFD (face) and SFace or user-fetched ArcFace (embedding), all
+as ONNX graphs behind ONNX Runtime; the Ultralytics row exists because
+its tooling is convenient for experiments --- inside its own fence.
+
+\subsection{Deployment architecture: hardware boundaries and communication}
+\label{sec:deployarch}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+  font=\footnotesize,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+              minimum height=7mm, fill=blue!4},
+  hw/.style={draw, thick, rounded corners=3pt, inner sep=7pt},
+  lic/.style={draw, dashed, thick, red!60!black, rounded corners=3pt,
+              inner sep=7pt},
+  lbl/.style={font=\scriptsize\itshape},
+  arr/.style={->, thick},
+  net/.style={->, thick, dash dot}
+]
+  % sensor plane
+  \node[box] (cam1) {camera 1\\(GS mono)};
+  \node[box, right=5mm of cam1] (cam2) {camera 2\\(GS mono)};
+  \node[box, right=5mm of cam2] (idcam) {identity cam\\(narrow FOV, door)};
+  \node[box, right=5mm of idcam] (disp) {rotating display\\(calibration fixture)};
+  \node[box, below=5mm of cam2] (trig) {trigger $\mu$C};
+  \node[hw, fit=(cam1)(cam2)(idcam)(disp)(trig),
+        label={[lbl]above left:sensor plane (hardware boundary)}] (sensors) {};
+
+  % metric host
+  \node[box, below=17mm of trig, xshift=-24mm] (core)
+    {\textbf{C99 metric core} (\code{libmv})\\
+     undistort $\cdot$ rectify $\cdot$ stereo $\cdot$ triangulate\\
+     calibrate $\cdot$ track $\cdot$ background model};
+  \node[box, right=8mm of core] (log)
+    {storage\\PLY $\cdot$ event log $\cdot$\\recorded oracle fixtures};
+  \node[hw, fit=(core)(log),
+        label={[lbl]above left:metric host (trusted, MIT-clean)}] (host) {};
+
+  % sidecar
+  \node[box, below=10mm of core, xshift=14mm] (onnx)
+    {inference sidecar\\ONNX Runtime: person det $\cdot$\\
+     face det $\cdot$ embeddings};
+  \node[box, right=14mm of onnx] (agpl)
+    {optional AGPL zone\\(e.g.\ Ultralytics)\\own process or machine};
+  \node[lic, fit=(onnx)(agpl),
+        label={[lbl]below left:process boundary $=$ license boundary
+        (promotable to a separate machine)}] (side) {};
+
+  % arrows
+  \draw[arr] (trig) -- node[lbl, right] {trigger pulses} (trig |- sensors.south) -- ++(0,-2mm);
+  \draw[arr] (cam1.south) -- ++(0,-3mm) -| node[lbl, pos=0.25, above]
+    {USB3 raw frames} (core.north west);
+  \draw[arr] (cam2.south) -- ++(0,-4mm) -| (core.north);
+  \draw[arr] (idcam.south) -- ++(0,-5mm) -| node[lbl, pos=0.25, above]
+    {USB3 (door events)} (core.north east);
+  \draw[arr] (core.east) -- node[lbl, above] {results} (log.west);
+  \draw[<-, thick] (disp.south) -- ++(0,-3mm) -| node[lbl, pos=0.22, below]
+    {HDMI: pattern $+$ frame counter} (log.north east);
+  \draw[arr] (core.south west) ++(2mm,0) |- node[lbl, pos=0.75, above]
+    {frames (shm / pipe)} (onnx.west);
+  \draw[arr] (onnx.north) -- node[lbl, right]
+    {CSV: boxes, landmarks, embeddings} (onnx |- core.south);
+  \draw[net] (onnx.east) -- node[lbl, below=4mm] {TCP (data only)} (agpl.west);
+\end{tikzpicture}
+\caption{Deployment architecture. Solid boxes are hardware boundaries;
+the dashed red box is the license/process boundary --- all learned
+components live behind it, exchanging only data (frames one way,
+text rows back), so it can be promoted from ``separate process'' to
+``separate machine'' (a small GPU/NPU box) without any protocol change.
+The trigger microcontroller synchronizes both cameras, the identity
+camera, and --- during calibration --- the rotating display's frame
+counter.}
+\label{fig:deploy}
+\end{figure}
+
+The communication patterns are deliberately boring: hardware trigger
+pulses for simultaneity (\autoref{sec:trigger}); USB3 raw frames into
+the metric host; a one-directional frame stream to the sidecar (shared
+memory locally, TCP if the sidecar moves to its own machine); text rows
+back. Nothing crosses the license boundary except data, every byte
+crossing it is recordable --- which is exactly what makes the sidecar
+replayable in tests (\autoref{sec:sidecar}) --- and the C99 core never
+links against anything but \code{libm}.
 
 %----------------------------------------------------------------------
 \section{Roadmap}

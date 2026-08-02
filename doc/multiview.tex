@@ -1246,6 +1246,97 @@ here. A bug can never be excluded, but everything measurable currently
 behaves exactly as the theory of
 \autoref{sec:triangulation}--\autoref{sec:stereo} says it must.
 
+\subsection{Statistical decision rules: when the numbers would say ``bug''}
+\label{sec:statrules}
+
+The preceding subsection can be formalized into a standing test battery.
+Under the null hypothesis $H_0$ = ``implementation correct,'' the
+measurement model (i.i.d.\ Gaussian pixel noise of scale $\sigma$) fixes
+the sampling distribution of every summary statistic we compute; a bug is
+declared when a statistic leaves its null band. Because the whole system
+is deterministic, any flag is exactly reproducible --- a fired tripwire
+can be replayed under a debugger.
+
+\begin{description}
+  \item[T1 --- exactness at $\sigma=0$.] Under $H_0$ every estimator is
+    algebraically exact, so noiseless residuals are bounded by
+    floating-point round-off amplified by conditioning,
+    $\varepsilon\cdot\kappa\lesssim10^{-9}$. This test has \emph{no}
+    statistical tolerance: any exceedance is a defect (sign error, wrong
+    index, forgotten term). It is the single most powerful test in the
+    suite and is what the 30-assertion unit suite automates.
+  \item[T2 --- prediction-ratio test.] For a measured RMS over $N$
+    residuals against an analytic prediction, the sample RMS under $H_0$
+    fluctuates with relative standard deviation $\approx1/\sqrt{2N}$
+    ($\chi^2$). Flag when $|r-1|>3/\sqrt{2N}$. A ratio that is stable but
+    $\neq1$ across $\sigma$ and seeds is the signature of a wrong constant
+    (missing $\sqrt2$, wrong baseline, mis-scaled $f$).
+  \item[T3 --- scaling-exponent test.] Regress $\log e$ on $\log\sigma$:
+    under $H_0$, slope $=1$ in the linear regime. Slope $\approx2$
+    betrays a missing square root or an estimator leaving its regime;
+    slope $\to0$ at small $\sigma$ betrays an additive floor --- fitting
+    $e(\sigma)=\sqrt{b^2+a^2\sigma^2}$ and finding $b$ above the
+    numerical floor reveals a hidden bias even when T1 cannot be run.
+  \item[T4 --- ensemble bias test.] Over $M$ independent noise
+    realizations, the standardized mean $|\bar e|/(s/\sqrt M)$ is
+    Student-$t$ under $H_0$; flag beyond $3$. Distinguishes systematic
+    bias from an unlucky draw.
+  \item[T5 --- residual-consistency ($\chi^2$) test.] A least-squares fit
+    with $p$ parameters against $n$ residual coordinates must leave
+    RMS $=\sqrt2\,\sigma\sqrt{1-p/n}$ (per-point distance); the ratio
+    fluctuates with relative std $1/\sqrt{2(n-p)}$. A ratio
+    \emph{above} the band means the model or estimator is not absorbing
+    what the noise model says it should (underfit, suboptimal estimator,
+    contamination); \emph{below} means overfit or a too-permissive
+    model.
+  \item[T6 --- outlier-count test.] The epipolar gate's rejection count
+    among true correspondences is Poisson with rate given by the noise
+    tail beyond the gate; a large excess indicates contamination or a
+    mismatched noise model, a large deficit an accidentally widened gate.
+\end{description}
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{llll}
+\toprule
+Test & Bug-flag condition & Current value & Verdict \\
+\midrule
+T1 exactness ($\sigma{=}0$) & any residual $>10^{-9}$ & $\le10^{-12}$ & pass \\
+T2 ratio, triangulation & $|r-1|>0.13$ \ ($N{=}250$) & $r=1.01$ & pass \\
+T3 slope, triangulation & $|\text{slope}-1|>0.1$ & $1.00$ & pass \\
+T3 slope, tracking $0.1\!\to\!0.3$ & $|\text{slope}-1|>0.1$ & $1.06$ & pass \\
+T3 slope, tracking $0.3\!\to\!0.6$ & --- & $2.4$ & fired$^{a}$ \\
+T4 bias, calibration $f_x$ & $|t|>3$ \ ($M{=}10$) & $t=0.07$ & pass \\
+T5 residual, triangulation & $|r-1|>0.13$ & $r=1.03$ & pass \\
+T5 residual, calibration & $|r-1|>0.08$ & $r=1.17$ & \textbf{fired}$^{b}$ \\
+T6 gate rejections & excess over noise tail & $6/\sim10^4$ & pass \\
+\bottomrule
+\end{tabular}
+\caption{Tripwire standings. $^{a}$Investigated and resolved: the
+known-radius circle fit leaves its linear regime at $\sigma=0.6$\,px
+(noise anisotropy, \autoref{tab:diagtrack}); a regime boundary, not a
+defect. $^{b}$Genuine standing flag, see text.}
+\label{tab:tripwires}
+\end{table}
+
+\paragraph{The one standing flag.} T5 fires on calibration: across ten
+seeds the fitted reprojection RMS averages $0.484$\,px against the
+noise-model prediction $\sqrt2\,\sigma\sqrt{1-42/756}=0.412$\,px ---
+ratio $1.17$, roughly twenty standard errors outside the null band. The
+statistics are working exactly as intended: they have detected that the
+alternation estimator of \autoref{sec:radial} (Zhang closed form $+$
+linear radial step) is \emph{not} the joint maximum-likelihood fit ---
+it minimizes algebraic surrogates, leaving $\sim17\%$ systematic residual
+above the noise floor. This is the documented, expected cost of the
+missing Levenberg--Marquardt stage, and it hands that roadmap item a
+quantitative acceptance criterion: \emph{after LM refinement, the T5
+ratio must fall to $1.00\pm0.03$}. If it does not, \emph{then} we have a
+bug. This is the general pattern the project commits to: every claimed
+improvement must move a named statistic into a predicted band, and every
+statistic outside its band must be either explained to this standard or
+treated as a defect.
+
 %----------------------------------------------------------------------
 \section{Roadmap}
 \label{sec:roadmap}

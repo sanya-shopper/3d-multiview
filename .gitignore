@@ -1,0 +1,11 @@
+*.o
+*.a
+demo_synthetic
+test_mv
+out_cloud.ply
+doc/*.aux
+doc/*.log
+doc/*.bbl
+doc/*.blg
+doc/*.out
+doc/*.toc

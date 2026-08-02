@@ -710,14 +710,88 @@ $\sigma_Z = 4.7^2\cdot 0.42/(800\cdot0.5) \approx 0.023$\,m: about
 Every depth estimate back-projects to a 3D point in the fixed world frame;
 points are accumulated in a growable cloud with optional per-point color and
 exported as ASCII PLY, directly loadable in MeshLab, CloudCompare or Blender
-for inspection. Over a video sequence the static-rig assumption makes
-accumulation a union in a common frame; per-point temporal statistics
-(persistence, variance) separate static structure from moving objects. The
-planned meshing path is classical: volumetric range-image fusion
-\cite{CurlessLevoy1996} or Poisson surface reconstruction
-\cite{Kazhdan2006} over the accumulated cloud; both consume exactly the
-oriented-point data the pipeline produces, so they attach cleanly as later
-modules.
+for inspection. This section maps out what can be built \emph{on top} of
+that cloud: the representations worth targeting, how robust each is in the
+literature, and the background/foreground architecture the stationary rig
+makes natural.
+
+\subsection{The representation ladder}
+\label{sec:ladder}
+
+Model types form a ladder of increasing geometric commitment; each rung is
+derived from the one below, and robustness generally \emph{decreases}
+upward:
+
+\begin{enumerate}
+  \item \emph{Point clouds} (implemented): no topology, no commitments;
+        ideal for measurement and inspection; never wrong, never finished.
+  \item \emph{Occupancy / signed-distance volumes}: the truncated signed
+        distance function (TSDF) fuses many noisy depth maps by running
+        per-voxel averages \cite{CurlessLevoy1996}; incremental,
+        noise-averaging, topology-agnostic --- the workhorse of the
+        KinectFusion lineage \cite{Newcombe2011} and the natural
+        accumulation structure for our per-frame depth.
+  \item \emph{Triangulated meshes}: extracted from a TSDF by marching
+        cubes \cite{Lorensen1987}, or from oriented points by Poisson
+        reconstruction \cite{Kazhdan2006}. Both are mature and reliable
+        \emph{given} rung 2; meshing raw noisy stereo clouds directly
+        (Delaunay-based, ball-pivoting) is fragile and best avoided.
+  \item \emph{Geometric primitives} (``something more geometric''):
+        RANSAC plane extraction \cite{FischlerBolles1981} is the single
+        most robust operation in the entire reconstruction literature ---
+        floors, walls, table tops fall out almost for free; cylinders,
+        spheres and cones follow with efficient RANSAC variants
+        \cite{Schnabel2007} at the cost of tuning; box/cuboid fits give
+        furniture-level abstraction. Beyond quadrics, parametric fitting
+        becomes brittle.
+  \item \emph{Object/semantic models} (chair, table, person): robust today
+        only via learned detectors --- outside the dependency-free core,
+        but the geometry below is exactly what such an external module
+        would consume.
+\end{enumerate}
+Modern learned implicit representations (neural radiance fields, Gaussian
+splatting) excel at appearance and view synthesis but are not metrically
+superior for measurement, and sit outside this system's portable-C99,
+controlled-environment charter.
+
+\subsection{Background extraction: the easiest product}
+\label{sec:background}
+
+For a stationary rig, the \emph{static scene} --- walls, floor, furniture
+--- is the most robustly extractable model, because time works entirely in
+its favor: the per-pixel \emph{temporal median} of depth over minutes or
+hours is immune to anything that moves through the scene (the same
+robust-statistics trick as classical 2D background subtraction, lifted to
+depth), and every additional frame averages noise down. The pipeline is:
+temporal-median depth map $\to$ TSDF fusion \cite{CurlessLevoy1996}
+$\to$ marching-cubes mesh \cite{Lorensen1987} of the static scene $\to$
+RANSAC planes for floor/walls/table-tops $\to$ primitive fits
+\cite{Schnabel2007} on the remaining clusters for furniture-level
+geometry. Every stage is rung-1--4 robust. The background model is also
+\emph{self-maintaining}: a piece of furniture moved to a new position is a
+persistent change --- detected exactly like a lamp event in
+\autoref{sec:scenarios}, but in geometry --- triggering a local update
+and, as a by-product, an event log of scene rearrangements.
+
+\subsection{Separating the movers}
+\label{sec:movers}
+
+With a background model in hand, foreground extraction is subtraction:
+any depth estimate (or triangulated point) that disagrees with the
+background beyond its noise band belongs to a \emph{mover}. Foreground
+points are clustered by spatial proximity per frame, clusters are tracked
+over time (\autoref{sec:scenarios} implements exactly this machinery),
+and classification into insect / robot / human / other falls out of
+crude but effective geometric statistics --- extent, height above floor,
+speed, and persistence:
+a single isolated point moving at $0.1$--$1$\,m/s is an insect; a
+$\sim$0.3\,m-wide cluster at constant $\sim$0.1\,m height gliding on the
+floor plane is the robot; a $0.4$--$0.6$\,m cluster extending
+$1.5$--$2$\,m above the floor is a person. The scenario studies of
+\autoref{sec:scenarios} quantify each of these tracks separately; the
+unified pipeline --- background subtraction feeding one multi-target
+tracker with per-class models --- is the integration goal they build
+toward.
 
 %----------------------------------------------------------------------
 \section{Scaling the rig: more cameras and more pixels}
@@ -1336,6 +1410,100 @@ bug. This is the general pattern the project commits to: every claimed
 improvement must move a named statistic into a predicted band, and every
 statistic outside its band must be either explained to this standard or
 treated as a defect.
+
+%----------------------------------------------------------------------
+\section{Scenario studies}
+\label{sec:scenarios}
+
+Four concrete monitoring scenarios, each simulated end-to-end against
+ground truth in the deterministic demo style (all at the geometry tier:
+points, not pixels --- detections are assumed, estimation is exercised;
+each result is therefore an upper bound whose image-tier feasibility is
+noted). Together they instantiate the mover-separation architecture of
+\autoref{sec:movers}.
+
+\subsection{Insect counting and entry/exit statistics}
+\label{sec:insects}
+
+Point-like targets enter the monitored box through a random face, fly an
+Ornstein--Uhlenbeck random walk, and leave
+(\code{demo/track\_insects.c}: 300\,s, spawn rate $0.1$/s, joint
+detection probability $0.9$ per frame, \emph{plus two uniform clutter
+detections per camera per frame}). Stereo association is by the epipolar
+gate alone; a nearest-neighbor tracker with 3-hit confirmation and 5-miss
+termination maintains identities; confirmed births/deaths map to box
+faces. Results (seed 777): ground truth 31 insects, \textbf{29 tracks
+confirmed} (two lived too briefly to confirm); entry/exit face
+histograms match ground truth to within $\pm2$ per face; track position
+RMS $24.4$\,mm --- the single-point depth law of \autoref{ex:deptherr},
+as an unmodeled point target admits no $\sqrt n$ averaging. Of
+$\sim$36{,}000 clutter detections, only 231 pairs slipped through the
+epipolar gate and \emph{none} survived track confirmation: geometric
+gating plus temporal confirmation suppresses clutter completely at these
+densities. Image-tier caveat: at $4.7$\,m a 5\,mm insect subtends
+$0.85$\,px --- below the $2$-px feature floor of
+\autoref{sec:resolution} --- so real detection must be
+temporal-differencing of sub-pixel blobs; counting accuracy will be
+detection-limited, not geometry-limited.
+
+\subsection{Diurnal cycle and artificial lighting}
+\label{sec:lightscen}
+
+The cameras double as calibrated photometers (Appendix; radiometric
+calibration assumed): mean scene luminance is one number per frame.
+\code{demo/lightlog.c} simulates 120 days at 1-minute resolution ---
+natural light with drifting sunrise ($-1.5$\,min/day), per-day weather
+($0.4$--$1.0\times$), slow AR(1) cloud noise, two lamps on noisy
+schedules, two rare middle-of-the-night events --- and analyzes the sum.
+Step detection (median-filter differencing): \textbf{484/484 on/off
+events found, 0 missed, 33 false alarms} (cloud edges), timing RMS
+$1.02$\,min, lamp identity by step magnitude \textbf{484/484 correct},
+including both night events. The natural component is recovered by
+subtracting the reconstructed lamp state, with a \emph{nightly
+re-anchor} (pre-dawn darkness forces the natural component to zero ---
+a physical constraint that stops false-alarm error from propagating
+across days). Sunrise is then estimated per day by two-level template
+inversion (crossings of 15\% and 35\% of the day's robust peak invert
+the known diurnal shape analytically; amplitude and shape cancel):
+offset $0.7$\,min (unbiased), day-to-day jitter $25.3$\,min RMS ---
+the genuine information floor imposed by 100-min-correlated cloud
+cover, not an estimator defect --- and the seasonal drift is recovered
+as \[ \widehat{\text{drift}} = -1.61\ \text{min/day} \quad
+(\text{true } -1.50,\ \sigma_{\text{slope}} \approx 0.07). \]
+A 30-day run is statistically \emph{underpowered} for this drift
+($\sigma_{\text{slope}}\approx0.7$): a season of data is what makes the
+trend measurable --- the T4 logic of \autoref{sec:statrules} applied to
+experiment design.
+
+\subsection{Human occupancy}
+\label{sec:occupancy}
+
+A known three-person cohort (heights $1.62/1.75/1.88$\,m) makes 13
+scheduled visits over a simulated day (\code{demo/track\_people.c}):
+enter at the door, walk to desk or window, linger, exit. Each person is
+a cylinder with self-occluding torso-band features plus a head point;
+per frame the known-radius circle fit gives ground position and the
+triangulated head gives height. Results (seed 31337): \textbf{13/13
+episodes detected, 13/13 identities correct} (nearest cohort height;
+the $130$\,mm height gaps dwarf the $0.3$\,mm height RMS), 13/13
+trajectory targets correct, ground-position RMS $14.1$\,mm, entry
+latency $0.2$\,s (the 3-frame confirmation), per-person occupancy
+minutes recovered to $0.1$\,min. Caveats: identity-by-height is valid
+only for small cohorts with distinct heights (it is a household
+biometric, not a general one), and the idealized head/torso detections
+make these upper bounds --- real image-tier person detection is where
+the learned-detector boundary of \autoref{sec:ladder} sits.
+
+\subsection{What the scenarios share}
+
+All four reuse the same small kernel --- epipolar gating, triangulation,
+model-constrained fitting, temporal confirmation --- plus one scenario
+layer each (multi-target association; photometric step decomposition;
+identity classification). The common upgrades they all point to:
+constant-velocity Kalman filtering (speed estimates,
+\autoref{tab:trackresults}), the Mahalanobis-weighted fits of
+\autoref{sec:budget}, and the background-subtraction front end of
+\autoref{sec:movers}.
 
 %----------------------------------------------------------------------
 \section{Roadmap}

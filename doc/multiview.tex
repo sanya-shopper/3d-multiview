@@ -1095,6 +1095,62 @@ large --- the identifiability effect discussed in \autoref{sec:radial}. A
 Levenberg--Marquardt refinement stage is the roadmap item that tightens all
 of these numbers.
 
+\paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
+disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the
+monitored volume for 20\,s at $0.3$\,m/s with random turns, on a floor
+$0.8$\,m below the standard rig. Feature points sit on its cylindrical
+bumper band; per camera, the far side of the band is self-occluded
+(surface-normal test), so each frame observes only a partial arc ---
+on average 16.7 of 36 band points survive visibility, image bounds, and
+the $1.5$\,px epipolar gate built from the analytic $\F$
+\eqref{eq:fundamental}. Each frame's surviving correspondences are
+triangulated and the ground-plane circle of \emph{known} radius is fit to
+them by Gauss--Newton; the fitted center is scored against the simulated
+trajectory.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lr}
+\toprule
+Quantity & Value \\
+\midrule
+frames / rate                    & $600$ / $30$ fps \\
+mean visible band points         & $16.7$ of $36$ \\
+center RMS error, lateral ($x$)  & $5.1$ mm \\
+center RMS error, depth ($z$)    & $7.7$ mm \\
+center RMS error, horizontal     & $9.2$ mm \\
+center max error                 & $26.2$ mm \\
+naive-centroid RMS (contrast)    & $116.5$ mm \\
+speed RMS error ($\pm2$-frame difference) & $95$ mm/s \\
+\bottomrule
+\end{tabular}
+\caption{Robot-tracking experiment, seed 12345, $\sigma=0.3$ px
+(reproduce with \code{make demo}). Trajectories written to
+\code{out\_track.ply}.}
+\label{tab:trackresults}
+\end{table}
+
+Three lessons, each checkable by hand. First, \emph{model knowledge
+removes the partial-view bias}: the centroid of a half-arc of a circle of
+radius $R$ sits $2R/\pi\approx108$\,mm from the center --- the naive
+centroid's measured 116\,mm RMS is exactly this geometric bias, and the
+known-radius fit eliminates it (9\,mm). Second, the per-frame precision
+follows the error laws: single-point depth noise
+$\sigma_Z\approx23$\,mm (\autoref{ex:deptherr}) averaged over
+$\sim$17 points predicts $\sigma\approx5.6$\,mm, and the measured
+$7.7$\,mm depth RMS carries the expected extra factor from fitting a
+center to a partial arc; the residual anisotropy ($z$ worse than $x$) is
+the depth law itself. Third, \emph{differentiation amplifies noise}:
+$9.2$\,mm of position noise differenced over $4/30$\,s predicts
+$\sqrt2\cdot9.2/0.133\approx98$\,mm/s of speed noise --- the measured
+$95$\,mm/s, i.e.\ a third of the robot's actual speed, which is why
+velocity estimates in practice come from a motion-model filter (constant
+velocity Kalman or similar) rather than raw differencing; such a filter is
+a natural later addition to the temporal-statistics roadmap item. This
+experiment is geometry-level simulation (points, not pixels); the
+rendered-image tier --- the same scenario in a physically-based renderer
+exercising the dense matcher --- is the planned next validation stage.
+
 %----------------------------------------------------------------------
 \section{Roadmap}
 \label{sec:roadmap}

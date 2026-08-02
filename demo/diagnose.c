@@ -224,7 +224,8 @@ static void track_stats(double sigma, unsigned long long seed,
 
 /* --- C: calibration seed sweep ------------------------------------------ */
 
-static double calib_fx_err(double sigma, unsigned long long seed)
+static double calib_fx_err(double sigma, unsigned long long seed,
+                           double *reproj)
 {
     const double pose_deg[6][2] = {
         { 0.0, 0.0 }, { 30.0, 0.0 }, { -30.0, 15.0 },
@@ -277,6 +278,8 @@ static double calib_fx_err(double sigma, unsigned long long seed)
     }
     if (mv_calib_planar(K, est, k_radial, views, 6, 1) != MV_OK)
         return 1e9;
+    if (reproj)
+        *reproj = mv_calib_reproj_rms(est, views, 6);
     return K[0] - 800.0;
 }
 
@@ -312,22 +315,32 @@ int main(void)
     printf("\nC. calibration: fx error across noise realizations "
            "(sigma = 0.3)\n   seeds 1..10: ");
     {
-        double sum = 0.0, sum2 = 0.0;
+        double sum = 0.0, sum2 = 0.0, rsum = 0.0, rp;
         for (i = 1; i <= 10; i++) {
-            double e = calib_fx_err(0.3, (unsigned long long)i);
+            double e = calib_fx_err(0.3, (unsigned long long)i, &rp);
             printf("%+.1f ", e);
             sum += e;
             sum2 += e * e;
+            rsum += rp;
         }
         printf("\n   mean %+.2f px, sample std %.2f px\n", sum / 10.0,
                sqrt((sum2 - sum * sum / 10.0) / 9.0));
         printf("   (demo seed 7 gave -6.95 px)\n");
+        /* residual-consistency (chi-square-style) check: fitted residual
+         * RMS vs sqrt(2) sigma sqrt(1 - p/n): p = 42 params (4 K +
+         * 2 radial + 6x6 pose), n = 756 residual coordinates */
+        printf("   mean reprojection RMS: %.3f px; "
+               "noise-model prediction: %.3f px; ratio %.3f\n",
+               rsum / 10.0,
+               sqrt(2.0) * 0.3 * sqrt(1.0 - 42.0 / 756.0),
+               (rsum / 10.0)
+               / (sqrt(2.0) * 0.3 * sqrt(1.0 - 42.0 / 756.0)));
     }
     printf("\nC'. calibration linearity: mean |fx err| at sigma = 0.15: ");
     {
         double s = 0.0;
         for (i = 1; i <= 10; i++)
-            s += fabs(calib_fx_err(0.15, (unsigned long long)i));
+            s += fabs(calib_fx_err(0.15, (unsigned long long)i, NULL));
         printf("%.2f px (expect ~half of sigma=0.3 value)\n", s / 10.0);
     }
     return 0;

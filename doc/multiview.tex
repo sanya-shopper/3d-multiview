@@ -434,6 +434,92 @@ position. In plain binary, flipping the top bit of $110$ gives $010=2$, an
 error of four.
 \end{example}
 
+\subsection{Design: the rotating display}
+\label{sec:rotating}
+
+For an $N$-camera rig (\autoref{sec:scaling}) the planned calibration
+fixture is the display of \autoref{sec:display} mounted on a plate rotating
+at constant angular velocity $\omega$, so that the screen sweeps past every
+camera each revolution. This subsection records the design; implementation
+is a roadmap item (\autoref{sec:roadmap}).
+
+\paragraph{What the rotation provides.} Three things, all substantial.
+(i) \emph{Tilt diversity per camera}: as the screen sweeps past, every
+frame shows the known plane at a different orientation --- exactly the
+varied-tilt view set Zhang's method needs, whose absence measurably
+degrades focal recovery (\autoref{sec:results}). (ii) \emph{One shared
+orbit}: every camera observes the same one-parameter family of poses ---
+screen pose $=$ mount offset composed with rotation about a fixed axis at
+constant $\omega$. Fitting that orbit (axis, $\omega$, phase, mount;
+$\sim$10 parameters) jointly across cameras links \emph{all} of them into
+one world frame even if no two ever see the screen simultaneously: the
+orbit itself is the common reference object, replacing pairwise shared
+views. (iii) \emph{The display is the clock}: the screen broadcasts its
+frame index, so every captured image self-reports display time and
+cameras synchronize to the rotation model without a hardware trigger.
+
+\paragraph{What the rotation forbids.} The static Gray-code stack of
+\autoref{sec:display} requires one camera pixel to observe one display
+point across $\sim$20 frames --- impossible on a moving target. The
+pattern must therefore be \emph{single-shot self-identifying}: every frame
+decodable alone. The design is layered:
+\begin{itemize}
+  \item a checkerboard-type \emph{saddle-point grid} as the metric layer
+        --- saddle locations are unbiased under perspective and under
+        (moderate, symmetric) blur, unlike dot centroids, which both
+        foreshortening and blur displace;
+  \item \emph{identity coding} embedded in the grid (marker bits in
+        alternate squares, or an M-array whose every $k\times k$ window is
+        unique), so partial and oblique views self-locate --- most frames
+        of a sweep are partial;
+  \item a \emph{frame-counter strip} along the border, Gray-coded
+        \emph{in time} (successive indices differ in one bit,
+        cf.~\autoref{ex:gray}), providing the timestamp for the orbit
+        model;
+  \item \emph{multi-scale structure} (a coarse grid nested with a fine
+        one), since one display serves cameras at different distances and
+        obliquities; strokes must span ${\ge}3$--$4$ pixels in the worst
+        camera at the most oblique usable pose;
+  \item \emph{binary black/white only}: LCD gamma and contrast shift
+        off-axis, so gray-level codes degrade with viewing angle while
+        binary features with per-frame identity do not.
+\end{itemize}
+Across frames, only the identity layer changes (counter strip; optionally
+alternating coarse/fine emphasis) --- pose variation is already supplied by
+the rotation. At low $\omega$ the screen moves ${<}1$ pixel between
+consecutive frames, so pattern-plus-inverse in consecutive frames remains
+usable and restores the per-pixel contrast robustness of
+\autoref{sec:display}.
+
+\begin{example}[motion-blur budget]
+\label{ex:blur}
+Image-space blur during exposure $t_e$ is
+$\omega\,r\,f\,t_e/Z$ pixels, with $r$ the lever arm from axis to screen
+edge. For the experimental rig's numbers ($f=800$\,px, $Z=4.7$\,m) with
+$r=0.25$\,m and $\omega=6$\,rpm $=0.63$\,rad/s: the screen edge moves
+$0.63\cdot0.25\cdot800/4.7\approx27$\,px/s, so a $5$\,ms exposure blurs
+$0.13$\,px --- comfortably sub-pixel, and between frames at 30\,fps the
+screen shifts $0.9$\,px, validating the consecutive-inverse-frame option.
+The formula is the design knob linking $\omega$, exposure, and screen
+brightness.
+\end{example}
+
+\paragraph{One mechanical trap: cant the screen.} A screen standing
+parallel to the rotation axis presents orientations that all differ by
+rotation about a \emph{single} axis --- a weak/singular family for
+plane-based calibration \cite{SturmMaybank1999}, the same disease as the
+measured near-frontal weakness. Mounting the screen tilted back
+$20$--$30^\circ$ makes its normal sweep a cone instead of a circle,
+exercising two rotation axes; this one bracket angle is the most important
+mechanical detail of the fixture.
+
+\paragraph{Pipeline.} Gate frames by obliquity (roughly $15$--$55^\circ$
+off-normal: frontal frames are uninformative, grazing frames unmatchable);
+per-frame homographies from the self-identifying grid; per-camera Zhang
+intrinsics from the gated set; joint orbit fit for all extrinsics $+$
+axis $+$ $\omega$ $+$ phase --- the natural first customer for the planned
+Levenberg--Marquardt stage.
+
 %----------------------------------------------------------------------
 \section{Two-view epipolar geometry}
 \label{sec:epipolar}
@@ -841,18 +927,55 @@ metric scale --- the classic scale ambiguity of pure SfM does not arise.
 Dense multiview stereo over the registered set (e.g.\ patch-based methods
 \cite{FurukawaPonce2010}) is a further optional stage.
 
-\subsection{Range-finder fusion}
+\subsection{Range-finder fusion (optional, kept open)}
 \label{sec:range}
 
-A range finder (laser/ToF) contributes sparse but metrically strong depth.
-Two integration modes are planned: (i) if the range finder is rigidly mounted
-and extrinsically calibrated to the rig, each range sample is simply another
-world-frame point with small $\sigma_Z$, fused into the cloud with
-inverse-variance weights; (ii) if it produces an independent scan, the scan
-is registered to the vision cloud by closed-form absolute orientation
-\cite{Horn1987} initialized correspondence-free and refined with ICP
-\cite{BeslMcKay1992}. In both modes the range data additionally serves as a
-ground-truth audit of the stereo depth law \eqref{eq:deptherr}.
+The system is designed to work without a range finder; this subsection
+records what a single-beam laser ranger would add if one arrives later, so
+the option stays open at zero present cost. Two integration modes:
+(i) if the range finder is rigidly mounted and extrinsically calibrated to
+the rig, each range sample is simply another world-frame point with small
+$\sigma_Z$, fused into the cloud with inverse-variance weights; (ii) if it
+produces an independent scan, the scan is registered to the vision cloud by
+closed-form absolute orientation \cite{Horn1987} initialized
+correspondence-free and refined with ICP \cite{BeslMcKay1992}.
+
+\paragraph{At calibration time (with the rotating display of
+\autoref{sec:rotating}).} Four distinct improvements. (i) \emph{Independent
+absolute scale}: the vision-only metric chain hangs entirely on the
+display's pixel pitch; a $\sim$2\,mm-accurate range at 4.7\,m is a 0.04\%
+scale reference --- a second chain that turns a silent global scale bias
+into a detectable discrepancy. (ii) \emph{Orbit metrology}: aimed so the
+rotating screen sweeps through the beam, the periodic range trace $d(t)$
+yields $\omega$, phase, orbit radius and axis distance at millimetre level,
+independently of every camera, and ties laser and camera timestamps to the
+same physical event. (iii) \emph{The focal--depth weak direction}
+(\autoref{sec:printed}) is attacked head-on: an absolute distance to the
+target plane is exactly the constraint type planar homographies lack.
+(iv) \emph{The plate calibrates the laser}: if the spot is visible to the
+cameras, the sweeping plate carries it through continuously varying depths;
+each frame gives (range, pixel$_1$, pixel$_2$), the cameras triangulate the
+spot, and the beam's ray in the rig frame ($\sim$5 DOF) falls out of a
+least-squares line fit --- no manual procedure at all.
+
+\paragraph{At run time.} Laser error is roughly constant while stereo error
+grows as $Z^2$ \eqref{eq:deptherr}, so the laser anchors the far field and
+the absolute scale (sparse metric skeleton, dense stereo flesh); it
+provides depth in texture deserts where block matching has nothing to
+match, and used as a prior it narrows the disparity search there; and a
+persistent bias between laser and stereo depth at the same spot is an
+online health monitor for the metric chain, complementing the $\F$-drift
+monitor of \autoref{sec:epipolar}.
+
+\begin{example}[laser--stereo crossover]
+\label{ex:crossover}
+With $\sigma_{\text{laser}}=2$\,mm constant and the rig's
+$\sigma_Z=Z^2\sigma_d/(fB)$: equality at
+$Z=\sqrt{0.002\cdot 800\cdot 0.5/0.42}\approx1.4$\,m. Nearer than that,
+stereo wins per point; beyond it the laser is better along its ray ---
+tenfold better at $4.7$\,m ($2$\,mm vs $23$\,mm) --- while stereo retains
+the advantage of density. Inverse-variance fusion realizes both.
+\end{example}
 
 %----------------------------------------------------------------------
 \section{Numerical implementation notes}
@@ -979,15 +1102,18 @@ of these numbers.
 In dependency order: (1) saddle-point checkerboard corner detection with
 sub-pixel refinement, closing the printed-target path end-to-end
 (the display path of \autoref{sec:display} is already
-detector-free); (2) Levenberg--Marquardt refinement of calibration
-(and later bundle adjustment \cite{Triggs2000}); (3) feature
+detector-free); (2) the rotating-display fixture of \autoref{sec:rotating}:
+single-shot self-identifying pattern generation (M-array $+$ Gray-coded
+frame counter) and the joint orbit fit; (3) Levenberg--Marquardt refinement
+of calibration (and later bundle adjustment \cite{Triggs2000}); (4) feature
 detection/description and robust matching (enables live correspondences,
-RANSAC-gated by \autoref{sec:epipolar}); (4) image warping by the
+RANSAC-gated by \autoref{sec:epipolar}); (5) image warping by the
 rectifying homographies with bilinear resampling, closing the dense video
-path end-to-end; (5) temporal cloud statistics for static/moving
-segmentation (\autoref{sec:models}); (6) photo-collection registration
-(\autoref{sec:photos}); (7) Hartley--Sturm optimal triangulation;
-(8) range-finder fusion (\autoref{sec:range}); (9) meshing. Each step lands
+path end-to-end; (6) temporal cloud statistics for static/moving
+segmentation (\autoref{sec:models}); (7) photo-collection registration
+(\autoref{sec:photos}); (8) Hartley--Sturm optimal triangulation;
+(9) meshing; and, if the hardware materializes, the optional range-finder
+integration of \autoref{sec:range}. Each step lands
 as a new module behind the same conventions (\autoref{tab:modules}) with
 its own noiseless-exact tests and a synthetic experiment extending
 \autoref{sec:results}.

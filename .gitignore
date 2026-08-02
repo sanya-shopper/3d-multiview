@@ -2,6 +2,7 @@
 *.a
 demo_synthetic
 demo_calibrate
+demo_track
 test_mv
 out_cloud.ply
 target_letter.pgm

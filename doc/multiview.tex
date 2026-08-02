@@ -1151,6 +1151,101 @@ experiment is geometry-level simulation (points, not pixels); the
 rendered-image tier --- the same scenario in a physically-based renderer
 exercising the dense matcher --- is the planned next validation stage.
 
+\subsection{Error budget and consistency: is there a bug?}
+\label{sec:budget}
+
+Measured errors alone cannot distinguish ``the physics'' from ``a
+defect.'' \code{demo/diagnose.c} therefore runs three targeted checks,
+built on the principle that noise-driven error and bias behave
+differently: a true bias survives $\sigma\to0$, and honest noise
+propagation is \emph{linear} in $\sigma$ in the operating regime. All
+numbers below are deterministic and reproducible.
+
+\paragraph{A. Triangulation vs the depth law.} The per-point prediction
+$\sigma_Z = Z^2\sqrt2\,\sigma/(fB)$ \eqref{eq:deptherr}, evaluated on the
+same sampled points, against the measured depth RMS:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{ccccc}
+\toprule
+$\sigma$ (px) & measured $z$ RMS & predicted & ratio & lateral RMS \\
+\midrule
+$0.0$ & $0.000$ mm  & $0.000$ mm  & ---    & $0.000$ mm \\
+$0.1$ & $8.75$ mm   & $8.66$ mm   & $1.01$ & $1.37$ mm \\
+$0.3$ & $26.2$ mm   & $26.0$ mm   & $1.01$ & $4.12$ mm \\
+$0.6$ & $52.4$ mm   & $52.0$ mm   & $1.01$ & $8.24$ mm \\
+\bottomrule
+\end{tabular}
+\caption{Triangulation noise sweep (250 points, seed 42).}
+\label{tab:diagtri}
+\end{table}
+
+Agreement with the analytic law to $1\%$ at every noise level, exact zero
+at $\sigma=0$, and both error components scaling exactly linearly. The
+DLT's algebraic (rather than reprojection-optimal
+\cite{HartleySturm1997}) cost is invisible at these noise levels ---
+the $1\%$ residual bounds it.
+
+\paragraph{B. Tracking estimator across noise levels.} The same sweep for
+the robot experiment, with the \emph{arc factor} $=$ measured center-depth
+RMS over the naive $\sqrt{n}$-averaged per-point prediction:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{cccc}
+\toprule
+$\sigma$ (px) & center $x$ RMS & center $z$ RMS & arc factor \\
+\midrule
+$0.0$ & $0.000$ mm & $0.000$ mm & --- \\
+$0.1$ & $1.72$ mm  & $2.39$ mm  & $1.13$ \\
+$0.3$ & $5.12$ mm  & $7.68$ mm  & $1.21$ \\
+$0.6$ & $10.7$ mm  & $40.0$ mm  & $3.14$ \\
+\bottomrule
+\end{tabular}
+\caption{Tracking noise sweep (600 frames, seed 12345).}
+\label{tab:diagtrack}
+\end{table}
+
+Zero bias at $\sigma=0$ (the fit recovers exact circles to machine
+precision), near-linear scaling from $0.1$ to $0.3$\,px with a mild,
+stable arc factor of $1.1$--$1.2$ --- and then a genuine
+\emph{nonlinearity at $\sigma=0.6$}: depth error jumps to $40$\,mm
+(factor $3.1$) instead of the linear $15$\,mm. This is not a defect but a
+measured limitation of the estimator: per-point depth noise at
+$\sigma=0.6$ reaches $\sim$46\,mm --- a quarter of the robot's
+\emph{radius} --- and the circle fit assumes isotropic residuals while
+the actual noise is strongly depth-elongated, so the fitted center gets
+dragged along $z$. The fix, when needed, is a Mahalanobis-weighted fit
+using the known per-point error ellipse (same family as the weighted DLT
+of \autoref{sec:heterogeneous}). At the operating point
+$\sigma=0.3$\,px the estimator sits comfortably in its linear regime.
+
+\paragraph{C. Calibration: is $-7$\,px a typical draw?} The single
+reported focal error (\autoref{tab:calibresults}) is one noise
+realization. Across ten seeds at $\sigma=0.3$\,px the $f_x$ errors are
+$\{-4.0,-1.0,+3.5,+1.5,-2.5,+3.4,-7.0,+0.7,+1.2,+3.4\}$: mean
+$-0.08$\,px (\emph{unbiased}), sample standard deviation $3.5$\,px. The
+demo's $-6.95$\,px is a $2\sigma$ draw --- unlucky, not anomalous. At
+$\sigma=0.15$\,px the mean $|f_x|$ error is $1.41$\,px, exactly half the
+$2.82$\,px of $\sigma=0.3$: linear again.
+
+\paragraph{Verdict.} Every check a bias-type bug could fail is passed:
+all estimators are exact on noiseless data (here and in the 30-assertion
+unit suite), all errors scale linearly with input noise in the operating
+regime, the dominant error channel matches its analytic prediction to
+$1\%$, and the calibration estimator is unbiased in expectation. The
+error sources, ranked: (1) pixel noise through the depth law ---
+dominant, modeled, verified; (2) estimator geometry factors (partial-arc
+factor $1.2$; calibration's finite-view variance of $3.5$\,px std,
+inflated further by weak pose diversity, \autoref{sec:printed});
+(3) unmodeled noise \emph{anisotropy} in the circle fit --- negligible at
+$0.3$\,px, dominant by $0.6$\,px; (4) DLT algebraic suboptimality and the
+$3.5\sigma$ gating truncation --- both bounded below the $1\%$ level
+here. A bug can never be excluded, but everything measurable currently
+behaves exactly as the theory of
+\autoref{sec:triangulation}--\autoref{sec:stereo} says it must.
+
 %----------------------------------------------------------------------
 \section{Roadmap}
 \label{sec:roadmap}

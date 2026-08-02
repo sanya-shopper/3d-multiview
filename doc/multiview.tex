@@ -1506,6 +1506,138 @@ constant-velocity Kalman filtering (speed estimates,
 \autoref{sec:movers}.
 
 %----------------------------------------------------------------------
+\section{Person detection and face recognition with open-source components}
+\label{sec:faces}
+
+The learned-detector boundary drawn in \autoref{sec:ladder} does not have
+to remain outside the system: mature open-source detectors and face
+recognizers can be attached \emph{without} touching the dependency-free
+core, and the occupancy scenario (\autoref{sec:occupancy}) already defines
+the exact seam they plug into. This section records the component
+landscape, the integration architecture, and --- the question that
+determines what to promise --- how accuracy differs between a
+pre-registered cohort and unknown faces.
+
+\subsection{Component landscape}
+\label{sec:osscomponents}
+
+Three roles, each with solid open-source fillings:
+\emph{person detection} --- YOLO-family single-shot detectors
+\cite{Redmon2018} (the original darknet implementation is plain C;
+Apache-licensed successors such as YOLOX run everywhere), or classical
+HOG pedestrian detection in OpenCV as a weak-but-tiny fallback;
+\emph{face detection + landmarks} --- RetinaFace \cite{Deng2020} or its
+lightweight successors (SCRFD, YuNet), which return a box plus five
+landmarks (eyes, nose, mouth corners); \emph{face embedding} ---
+deep metric networks mapping an aligned $112\times112$ crop to a unit
+vector such that same-person pairs are close: FaceNet established the
+recipe \cite{Schroff2015}, ArcFace-class models are the current
+open-source standard \cite{Deng2019}. The practical integration seam for
+all three is an ONNX-exported model behind the ONNX Runtime C API
+(MIT-licensed, single shared library, plain-C interface) --- the one
+boundary object between the C99 world and the learned world. License
+note: several popular YOLO packagings are AGPL; the Apache/MIT
+alternatives keep the system's licensing simple.
+
+\subsection{Piping it in}
+\label{sec:sidecar}
+
+The architecture is a \emph{sidecar oracle}: the core stays pure C99 and
+treats the detector exactly as the scenario demos treat their simulated
+detections. Per frame and per camera, the sidecar consumes the image and
+emits rows of \code{(frame, camera, class, box, landmarks, embedding)} ---
+a text/CSV stream over a pipe or file, trivially parseable, recordable,
+and replayable (determinism is preserved by recording the sidecar's
+output once and replaying it in tests --- the oracle's answers become
+fixtures). The geometric core then does what it already does:
+\begin{enumerate}
+  \item \emph{stereo association}: detections in the two cameras are
+        paired by the epipolar gate on box centers/landmarks
+        (\autoref{sec:epipolar}) --- the same gate that suppressed
+        clutter in \autoref{sec:insects};
+  \item \emph{triangulation}: paired boxes give the person's 3D position;
+        paired eye landmarks give a metric face position and, with the
+        floor plane, the height biometric of \autoref{sec:occupancy};
+  \item \emph{track-level identity}: embeddings are not judged per frame
+        but accumulated per \emph{track} (quality-weighted average of
+        embeddings across the track's frames): the tracker turns many
+        marginal glimpses into one confident identity, and the identity
+        then travels with the track through frames where the face is
+        turned away entirely.
+\end{enumerate}
+Identity fusion is a small score-level combination: face-embedding
+similarity where a face is visible, the height/gait geometric cues
+otherwise --- the heterogeneous-evidence pattern of the appendix
+(\autoref{sec:blend}) applied to identity.
+
+\subsection{Pre-registered vs unknown faces}
+\label{sec:openset}
+
+The accuracy question splits into three regimes with \emph{very}
+different numbers.
+
+\paragraph{Verification (1:1) and closed-set identification (1:$N$,
+person guaranteed enrolled).} On the classic verification benchmark LFW
+\cite{Huang2007} modern open-source models exceed $99.5\%$ --- the
+benchmark is saturated and mostly measures that nothing is broken. The
+more honest unconstrained figure is IJB-C \cite{Maze2018} verification at
+strict false-accept rates: ArcFace-class models reach a true-accept rate
+around $96$--$97\%$ at FAR $=10^{-4}$ \cite{Deng2019}. For a
+\emph{pre-registered household cohort} --- $N$ of order 10, controlled
+enrollment photos, closed-set --- rank-1 identification is effectively
+$\ge99\%$ whenever the probe image is adequate: with guaranteed gallery
+membership, the decision is an argmax among a few well-separated
+identities, and errors are driven almost entirely by probe quality, not
+confusion.
+
+\paragraph{Open-set identification (the person may be unknown).} This is
+a different problem: the system must first decide \emph{whether} the
+probe is anyone enrolled, which requires thresholding an absolute
+similarity score rather than taking an argmax. Impostor scores from
+unknown faces overlap the tail of genuine scores, so every operating
+point trades false alarms (visitor labeled as a resident) against misses
+(resident labeled unknown). NIST's identification evaluations
+\cite{Grother2019} quantify the cost: even leading algorithms give up
+substantial accuracy relative to closed-set --- at a false-positive
+identification rate of $1\%$, miss rates range from a few percent with
+high-quality frontal probes to \emph{tens of percent} with
+surveillance-quality probes, and degradation grows with gallery size and
+probe--gallery quality gap. The rule of thumb this system should adopt:
+\textbf{closed-set household identification is a solved problem at our
+scale; reliable ``this is a stranger'' detection is not free} --- it
+needs a margin-calibrated threshold, benefits enormously from track-level
+embedding fusion, and should be reported with its false-alarm/miss
+operating point, never as a single accuracy number.
+
+\paragraph{The resolution gate.} All of the above presumes enough face
+pixels, and here our own \autoref{sec:resolution} bites hard.
+
+\begin{example}[face pixels at range]
+\label{ex:facepixels}
+A face is $\approx0.20$\,m tall with $0.064$\,m interocular distance. At
+the experimental rig's $f=800$\,px and $Z=4.7$\,m: face height
+$0.20\cdot800/4.7\approx34$\,px, interocular
+$\approx11$\,px --- far below the $\gtrsim80$--$112$\,px face crops the
+embedding networks are built for; expect severely degraded embeddings.
+For a $100$\,px face at $4.7$\,m the rig needs
+$f=100\cdot4.7/0.20=2350$\,px --- a 4K-class sensor, or a normal sensor
+with a narrow-field lens.
+\end{example}
+
+The systems answer follows the appendix's blending argument
+(\autoref{sec:blend}): do not demand identity everywhere. Add one
+\emph{identity camera} --- a narrow-field unit aimed at the natural
+chokepoint (the door of \autoref{sec:occupancy}, where every track
+begins and ends) --- capture the face at high resolution once per entry,
+and let the tracker carry that identity through the wide-angle geometric
+volume. Identity becomes an attribute assigned at a favorable moment and
+\emph{propagated by geometry}, rather than a per-frame recognition
+burden. A final scope note befitting the controlled environment: the
+enrollment gallery is the household's own, processing is local, and the
+open-set threshold should be set to prefer ``unknown'' over
+misattribution.
+
+%----------------------------------------------------------------------
 \section{Roadmap}
 \label{sec:roadmap}
 
@@ -1522,8 +1654,10 @@ rectifying homographies with bilinear resampling, closing the dense video
 path end-to-end; (6) temporal cloud statistics for static/moving
 segmentation (\autoref{sec:models}); (7) photo-collection registration
 (\autoref{sec:photos}); (8) Hartley--Sturm optimal triangulation;
-(9) meshing; and, if the hardware materializes, the optional range-finder
-integration of \autoref{sec:range}. Each step lands
+(9) meshing; (10) the detector/identity sidecar of \autoref{sec:faces}
+(ONNX Runtime seam, recorded-oracle replay tests); and, if the hardware
+materializes, the optional range-finder integration of
+\autoref{sec:range}. Each step lands
 as a new module behind the same conventions (\autoref{tab:modules}) with
 its own noiseless-exact tests and a synthetic experiment extending
 \autoref{sec:results}.

@@ -342,6 +342,83 @@ static void test_graycode(void)
     }
 }
 
+static unsigned test_rot90(unsigned code)
+{
+    unsigned out = 0;
+    int r, c;
+    for (r = 0; r < 4; r++)
+        for (c = 0; c < 4; c++)
+            out = (out << 1)
+                | ((code >> (15 - ((3 - c) * 4 + r))) & 1u);
+    return out;
+}
+
+static void test_pattern(void)
+{
+    static unsigned char pat[MV_PAT_W * MV_PAT_H];
+    static unsigned char img[640 * 480];
+    unsigned code = 0;
+    int r, c, pc, pr, rot;
+
+    CHECK(mv_pattern_selftest() == MV_OK, "pattern: M-array selftest");
+
+    for (r = 0; r < 4; r++)
+        for (c = 0; c < 4; c++)
+            code = (code << 1) | (unsigned)mv_marray_bit(5 + c, 2 + r);
+    CHECK(mv_marray_lookup(code, &pc, &pr, &rot) == MV_OK
+          && pc == 5 && pr == 2 && rot == 0,
+          "pattern: window lookup, unrotated");
+    CHECK(mv_marray_lookup(test_rot90(code), &pc, &pr, &rot) == MV_OK
+          && pc == 5 && pr == 2 && rot != 0,
+          "pattern: window lookup under rotation");
+
+    /* end-to-end: render frontal view, read blind, verify exactly */
+    {
+        mv_camera cam;
+        mv_read_result rr;
+        unsigned long long seed = 1;
+        double center[3] = { MV_PAT_W / 2.0 * 0.0002745,
+                             MV_PAT_H / 2.0 * 0.0002745, 0.0 };
+        int i, id_bad = 0;
+        mv_cam_set_K(&cam, 800.0, 800.0, 320.0, 240.0);
+        mv_cam_set_identity_pose(&cam);
+        memset(cam.k, 0, sizeof(cam.k));
+        for (i = 0; i < 3; i++)
+            cam.t[i] = -center[i];
+        cam.t[2] += 0.85;
+        mv_pattern_render(pat, 777777u);
+        CHECK(mv_render_plane(img, 640, 480, &cam, pat, MV_PAT_W,
+                              MV_PAT_H, 0.0002745, 128, 0.0, &seed)
+              == MV_OK, "pattern: render succeeds");
+        CHECK(mv_read_pattern(&rr, img, 640, 480) == MV_OK,
+              "pattern: blind read succeeds");
+        CHECK(rr.n == 162, "pattern: all 162 corners identified");
+        {
+            double se = 0.0;
+            for (i = 0; i < rr.n; i++) {
+                double xy[2], X[3], uv[2], du, dv, e2;
+                mv_pattern_corner_px(rr.id[i] % MV_PAT_CORNER_COLS,
+                                     rr.id[i] / MV_PAT_CORNER_COLS, xy);
+                X[0] = xy[0] * 0.0002745;
+                X[1] = xy[1] * 0.0002745;
+                X[2] = 0.0;
+                mv_cam_project(uv, &cam, X);
+                du = rr.uv[2 * i] - uv[0];
+                dv = rr.uv[2 * i + 1] - uv[1];
+                e2 = du * du + dv * dv;
+                se += e2;
+                if (e2 > 9.0)
+                    id_bad++;
+            }
+            CHECK(id_bad == 0, "pattern: every corner id correct");
+            CHECK(sqrt(se / rr.n) < 0.5,
+                  "pattern: localization RMS < 0.5 px");
+        }
+        CHECK(rr.counter_valid && rr.counter == 777777u,
+              "pattern: counter decodes exactly");
+    }
+}
+
 int main(void)
 {
     test_inv3();
@@ -354,6 +431,7 @@ int main(void)
     test_calib();
     test_radial();
     test_graycode();
+    test_pattern();
     if (failures) {
         printf("\n%d FAILURE(S)\n", failures);
         return 1;

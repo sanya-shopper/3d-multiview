@@ -1,6 +1,9 @@
 #ifndef MV_CAM_H
 #define MV_CAM_H
 
+/* Paper: doc/multiview.tex, section "Camera model" (geometry; the temporal model of "a camera is
+ * also a clock" is future state on this struct). */
+
 /* Calibrated pinhole camera with Brown radial-tangential distortion.
  * World-to-camera: Xc = R * X + t; camera center C = -R^T t. */
 

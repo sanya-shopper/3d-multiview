@@ -1,6 +1,8 @@
 #ifndef MV_TRIANGULATE_H
 #define MV_TRIANGULATE_H
 
+/* Paper: doc/multiview.tex, section "Triangulation" and "Scaling the rig" (N-view accuracy). */
+
 #include "mv/cam.h"
 
 /* N-view linear (DLT) triangulation. Observations are assumed undistorted

@@ -1,6 +1,9 @@
 #ifndef MV_CALIB_H
 #define MV_CALIB_H
 
+/* Paper: doc/multiview.tex, section "Calibration from planar targets": homography, Zhang
+ * constraints, radial alternation. */
+
 #include "mv/cam.h"
 
 /* Plane-based camera calibration (Zhang's method).

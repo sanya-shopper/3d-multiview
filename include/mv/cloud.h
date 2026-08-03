@@ -1,6 +1,8 @@
 #ifndef MV_CLOUD_H
 #define MV_CLOUD_H
 
+/* Paper: doc/multiview.tex, section "From depth to models" (point clouds, PLY export). */
+
 /* Growable 3D point cloud with optional per-point color, and an ASCII PLY
  * writer so results open directly in MeshLab / CloudCompare / Blender. */
 

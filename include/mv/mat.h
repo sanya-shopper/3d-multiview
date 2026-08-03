@@ -1,6 +1,8 @@
 #ifndef MV_MAT_H
 #define MV_MAT_H
 
+/* Paper: doc/multiview.tex, section "Mathematical toolkit" and "Numerical implementation notes". */
+
 /* Small dense linear algebra, sized for multiview geometry problems
  * (design matrices are at most a few hundred rows by <= 9 columns).
  * No external dependencies; all routines are deterministic. */

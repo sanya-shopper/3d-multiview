@@ -1,6 +1,8 @@
 #ifndef MV_RECTIFY_H
 #define MV_RECTIFY_H
 
+/* Paper: doc/multiview.tex, section "Rectification and dense stereo" (rectification half). */
+
 #include "mv/cam.h"
 
 /* Planar stereo rectification (compact algorithm of Fusiello, Trucco &

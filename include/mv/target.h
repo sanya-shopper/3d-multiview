@@ -1,6 +1,8 @@
 #ifndef MV_TARGET_H
 #define MV_TARGET_H
 
+/* Paper: doc/multiview.tex, section "The printed target". */
+
 /* Planar calibration targets.
  *
  * The standard printed target is a checkerboard on a letter/A4 page:

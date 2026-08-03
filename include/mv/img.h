@@ -1,6 +1,8 @@
 #ifndef MV_IMG_H
 #define MV_IMG_H
 
+/* Paper: doc/multiview.tex, section I/O periphery; consumed throughout the demos. */
+
 /* Minimal binary PGM (P5, 8-bit) image I/O — enough to feed the stereo
  * module from files produced by any common tool. */
 

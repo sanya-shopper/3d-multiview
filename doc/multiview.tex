@@ -2895,6 +2895,50 @@ signals overfitting just as surely as one above signals underfitting.
         statistics of \autoref{sec:statrules}.
 \end{itemize}
 
+%----------------------------------------------------------------------
+\section{Where to read: the code--paper map}
+\label{sec:codemap}
+
+Two conventions keep the code and this document navigable as one work.
+\emph{Code $\to$ paper}: every public header opens with a
+\code{Paper:} comment naming the section (by title, stable under
+renumbering) whose theory it implements. \emph{Paper $\to$ code}:
+\autoref{tab:codemap} maps each section to its implementation and to
+the test or experiment that validates it --- so to pick up any thread,
+read the section, open the module, run the validator.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l l l}
+\toprule
+Paper & Implementation & Validated by \\
+\midrule
+\autoref{sec:toolkit}, \autoref{sec:numerics} & \code{mv/mat.h}, \code{src/mat.c} & SVD/inverse tests \\
+\autoref{sec:camera} & \code{mv/cam.h}, \code{src/cam.c} & center/ray/projection tests \\
+\autoref{sec:timemodel} (clock model) & --- (planned state on \code{mv\_camera}) & \autoref{ex:skew} budgets \\
+\autoref{sec:homography}--\autoref{sec:radial} & \code{mv/calib.h}, \code{src/calib.c} & Zhang exactness tests; \code{demo\_calibrate} \\
+\autoref{sec:printed} & \code{mv/target.h}, \code{src/target.c} & calibration tests \\
+\autoref{sec:display} & \code{mv/graycode.h}, \code{src/graycode.c} & round-trip tests \\
+\autoref{sec:calibspec} (pattern, spec v1) & \code{mv/pattern.h}, \code{src/pattern.c} & M-array selftest; \code{demo\_patternsim} \\
+\autoref{sec:calibspec} (reader) & \code{mv/reader.h}, \code{src/reader.c} & blind-read test; \autoref{tab:patresults} \\
+\autoref{sec:calibspec} (validation tier) & \code{mv/render.h}, \code{src/render.c} & \code{demo\_patternsim} \\
+\autoref{sec:epipolar} & \code{mv/epipolar.h}, \code{src/epipolar.c} & F/8-point tests; \code{demo\_synthetic} \\
+\autoref{sec:triangulation}, \autoref{sec:scaling} & \code{mv/triangulate.h}, \code{src/triangulate.c} & exactness tests; \autoref{tab:diagtri} \\
+\autoref{sec:stereo} & \code{mv/rectify.h}, \code{mv/stereo.h} & row-alignment tests \\
+\autoref{sec:models} & \code{mv/cloud.h}, \code{mv/img.h} & PLY/PGM outputs of all demos \\
+\autoref{sec:results} diagnostics & \code{demo/diagnose.c} & the tripwires of \autoref{sec:statrules} \\
+\autoref{sec:scenarios} & \code{demo/track\_robot,insects,people}; \code{lightlog} & their ground-truth scoring \\
+\autoref{sec:statrules} T1 & \code{tests/test\_mv.c} (40 assertions) & \code{make check} \\
+\bottomrule
+\end{tabular}
+\caption{Code--paper cross-reference. Demos print exactly the numbers
+quoted in \autoref{sec:results}--\autoref{sec:scenarios}
+(\code{make demo}); every experiment is deterministic and seeded.}
+\label{tab:codemap}
+\end{table}
+
 \bibliographystyle{alpha}
 \bibliography{refs}
 

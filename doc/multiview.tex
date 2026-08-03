@@ -88,8 +88,16 @@ The implemented core (v0.2.0) provides:
   \item planar stereo rectification of the pair, and dense correspondence by
         block matching with sub-pixel refinement, giving per-pixel depth
         (\autoref{sec:stereo});
-  \item point-cloud assembly and PLY export for inspection in standard mesh
-        tools, plus minimal PGM image I/O (\autoref{sec:models}).
+  \item point-cloud assembly and PLY
+        export\footnote{PLY, the \emph{polygon file format} (also
+        ``Stanford triangle format''), is the de-facto interchange
+        format for point clouds and meshes. Its \emph{ASCII} variant is
+        plain text: a short human-readable header declaring the
+        elements and their properties, then one line per vertex ---
+        trivially writable from C99, diffable, and loadable by every
+        common mesh tool. See \autoref{sec:models} for a complete
+        example file.} for inspection in standard mesh tools, plus
+        minimal PGM image I/O (\autoref{sec:models}).
 \end{enumerate}
 
 Planned extensions --- structure-from-motion over an auxiliary photo
@@ -1127,8 +1135,28 @@ $\sigma_Z = 4.7^2\cdot 0.42/(800\cdot0.5) \approx 0.023$\,m: about
 
 Every depth estimate back-projects to a 3D point in the fixed world frame;
 points are accumulated in a growable cloud with optional per-point color and
-exported as ASCII PLY, directly loadable in MeshLab, CloudCompare or Blender
-for inspection. This section maps out what can be built \emph{on top} of
+exported as ASCII PLY --- the text variant of the polygon file format: a
+self-describing header followed by one line per vertex, directly loadable
+in MeshLab, CloudCompare or Blender. A complete two-point colored cloud,
+exactly as \code{mv\_cloud\_write\_ply} emits it:
+\begin{quote}\ttfamily\footnotesize
+ply\\
+format ascii 1.0\\
+element vertex 2\\
+property float x\\
+property float y\\
+property float z\\
+property uchar red\\
+property uchar green\\
+property uchar blue\\
+end\_header\\
+0.1 0.25 4.7 40 200 40\\
+0.12 0.25 4.71 220 50 50
+\end{quote}
+The header names each element type and its properties in order; every
+vertex line then lists those property values --- trivially writable from
+C99, diffable, and universally read. This section maps out what can be
+built \emph{on top} of
 that cloud: the representations worth targeting, how robust each is in the
 literature, and the background/foreground architecture the stationary rig
 makes natural.

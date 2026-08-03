@@ -4,8 +4,13 @@
 \usepackage{amsmath,amssymb,amsthm,mathtools}
 \usepackage{booktabs}
 \usepackage{tikz}
-\usetikzlibrary{positioning,fit}
-\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=green!40!black,urlcolor=blue!60!black]{hyperref}
+\usetikzlibrary{positioning,fit,calc}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=green!40!black,urlcolor=blue!60!black,pagebackref=true]{hyperref}
+% bibliography back-references: each entry lists (hyperlinked) the pages
+% where it is cited
+\renewcommand*{\backref}[1]{}
+\renewcommand*{\backrefalt}[4]{%
+  \ifcase #1 \or (cited on p.~#2)\else (cited on pp.~#2)\fi}
 
 \theoremstyle{definition}
 \newtheorem{example}{Example}
@@ -1695,10 +1700,71 @@ choice anyway.}
 \label{tab:plugins}
 \end{table}
 
-The current default stack, license-clean end to end: YOLOX (person) and
-YuNet or SCRFD (face) and SFace or user-fetched ArcFace (embedding), all
-as ONNX graphs behind ONNX Runtime; the Ultralytics row exists because
-its tooling is convenient for experiments --- inside its own fence.
+\autoref{tab:pluginquality} adds the published quality metrics needed to
+actually decide. Conventions: person detection is COCO mAP$_{50\text{--}95}$
+(small$\to$large model variants as a range); face detection is
+WIDER~FACE validation AP for the easy/medium/hard splits (hard is the
+discriminative one --- small, blurred, occluded faces, i.e.\ our
+at-range regime); embeddings are LFW verification \cite{Huang2007}
+(saturated; a sanity floor) and IJB-C TAR at FAR $=10^{-4}$
+\cite{Maze2018} (the honest unconstrained number). ``n/p'' = no
+comparable published figure.
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l c c c c}
+\toprule
+Solution & COCO mAP & WIDER e/m/h & LFW & IJB-C TAR@$10^{-4}$ \\
+\midrule
+darknet YOLOv3 / v4 & $33.0$ / $43.5$ & -- & -- & -- \\
+YOLOX (s$\to$x) \cite{Ge2021} & $40.5$--$51.1$ & -- & -- & -- \\
+Ultralytics v8/v11 (s$\to$x) & $44.9$--$54.7$ & -- & -- & -- \\
+OpenCV HOG & legacy$^{a}$ & -- & -- & -- \\
+OpenCV YuNet / SFace & -- & $\approx89/87/77$ & $99.60$ & n/p \\
+MediaPipe (BlazeFace/Pose) & n/p$^{b}$ & n/p$^{b}$ & -- & -- \\
+dlib / face\_recognition & -- & n/p & $99.38$ & n/p \\
+InsightFace SCRFD-10GF \cite{Guo2021} & -- & $\approx95/94/83$ & -- & -- \\
+InsightFace RetinaFace-R50 \cite{Deng2020} & -- & $\approx97/96/92$ & -- & -- \\
+InsightFace ArcFace-R100 \cite{Deng2019} & -- & -- & $99.83$ & $\approx96$--$97$ \\
+facenet-pytorch (MTCNN / FaceNet) & -- & $\approx85/82/61$ & $99.63$ & n/p \\
+\bottomrule
+\end{tabular}
+\caption{Published quality metrics, as reported by the respective
+authors and model zoos (values rounded; model-zoo figures marked
+$\approx$). $^{a}$Pre-CNN pedestrian detection; an order of magnitude
+behind modern detectors on all benchmarks, listed only as a
+zero-dependency fallback. $^{b}$Optimized for mobile near-range
+operation; not benchmarked in comparable terms.}
+\label{tab:pluginquality}
+\end{table}
+
+Reading the two tables together, the decision logic is: the
+license-clean default stack --- YOLOX (person), SCRFD or YuNet (face),
+SFace or user-fetched ArcFace (embedding), all as ONNX graphs behind
+ONNX Runtime --- concedes very little. On person detection YOLOX-m
+($46.9$) sits within a few mAP of the AGPL-fenced Ultralytics models,
+nowhere near a factor that survives our track-level temporal fusion. On
+face detection SCRFD trails RetinaFace-R50 mainly on the hard split
+($83$ vs $92$) --- relevant, since at-range faces \emph{are} the hard
+split, but the identity-camera design (\autoref{ex:facepixels}) moves
+recognition to the easy split at the chokepoint. On embeddings the gap
+that matters is SFace ($99.60$ LFW, no published IJB-C) vs ArcFace
+($99.83$ LFW, $\approx96$--$97$ IJB-C): for \emph{closed-set} household
+identification both are past the point of mattering; for \emph{open-set}
+stranger detection (\autoref{sec:openset}) the strongest available
+embedding is the one to fetch, which argues for ArcFace weights as the
+user-supplied artifact. MTCNN's $61$ on WIDER-hard is the reason it is
+not the default despite MIT-clean weights. One standing caveat, in the
+spirit of \autoref{sec:statrules}: all these numbers are measured on
+academic benchmarks at favorable resolutions --- they \emph{rank} the
+candidates but do not predict absolute in-system accuracy in our
+at-range regime, so the integrated sidecar gets its own acceptance test
+(recorded-oracle replays scored against identity-camera ground truth)
+before any number from this table is quoted as a system property. The
+Ultralytics row exists because its tooling is convenient for
+experiments --- inside its own fence.
 
 \subsection{Deployment architecture: hardware boundaries and communication}
 \label{sec:deployarch}
@@ -1780,6 +1846,95 @@ back. Nothing crosses the license boundary except data, every byte
 crossing it is recordable --- which is exactly what makes the sidecar
 replayable in tests (\autoref{sec:sidecar}) --- and the C99 core never
 links against anything but \code{libm}.
+
+\autoref{fig:machines} gives the complementary \emph{machine-centric}
+view: what software and persistent data each physical box holds, and
+every inter-machine data flow. Two locality rules are worth making
+explicit. First, \emph{scene and identity data rest only on the metric
+host}: the inference box holds model weights but stores no frames, no
+tracks, and no gallery --- faces cross to it only transiently for
+embedding, and the similarity decision is made back on the trusted host.
+Second, \emph{sensors and fixtures are stateless}: cameras, display, and
+plate hold nothing persistent, so replacing any of them is a hardware
+swap plus recalibration, never a data migration.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  mach/.style={draw, thick, rounded corners=3pt, align=left,
+               inner sep=5pt, fill=blue!3},
+  lbl/.style={font=\tiny\itshape},
+  arr/.style={->, thick}
+]
+  \node[mach, text width=29mm] (cams) at (0,0)
+    {\textbf{cameras ($\times3$)}\\
+     2 wide GS mono $+$ identity\\
+     sw: sensor firmware\\
+     data: none (stateless)};
+  \node[mach, text width=29mm] (mcu) at (0,-3.0)
+    {\textbf{trigger $\mu$C}\\
+     sw: trigger firmware\\
+     data: sync schedule};
+  \node[mach, text width=29mm] (disp) at (0,-5.7)
+    {\textbf{display $+$ plate}\\
+     sw: none (HDMI sink,\\
+     motor)\\
+     data: none (stateless)};
+  \node[mach, text width=42mm] (host) at (6.9,-1.7)
+    {\textbf{metric host} (fanless PC)\\
+     sw: \code{libmv} C99 core,\\
+     capture (v4l2/SDK), pattern\\
+     renderer, sidecar client,\\
+     report server\\
+     data: calibration, background\\
+     model, tracks $+$ event log,\\
+     PLY models, enrollment\\
+     gallery, oracle fixtures};
+  \node[mach, text width=38mm] (laptop) at (6.9,-6.1)
+    {\textbf{operator laptop}\\
+     sw: PLY viewer, reports\\
+     data: transient copies only};
+  \node[mach, text width=33mm] (infer) at (13.6,-0.8)
+    {\textbf{inference box}\\
+     (GPU/NPU; optional ---\\
+     else a process on host)\\
+     sw: ONNX Runtime $+$\\
+     YOLOX/SCRFD/ArcFace;\\
+     AGPL tools in container\\
+     data: model weights only\\
+     --- no scene data at rest};
+  \node[mach, text width=33mm] (nas) at (13.6,-5.0)
+    {\textbf{archive NAS} (opt.)\\
+     sw: none (storage)\\
+     data: PLY/report/log\\
+     archive; no raw video};
+
+  \draw[arr] (mcu.north) -- node[lbl, right] {trigger pulses} (cams.south);
+  \draw[arr] (mcu.south) -- node[lbl, right] {trigger (plate index)} (disp.north);
+  \draw[arr] (cams.east) -- node[lbl, above, sloped, pos=0.4]
+    {USB3: frames $+$ control} ($(host.west)+(0,0.9)$);
+  \draw[arr] ($(host.west)+(0,-0.4)$) -- node[lbl, above, sloped, pos=0.6]
+    {schedule (USB serial)} (mcu.east);
+  \draw[arr] ($(host.west)+(0,-1.3)$) -- node[lbl, below, sloped, pos=0.55]
+    {HDMI: pattern $+$ counter} (disp.east);
+  \draw[arr] ($(host.east)+(0,0.7)$) -- node[lbl, above, sloped]
+    {frames (shm / TCP)} ($(infer.west)+(0,-0.3)$);
+  \draw[arr] ($(infer.west)+(0,-1.1)$) -- node[lbl, below, sloped]
+    {CSV: boxes, lmk, embed} ($(host.east)+(0,-0.1)$);
+  \draw[arr] ($(host.east)+(0,-1.2)$) -- node[lbl, below, sloped, pos=0.45]
+    {nightly results sync} (nas.west);
+  \draw[arr] ($(host.south)+(-0.5,0)$) -- node[lbl, left]
+    {reports (read-only)} ($(laptop.north)+(-0.5,0)$);
+  \draw[arr] ($(laptop.north)+(0.7,0)$) -- node[lbl, right]
+    {enrollment photos} ($(host.south)+(0.7,0)$);
+\end{tikzpicture}
+\caption{Machine-centric deployment view: per-machine software and
+persistent data, and all inter-machine flows. Scene and identity data
+rest only on the metric host; the inference box is compute-only;
+sensors and fixtures are stateless.}
+\label{fig:machines}
+\end{figure}
 
 %----------------------------------------------------------------------
 \section{Roadmap}

@@ -1,6 +1,8 @@
 #ifndef MV_STEREO_H
 #define MV_STEREO_H
 
+/* Paper: doc/multiview.tex, section "Rectification and dense stereo" (block-matching half). */
+
 /* Dense correspondence on a *rectified* pair by block matching.
  * Local SAD cost, winner-take-all with sub-pixel parabolic refinement.
  *

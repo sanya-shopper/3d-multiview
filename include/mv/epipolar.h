@@ -1,6 +1,8 @@
 #ifndef MV_EPIPOLAR_H
 #define MV_EPIPOLAR_H
 
+/* Paper: doc/multiview.tex, section "Two-view epipolar geometry". */
+
 #include "mv/cam.h"
 
 /* Two-view epipolar geometry. All fundamental matrices returned by this

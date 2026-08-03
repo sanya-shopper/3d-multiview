@@ -1,6 +1,9 @@
 #ifndef MV_RENDER_H
 #define MV_RENDER_H
 
+/* Paper: doc/multiview.tex, section "The calibration subsystem" (validation tier: synthetic views
+ * for developing the reader against exact ground truth). */
+
 #include "mv/cam.h"
 
 /* Synthetic view rendering: project a planar source image (the calibration

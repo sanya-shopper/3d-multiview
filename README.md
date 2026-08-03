@@ -16,6 +16,11 @@ results, and bibliography — is in [`doc/multiview.tex`](doc/multiview.tex)
 (build with `make doc`, requires pdflatex + bibtex). A running log of
 development sessions is in [`CONVERSATION_LOG.md`](CONVERSATION_LOG.md).
 
+Code and paper cross-reference each other: every public header opens
+with a `Paper:` comment naming the section it implements, and the
+paper's final appendix ("Where to read: the code–paper map") maps each
+section to its module and its validating test or experiment.
+
 ## Layout
 
 - `include/mv/` — public headers (`mv/mv.h` is the umbrella); one header per module

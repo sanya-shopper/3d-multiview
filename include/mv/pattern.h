@@ -1,6 +1,9 @@
 #ifndef MV_PATTERN_H
 #define MV_PATTERN_H
 
+/* Paper: doc/multiview.tex, section "The calibration subsystem" (pattern spec v1, M-array
+ * construction). */
+
 /* Pattern spec v1 (doc section "The calibration subsystem"): the composite
  * calibration screen for a 1920x1080 reference display. The M-array is a
  * fixed constant (generated once by seeded search, verified: every 4x4

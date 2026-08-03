@@ -1,6 +1,8 @@
 #ifndef MV_GRAYCODE_H
 #define MV_GRAYCODE_H
 
+/* Paper: doc/multiview.tex, section "The display as an active target". */
+
 /* Active calibration target: a computer display we control shows a
  * synchronized sequence of binary Gray-code stripe patterns. Each camera
  * pixel that sees the display decodes, over time, the display coordinate it

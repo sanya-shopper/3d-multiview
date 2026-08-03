@@ -1,6 +1,9 @@
 #ifndef MV_READER_H
 #define MV_READER_H
 
+/* Paper: doc/multiview.tex, section "The calibration subsystem" (reader algorithms, record
+ * consumers). */
+
 /* Calibration pattern reader (spec v1, doc section "The calibration
  * subsystem"): consumes one camera frame, returns identified corners in
  * pattern coordinates, the decoded frame counter, and the fitted

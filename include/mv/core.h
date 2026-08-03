@@ -1,6 +1,8 @@
 #ifndef MV_CORE_H
 #define MV_CORE_H
 
+/* Paper: doc/multiview.tex, section Conventions and module layout: "System overview". */
+
 /* multiview — portable C99 multiview-geometry library.
  *
  * Conventions used throughout:

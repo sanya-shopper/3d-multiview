@@ -482,6 +482,17 @@ decodable alone. The design is layered:
         \emph{in time} (successive indices differ in one bit,
         cf.~\autoref{ex:gray}), providing the timestamp for the orbit
         model;
+  \item a \emph{temporal-calibration layer}: the counter timestamps are
+        quantized to the display refresh, so a few dedicated
+        \emph{phase patches} toggle black/white every display frame ---
+        a camera whose exposure straddles a toggle records an
+        intermediate gray level whose value is the sub-refresh phase of
+        its shutter (and, as a by-product, its true exposure duration).
+        Counter $+$ phase samples give every camera a stream of
+        display-clock timestamps, from which each camera's clock
+        \emph{offset and rate} are fit --- the display is not only the
+        geometric reference but the rig's common clock
+        (\autoref{sec:softsync});
   \item \emph{multi-scale structure} (a coarse grid nested with a fine
         one), since one display serves cameras at different distances and
         obliquities; strokes must span ${\ge}3$--$4$ pixels in the worst
@@ -2018,6 +2029,88 @@ upgrade. The trigger also permits phase-locking exposure against mains
 flicker and locking capture to the display's frame counter
 (\autoref{sec:rotating}).
 \end{example}
+
+\subsection{Software synchronization: measuring and correcting the clocks}
+\label{sec:softsync}
+
+When no trigger line exists (the consumer tier), frames from independent,
+possibly heterogeneous cameras are never simultaneous: free-running
+30\,fps streams differ by up to half a frame period ($|\Delta t|$
+averaging $\sim$8\,ms), and consumer crystals drift 50--100\,ppm, so the
+offset slides several milliseconds per minute --- it must be
+\emph{tracked}, not calibrated once. Since \autoref{ex:sync} showed the
+cost lands entirely on movers (static structure is indifferent to
+$\Delta t$), the right treatment is not to chase alignment but to make
+time part of the measurement model. Three layers:
+
+\paragraph{Bound.} Pair frames nearest-neighbor in time rather than by
+index: free, and caps $|\Delta t|$ at half a period under any drift.
+
+\paragraph{Measure.} Model each camera's clock as offset $+$ skew
+against a common reference and estimate both continuously, two
+independent ways. (i) \emph{The dynamic display pattern}
+(\autoref{sec:rotating}): the Gray-coded counter gives frame-level
+display timestamps; the phase patches refine them below the refresh
+period; a linear fit of (camera frame index, decoded display time) pairs
+per camera yields its offset and rate --- see the precision budget in
+\autoref{ex:skew}. (ii) \emph{Movers themselves}: a tracked point moving
+across the epipolar field sits off its epipolar line by (image velocity
+$\perp$ line)$\,\times\Delta t$; with $\F$ known exactly, $\Delta t$ is a
+one-parameter fit to residuals already computed --- the $\F$-drift
+monitor of \autoref{sec:epipolar} with one extra parameter, usable at
+run time when no display is present. (A $\mu$C-driven blinking LED in a
+frame corner is the minimal permanent clock beacon if continuous
+display-free measurement is wanted.) A deliberate small rate offset on
+one camera ($\sim$0.1\,Hz) makes the phases \emph{beat}, sweeping
+$\Delta t$ through zero every $\sim$10\,s: the ``golden pairs'' at each
+null (aligned to $\sim$50\,$\mu$s) are free validation samples for the
+estimator.
+
+\paragraph{Correct.} Give every measurement its own timestamp and
+interpolate \emph{tracked detections} (not images) onto the common
+clock before triangulating; the residual is second-order
+(\autoref{ex:interp}). Dense stereo needs no correction at all --- the
+dense content is the static background; movers travel the tracked
+path, which is exactly the path that interpolates. The principled limit
+for fast movers is trajectory triangulation: fit a short motion model to
+$K$ timestamped rays rather than intersecting two rays at a fictitious
+common instant --- and the same per-measurement-timestamp machinery is
+what rolling-shutter correction (\autoref{sec:shutter}) consumes, so
+building it once serves both. Self-verification in the
+\autoref{sec:statrules} style: the slope of epipolar residual vs image
+speed must equal the fitted $\Delta t$, and golden pairs must show none.
+
+\begin{example}[clock-fit precision from the display]
+\label{ex:skew}
+Display timestamps are quantized to the refresh period
+($16.7$\,ms at 60\,Hz), i.e.\ per-sample noise
+$\sigma_q=16.7/\sqrt{12}\approx4.8$\,ms. One minute at 30\,fps gives
+$N=1800$ samples: offset precision $\sigma_q/\sqrt N\approx0.11$\,ms,
+and rate precision
+$\sigma_q\sqrt{12/N}/T\approx7$\,ppm over the $T=60$\,s span ---
+comfortably resolving 50--100\,ppm crystals in one minute, before the
+phase patches sharpen $\sigma_q$ further.
+\end{example}
+
+\begin{example}[interpolation makes sync second-order]
+\label{ex:interp}
+A walker at $1$\,m/s with a full half-frame mismatch
+($\Delta t=16.7$\,ms) uncorrected: phantom depth error
+$\approx150$\,mm by \autoref{ex:sync}. Linearly interpolating the
+tracked detection between frames leaves only the curvature term
+$a\,\Delta t^2/8$: at $a=2$\,m/s$^2$,
+$2\cdot0.0167^2/8\approx70\,\mu$m --- a factor of $\sim$2000. If
+$\Delta t$ itself is known to $\pm1$\,ms (\autoref{ex:skew}), the
+residual first-order term is $\sim$1\,mm at $1$\,m/s: software
+synchronization turns the dominant dynamic-scene error into a minor one.
+\end{example}
+
+The verdict, stated as a rule: on the consumer tier, synchronization
+mismatch is quantified and corrected, never assumed away --- one more
+instance of this appendix's theme that a \emph{modeled} defect becomes a
+term of the estimator rather than a bias. The trigger tier
+(\autoref{sec:trigger}) remains the clean answer where the hardware
+allows it.
 
 \subsection{Interface: UVC vs machine-vision stacks}
 \label{sec:uvc}

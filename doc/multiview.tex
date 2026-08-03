@@ -34,7 +34,7 @@
 \title{\textsc{multiview}: A Portable C99 System for Two-Camera\\
 Scene Analysis and 3D Model Extraction\\[4pt]
 \large A self-contained overview of the system and its mathematics}
-\author{Project documentation --- v0.2.0}
+\author{Project documentation --- v0.3.0}
 \date{August 2, 2026}
 
 \begin{document}
@@ -128,6 +128,9 @@ Module & Header & Responsibility \\
 \code{target}      & \code{mv/target.h}      & printed checkerboard model + printable rendering \\
 \code{graycode}    & \code{mv/graycode.h}    & display-based active target (Gray-code patterns) \\
 \code{calib}       & \code{mv/calib.h}       & homographies; Zhang calibration; radial estimate \\
+\code{pattern}     & \code{mv/pattern.h}     & spec-v1 calibration screen, shipped M-array \\
+\code{render}      & \code{mv/render.h}      & synthetic camera views of the display plane \\
+\code{reader}      & \code{mv/reader.h}      & blind pattern decoding: corners, ids, counter \\
 \code{epipolar}    & \code{mv/epipolar.h}    & $\F$ from calibration; normalized 8-point; $\E$ \\
 \code{triangulate} & \code{mv/triangulate.h} & $N$-view DLT triangulation, reprojection RMS \\
 \code{rectify}     & \code{mv/rectify.h}     & Fusiello rectification, disparity$\to$depth \\
@@ -668,7 +671,12 @@ This subsection is the \emph{specification} that
 contract against which the two calibration programs are written --- the
 \emph{display app} (renders the signal) and the \emph{reader module}
 (consumes camera frames, emits records). Rationale lives in the sections
-cited; nothing here introduces a new idea.
+cited; nothing here introduces a new idea. Implementation status: the
+pattern generator (\code{mv/pattern.h}), a synthetic renderer
+(\code{mv/render.h}), and the blind reader (\code{mv/reader.h}) are
+built and validated end-to-end in simulation
+(\autoref{sec:results}); the display app proper, orbit fit, and clock
+fit remain.
 
 \paragraph{Screen layout (\autoref{fig:layout}).} One composite layout
 serves all single-shot work. Regions, sized by the rules already
@@ -717,16 +725,18 @@ $\approx4.9$\,h.}
 \paragraph{M-array construction.} One bit per grid square
 ($19\times10=190$ bits): a black center dot on white squares, a white
 dot on black squares, so every square carries a bit and no dot
-approaches a saddle corner ($\ge28$\,px clearance). The array is found
-once by seeded exhaustive random search and shipped as a constant table
-in \code{libmv}, with the verified properties: every $3\times3$ window
-is unique; no window equals any \emph{rotation} of any window
-(including itself); and any two windows, under any relative rotation,
-differ in $\ge2$ bits. The rotation clause is what resolves the
-checkerboard's 4-fold orientation ambiguity: any single decoded window
-fixes the global orientation, after which corner ids are assigned in
-the pattern frame. ($2^9=512$ codes for $\sim$190 windows $\times$
-4 rotations leaves enough slack; the search is cheap and deterministic.)
+approaches a saddle corner ($\ge28$\,px clearance). The window size
+must be $4\times4$: with $3\times3$ windows the $136$ windows
+$\times\,4$ rotations demand $544$ distinct 9-bit codes and only $512$
+exist --- pigeonhole forbids it. At $4\times4$, the $112$ windows
+$\times\,4$ rotations need $448$ of $2^{16}$ codes, ample slack. The
+array is found once by seeded search with greedy repair (seed 20260803,
+solved in 30 steps) and shipped as a constant table in \code{libmv}
+(\code{src/pattern.c}), with the exhaustively verified properties: all
+$448$ rotated window codes are pairwise distinct with Hamming distance
+$\ge2$. The rotation clause is what resolves the checkerboard's 4-fold
+orientation ambiguity: any single decoded window fixes the global
+orientation, after which corner ids are assigned in the pattern frame.
 
 \paragraph{Reader algorithms.} Fixed choices, so two implementations
 decode identically:
@@ -743,7 +753,7 @@ predicting each next corner through the local homography and accepting
 within $0.3$ cell.
 \emph{Decoding} --- sample mark presence at cell centers through the
 local homography against the local black/white references; look up each
-$3\times3$ window (and its rotations) in the shipped table; majority
+$4\times4$ window (and its rotations) in the shipped table; majority
 vote fixes position and orientation.
 \emph{Counter/patches} --- sample cell and patch centers the same way;
 counter valid iff markers and both parity cells check; its
@@ -1577,6 +1587,48 @@ large --- the identifiability effect discussed in \autoref{sec:radial}. A
 Levenberg--Marquardt refinement stage is the roadmap item that tightens all
 of these numbers.
 
+\paragraph{The calibration pattern pipeline
+(\code{demo/patternsim.c}).} The first \emph{image-tier} experiment:
+the spec-v1 screen (\autoref{sec:calibspec}) is rendered at metric
+scale, imaged by the standard camera under seven poses (tilts to
+$30^\circ$, one with the camera rolled $180^\circ$; bilinear resampling
+plus 2 gray levels of sensor noise), and decoded \emph{blind} by the
+reader --- no pose prior, no ground-truth assistance.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lr}
+\toprule
+Quantity & Value \\
+\midrule
+corners identified (7 poses)      & $1134/1134$ \\
+corner misidentifications         & $0$ \\
+orientation under $180^\circ$ roll & recovered \\
+frame counter decoded             & $7/7$ frames \\
+saddle localization RMS           & $0.25$--$0.35$ px \\
+Zhang through the pipeline: $f_x$, $f_y$ error & $+3.5$, $+3.1$ px \\
+principal point error             & $0.3$, $1.4$ px \\
+reprojection RMS                  & $0.314$ px \\
+\bottomrule
+\end{tabular}
+\caption{Pattern-pipeline experiment, seed 99 (reproduce with
+\code{make demo}).}
+\label{tab:patresults}
+\end{table}
+
+Two readings. First, the measured saddle-detector noise
+($0.25$--$0.35$\,px per corner, part systematic rendering/template
+aliasing, part sensor noise) is the first \emph{empirical} $\sigma$ for
+the error laws --- at the upper edge of the $0.1$--$0.3$\,px assumed in
+\autoref{sec:resolution}, and the reprojection RMS of the through-pipeline
+calibration ($0.314$\,px) matches it via the
+$\sqrt2\,\sigma_c\sqrt{1-p/n}$ rule of \autoref{sec:rms}, so the whole
+chain --- renderer, detector, decoder, estimator --- is again
+noise-floor-limited rather than implementation-limited. Second, the
+M-array machinery works as specified: zero misidentifications in
+$1134$ corners across strong obliquity and a fully rolled camera is the
+property the rotation-unique window design was bought for.
+
 \paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
 disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the
 monitored volume for 20\,s at $0.3$\,m/s with random turns, on a floor
@@ -2342,13 +2394,13 @@ sensors and fixtures are stateless.}
 \section{Roadmap}
 \label{sec:roadmap}
 
-In dependency order: (1) saddle-point checkerboard corner detection with
-sub-pixel refinement, closing the printed-target path end-to-end
-(the display path of \autoref{sec:display} is already
-detector-free); (2) the calibration subsystem to the contract of
-\autoref{sec:calibspec}: the display app (modes M0--M3), the reader
-module (record schema of \autoref{tab:records}), and the joint
-orbit $+$ clock fit; (3) Levenberg--Marquardt refinement
+In dependency order: (1) \emph{[done]} saddle-point corner detection
+with sub-pixel refinement (\code{mv/reader.h}, validated in
+\autoref{tab:patresults}); (2) \emph{[partially done]} the calibration
+subsystem to the contract of \autoref{sec:calibspec}: pattern generator,
+synthetic renderer, and blind reader are implemented and sim-validated;
+remaining are the display app (modes M0--M3), the record-emitting
+wrapper (\autoref{tab:records}), and the joint orbit $+$ clock fit; (3) Levenberg--Marquardt refinement
 of calibration (and later bundle adjustment \cite{Triggs2000}); (4) feature
 detection/description and robust matching (enables live correspondences,
 RANSAC-gated by \autoref{sec:epipolar}); (5) image warping by the

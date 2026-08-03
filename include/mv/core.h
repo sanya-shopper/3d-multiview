@@ -10,7 +10,7 @@
  *  - world-to-camera transform: Xc = R * X + t
  */
 
-#define MV_VERSION "0.2.0"
+#define MV_VERSION "0.3.0"
 
 enum { MV_OK = 0, MV_ERR = -1 };
 

@@ -18,3 +18,5 @@ demo_insects
 demo_lightlog
 demo_people
 doc/*.brf
+demo_patternsim
+out_patternsim.pgm

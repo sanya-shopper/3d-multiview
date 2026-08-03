@@ -1249,7 +1249,85 @@ higher (possibly unequal) resolutions --- so that hardware decisions can be
 made from the error laws instead of intuition. The library is already
 shaped for this: \code{mv\_triangulate} accepts any $N\ge2$, and every
 camera carries its own $\K$, so heterogeneous rigs need no new code paths in
-the sparse pipeline.
+the sparse pipeline. \autoref{fig:rigs} shows the four camera-positioning
+scenarios this section analyzes, with each camera's viewing frustum drawn
+to the rig's actual field of view ($2\arctan(320/800)\approx44^\circ$
+horizontally for the reference cameras).
+
+% frustum wedge: x, y, direction deg, half-fov deg, range
+\newcommand{\camw}[5]{%
+  \fill[blue!30, fill opacity=0.35]
+    (#1,#2) -- ++({#3-#4}:#5) arc ({#3-#4}:{#3+#4}:#5) -- cycle;
+  \fill[black] (#1,#2) circle (1.6pt);}
+
+\begin{figure}[ht]
+\centering
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  \camw{0}{0}{90}{22}{3.3}
+  \camw{0.28}{0}{96}{22}{3.3}
+  \draw[dashed] (-0.55,2.03) rectangle (0.55,3.19);
+  \node at (0,2.6) {\tiny working volume};
+  \draw[<->] (0,-0.16) -- (0.28,-0.16);
+  \node[below, yshift=-1pt] at (0.14,-0.16) {$B=0.5$\,m};
+\end{tikzpicture}\\[2pt]
+(a) reference pair (\autoref{sec:capabilities}): $6^\circ$ convergence,
+overlap covers the volume
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  \camw{0}{0}{90}{22}{2.6}
+  \camw{0.21}{0}{90}{22}{2.6}
+  \camw{0.42}{0}{90}{22}{2.6}
+  \camw{0.63}{0}{90}{22}{2.6}
+  \draw[<->] (0,-0.16) -- (0.63,-0.16);
+  \node[below, yshift=-1pt] at (0.32,-0.16) {$(N{-}1)B = 1.5$\,m};
+  \node at (0.32,2.9)
+    {widest pair sets $\sigma_Z \propto 1/((N{-}1)B)$};
+\end{tikzpicture}\\[2pt]
+(b) collinear multi-baseline array (\autoref{sec:ncams},
+\autoref{ex:ncams}): short pairs match, wide pair measures
+\end{minipage}\\[10pt]
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  % C-shaped object (gap faces 0 degrees) centered at (0,1.9)
+  \draw[line width=2.2mm, black!70] (0,1.9) ++(35:0.42)
+    arc (35:325:0.42);
+  \camw{-1.64}{0.95}{30}{22}{2.4}
+  \camw{-0.65}{0.11}{70}{22}{2.4}
+  \camw{0.65}{0.11}{110}{22}{2.4}
+  \camw{1.64}{0.95}{150}{22}{2.4}
+  \camw{1.9}{1.9}{180}{22}{2.4}
+  \draw[dashed, red!70!black, thick] (1.9,1.9) -- (-0.1,1.9);
+  \node[red!70!black, anchor=west] at (0.7,2.42)
+    {\tiny sightline threads the opening};
+\end{tikzpicture}\\[2pt]
+(c) coverage ring for occlusion and topology (\autoref{sec:occlusion}):
+spread beats baseline; one camera must see through the handle
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  \camw{0}{0}{90}{22}{2.9}
+  \camw{0.3}{0}{90}{22}{2.9}
+  \camw{1.6}{0}{119}{6}{2.9}
+  \draw[line width=1.2mm] (0.0,2.6) -- (0.3,2.6);
+  \node[above] at (0.15,2.63) {door};
+  \node[below] at (1.85,-0.06) {identity cam};
+  \node[below] at (0.0,-0.06) {metric pair};
+\end{tikzpicture}\\[2pt]
+(d) heterogeneous rig (\autoref{sec:heterogeneous},
+\autoref{sec:openset}): wide pair for geometry, narrow frustum for
+face pixels at the chokepoint
+\end{minipage}
+\caption{Camera-positioning scenarios, top-down, frustums drawn as
+viewing wedges (range truncated for the page; the real frusta extend
+with distance). Overlap density shows where triangulation is possible.}
+\label{fig:rigs}
+\end{figure}
 
 \subsection{$N$ cameras: accuracy}
 \label{sec:ncams}

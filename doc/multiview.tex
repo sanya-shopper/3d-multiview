@@ -469,6 +469,9 @@ binary because adjacent stripes differ in exactly one bit: a threshold error
 at a stripe boundary displaces the decoded coordinate by at most one pixel
 instead of, e.g., $2^{b}$.
 
+This static sweep is operating mode M1 of the calibration subsystem
+(\autoref{sec:calibspec}).
+
 \begin{example}[Gray code by hand]
 \label{ex:gray}
 Encode $v=6$: binary $110$; Gray $=110\oplus011=101$. Decode $g=101$ by
@@ -545,7 +548,8 @@ alternating coarse/fine emphasis) --- pose variation is already supplied by
 the rotation. At low $\omega$ the screen moves ${<}1$ pixel between
 consecutive frames, so pattern-plus-inverse in consecutive frames remains
 usable and restores the per-pixel contrast robustness of
-\autoref{sec:display}.
+\autoref{sec:display}. The concrete arrangement of all layers on screen
+is specified once, in \autoref{fig:layout} (\autoref{sec:calibspec}).
 
 \begin{example}[motion-blur budget]
 \label{ex:blur}
@@ -644,7 +648,142 @@ yields $(\K,\R,\tv,k)$ from the corner grid and
 $(\phi,T,\tau,t_e)$ from the temporal layers --- the display is the
 rig's ruler and its metronome. Run-time maintenance of the clock model
 without the display (movers, LED beacon, golden pairs) is the practice
-material of \autoref{sec:softsync}.
+material of \autoref{sec:softsync}; the concrete screen layout, operating
+modes, and data contract are concentrated in \autoref{sec:calibspec}.
+
+\subsection{The calibration subsystem: layout, modes, and data contract}
+\label{sec:calibspec}
+
+This subsection is the \emph{specification} that
+\autoref{sec:homography}--\autoref{sec:tempcalib} justify: the single
+contract against which the two calibration programs are written --- the
+\emph{display app} (renders the signal) and the \emph{reader module}
+(consumes camera frames, emits records). Rationale lives in the sections
+cited; nothing here introduces a new idea.
+
+\paragraph{Screen layout (\autoref{fig:layout}).} One composite layout
+serves all single-shot work. Regions, sized by the rules already
+derived: white quiet border; a \emph{version block} (static Gray-coded
+integer) naming the pattern-spec revision, so a reader never parses a
+layout it was not built for; the \emph{frame-counter strip}
+(\autoref{sec:rotating}), Gray-coded, changing every display frame;
+$\lceil T_d/t_e\rceil$ \emph{phase patches} with staggered toggle phases
+(\autoref{sec:tempcalib}); the central \emph{saddle grid} with M-array
+identity marks in the squares (\autoref{sec:rotating}), strokes
+$\ge3$--$4$\,px in the worst camera at the worst usable obliquity
+(\autoref{sec:resolution}); and one \emph{nested fine grid} region for
+near/high-resolution cameras (\autoref{sec:rotating}, multi-scale).
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[x=9mm, y=9mm, font=\scriptsize]
+  % display outline and quiet border
+  \draw[very thick] (0,0) rectangle (12,6.75);
+  \draw[thin] (0.4,0.4) rectangle (11.6,6.35);
+  % version block
+  \fill[black!75] (0.6,5.6) rectangle (1.8,6.15);
+  \node[anchor=west, font=\tiny] at (0.5,6.55) {version block (static Gray code)};
+  % phase patches
+  \fill[black!45] (10.9,5.6) rectangle (11.45,6.15);
+  \fill[black!45] (0.6,2.9) rectangle (1.15,3.45);
+  \fill[black!45] (10.9,2.9) rectangle (11.45,3.45);
+  \fill[black!45] (5.7,5.75) rectangle (6.25,6.3);
+  \node[anchor=east, font=\tiny] at (11.5,6.55) {phase patches $\times\lceil T_d/t_e\rceil$, staggered};
+  % counter strip
+  \foreach \i in {0,...,21} {
+    \pgfmathtruncatemacro{\flag}{(mod(\i,3)==0 || mod(\i,7)==0) ? 1 : 0}
+    \ifnum\flag>0
+      \fill[black] (0.6+\i*0.5,0.55) rectangle (1.1+\i*0.5,1.0);
+    \else
+      \draw[thin] (0.6+\i*0.5,0.55) rectangle (1.1+\i*0.5,1.0);
+    \fi
+  }
+  \node[anchor=west, font=\tiny] at (0.5,0.25) {frame-counter strip (Gray, changes every display frame)};
+  % saddle grid
+  \foreach \r in {0,...,3} \foreach \c in {0,...,7} {
+    \pgfmathtruncatemacro{\flag}{mod(\r+\c,2)}
+    \ifnum\flag=0
+      \fill[black!85] (2.0+\c,1.5+\r) rectangle (3.0+\c,2.5+\r);
+    \fi
+  }
+  % m-array marks centered in white squares
+  \foreach \x/\y in {3.5/2.0, 5.5/2.0, 4.5/3.0, 8.5/3.0, 7.5/4.0, 6.5/5.0} {
+    \fill[black!85] (\x-0.14,\y-0.14) rectangle (\x+0.14,\y+0.14);
+  }
+  \node[font=\tiny] at (6,1.2) {saddle grid $+$ M-array marks (static)};
+  % nested fine grid (top band, clear of the coarse grid)
+  \foreach \r in {0,...,3} \foreach \c in {0,...,3} {
+    \pgfmathtruncatemacro{\flag}{mod(\r+\c,2)}
+    \ifnum\flag=0
+      \fill[black!85] (2.6+\c*0.18,5.55+\r*0.18) rectangle (2.78+\c*0.18,5.73+\r*0.18);
+    \fi
+  }
+  \draw[thin] (2.6,5.55) rectangle (3.32,6.27);
+  \node[anchor=west, font=\tiny] at (3.45,5.9) {nested fine grid};
+\end{tikzpicture}
+\caption{Composite screen layout (mode M2; schematic, not to scale).
+Geometric layers are static; only the counter strip and phase patches
+change per display frame.}
+\label{fig:layout}
+\end{figure}
+
+\paragraph{Display-app modes.} The app is a mode machine; a calibration
+session is a scripted sequence of modes.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\begin{tabular}{l l l l l}
+\toprule
+Mode & Screen shows & Plate & Calibrates & Rationale \\
+\midrule
+M0 & flat gray ladder (0--100\%) & any & radiometric transfer, flat field & \autoref{sec:blend} \\
+M1 & Gray-code stripe sweep $+$ inverses & parked & dense correspondences $\to$ $\K$, pose & \autoref{sec:display} \\
+M2 & composite layout (\autoref{fig:layout}) & $\omega$ const. & $\K,\R,\tv,k$; orbit; $\phi,T$ & \autoref{sec:rotating}, \autoref{sec:tempcalib} \\
+M3 & full-screen toggle at $T_d$ & parked & $\tau$ (banding), $t_e$ & \autoref{ex:banding} \\
+\bottomrule
+\end{tabular}
+\caption{Display-app operating modes.}
+\label{tab:modes}
+\end{table}
+
+\paragraph{Reader output: the record schema.} The reader consumes raw
+frames per camera and emits ASCII records, one per line --- the same
+recordable/replayable oracle pattern as the inference sidecar
+(\autoref{sec:sidecar}); recorded sessions are the test fixtures.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\begin{tabular}{l l l l}
+\toprule
+Record & Fields & Emitted & Consumed by \\
+\midrule
+\code{VER} & spec version, display px, pitch mm, $T_d$ & session start & reader/estimator config check \\
+\code{FRM} & cam, frame $k$, arrival time & every frame & bookkeeping, drift diagnostics \\
+\code{CTR} & cam, $k$, counter value, confidence & when strip decodes & clock fit ($\phi$, $T$); orbit phase \\
+\code{PHS} & cam, $k$, patch id, gray level & straddled patches & clock fit (fine $\phi$); $t_e$ \\
+\code{CRN} & cam, $k$, corner id, $u$, $v$ & per detected corner & homographies $\to$ Zhang, orbit fit \\
+\code{BND} & cam, $k$, band pitch, direction & mode M3 & row time $\tau$ \\
+\bottomrule
+\end{tabular}
+\caption{Calibration record schema (all ASCII, one record per line).}
+\label{tab:records}
+\end{table}
+
+\paragraph{Session choreography and acceptance.} A session is:
+M0 ladder $\to$ M3 ($\sim$30 frames) $\to$ M2 for $N$ revolutions
+($\to$ M1 per camera only if the plate can park facing it); then the
+estimator chain runs: per-camera Zhang on obliquity-gated M2 frames
+$\to$ joint orbit fit $\to$ clock fit $\to$ radial alternation. The
+session is \emph{accepted} only if the standing statistics land in
+their bands (\autoref{sec:statrules}): reprojection T5 ratio within its
+documented band; clock-fit residuals within the \autoref{ex:skew}
+budget; banding-derived $\tau$ consistent across repeats; and the
+resulting analytic $\F$ stored as the baseline for the run-time drift
+monitor (\autoref{sec:epipolar}). Roadmap items 1--2
+(\autoref{sec:roadmap}) are precisely the implementation of this
+subsection.
 
 %----------------------------------------------------------------------
 \section{Two-view epipolar geometry}
@@ -2063,9 +2202,10 @@ sensors and fixtures are stateless.}
 In dependency order: (1) saddle-point checkerboard corner detection with
 sub-pixel refinement, closing the printed-target path end-to-end
 (the display path of \autoref{sec:display} is already
-detector-free); (2) the rotating-display fixture of \autoref{sec:rotating}:
-single-shot self-identifying pattern generation (M-array $+$ Gray-coded
-frame counter) and the joint orbit fit; (3) Levenberg--Marquardt refinement
+detector-free); (2) the calibration subsystem to the contract of
+\autoref{sec:calibspec}: the display app (modes M0--M3), the reader
+module (record schema of \autoref{tab:records}), and the joint
+orbit $+$ clock fit; (3) Levenberg--Marquardt refinement
 of calibration (and later bundle adjustment \cite{Triggs2000}); (4) feature
 detection/description and robust matching (enables live correspondences,
 RANSAC-gated by \autoref{sec:epipolar}); (5) image warping by the
@@ -2162,9 +2302,10 @@ index: free, and caps $|\Delta t|$ at half a period under any drift.
 against a common reference and estimate both continuously, two
 independent ways. (i) \emph{The dynamic display pattern}
 (\autoref{sec:rotating}): the Gray-coded counter gives frame-level
-display timestamps; the phase patches refine them below the refresh
-period; a linear fit of (camera frame index, decoded display time) pairs
-per camera yields its offset and rate --- see the precision budget in
+display timestamps (record \code{CTR} of \autoref{tab:records}); the
+phase patches refine them below the refresh period (\code{PHS}); a
+linear fit of (camera frame index, decoded display time) pairs per
+camera yields its offset and rate --- see the precision budget in
 \autoref{ex:skew}. (ii) \emph{Movers themselves}: a tracked point moving
 across the epipolar field sits off its epipolar line by (image velocity
 $\perp$ line)$\,\times\Delta t$; with $\F$ known exactly, $\Delta t$ is a

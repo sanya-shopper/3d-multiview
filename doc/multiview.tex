@@ -603,11 +603,20 @@ of the signal:
         frame. A camera exposure of length $t_e$ that straddles a toggle
         integrates part old, part new value: the recorded gray level
         $g\in(0,1)$ \emph{is} the toggle's position inside the exposure,
-        refining the timestamp below $T_d$. Coverage is a design
-        parameter: one patch straddles with probability $t_e/T_d$ per
-        frame, so $\lceil T_d/t_e\rceil$ patches with staggered toggle
-        phases (e.g.\ 4 patches for $t_e=5$\,ms at $T_d=16.7$\,ms)
-        guarantee at least one straddle in \emph{every} frame.
+        refining the timestamp below $T_d$. A display cannot stagger
+        toggles \emph{within} a refresh --- every change lands on the
+        vsync --- but the panel's own \emph{scanout} staggers them for
+        free: rows are updated top-to-bottom across the refresh, so a
+        patch at row $y$ toggles at
+        $\text{vsync}+ (y/H)\,T_d$. Patches at several vertical
+        positions therefore sample several sub-refresh phases (panel
+        response time smears the edge; it is itself calibratable from
+        the $g$ statistics). Each patch straddles with probability
+        $t_e/T_d$ per frame; full coverage is not needed --- the
+        camera--display beat sweeps the phase, and a one-minute fit
+        collects hundreds of straddle samples. One additional patch
+        toggling at half rate disambiguates exposures longer than
+        $T_d$.
   \item \emph{Period $T$:} no extra signal needed --- a linear fit of
         decoded display time against camera frame index over seconds
         (\autoref{ex:skew}); the inevitable beat between camera and
@@ -667,12 +676,83 @@ derived: white quiet border; a \emph{version block} (static Gray-coded
 integer) naming the pattern-spec revision, so a reader never parses a
 layout it was not built for; the \emph{frame-counter strip}
 (\autoref{sec:rotating}), Gray-coded, changing every display frame;
-$\lceil T_d/t_e\rceil$ \emph{phase patches} with staggered toggle phases
-(\autoref{sec:tempcalib}); the central \emph{saddle grid} with M-array
-identity marks in the squares (\autoref{sec:rotating}), strokes
-$\ge3$--$4$\,px in the worst camera at the worst usable obliquity
-(\autoref{sec:resolution}); and one \emph{nested fine grid} region for
-near/high-resolution cameras (\autoref{sec:rotating}, multi-scale).
+\emph{phase patches} at several vertical positions (sub-refresh stagger
+via scanout, \autoref{sec:tempcalib}); the central \emph{saddle grid}
+with M-array identity marks in the squares (\autoref{sec:rotating}),
+strokes $\ge3$--$4$\,px in the worst camera at the worst usable
+obliquity (\autoref{sec:resolution}); and one \emph{nested fine grid}
+region for near/high-resolution cameras (\autoref{sec:rotating},
+multi-scale).
+
+\paragraph{Pattern specification v1 (reference display
+$1920\times1080$).} All coordinates in display pixels, origin top-left;
+the metric scale is the panel pixel pitch from the session manifest.
+Scaling to another resolution scales all entries proportionally, and
+bumps the version.
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l l l}
+\toprule
+Region & Geometry (px) & Content \\
+\midrule
+quiet border & 32 all around & white \\
+version block & origin (32,32), 10 cells of $48\times48$ & marker $[1,0]$ $+$ 8 Gray bits, static \\
+nested fine grid & origin (560,32), $3\times3$ cells of 40 & plain checkerboard \\
+phase patches P1--P4 & $96\times96$ at (912,32), (1792,32), (32,472), (1792,472) & toggle every frame; scanout phases \\
+phase patch P5 & $96\times96$ at (32,860) & toggles every 2nd frame \\
+saddle grid & origin (192,160), $19\times10$ cells of 80 & checkerboard $+$ mark dots \\
+M-array marks & $24\times24$ dot at each cell center & bit $=$ dot present (contrast-inverted) \\
+corner lattice & $18\times9=162$ corners & id $= 18j+i$, origin nearest version block \\
+counter strip & origin (192,984), 24 cells of $64\times64$ & $[1,0]$ $+$ 20 Gray bits $+$ parity, $\overline{\text{parity}}$ \\
+\bottomrule
+\end{tabular}
+\caption{Pattern spec v1. A 20-bit counter at 60\,Hz wraps in
+$\approx4.9$\,h.}
+\label{tab:patternspec}
+\end{table}
+
+\paragraph{M-array construction.} One bit per grid square
+($19\times10=190$ bits): a black center dot on white squares, a white
+dot on black squares, so every square carries a bit and no dot
+approaches a saddle corner ($\ge28$\,px clearance). The array is found
+once by seeded exhaustive random search and shipped as a constant table
+in \code{libmv}, with the verified properties: every $3\times3$ window
+is unique; no window equals any \emph{rotation} of any window
+(including itself); and any two windows, under any relative rotation,
+differ in $\ge2$ bits. The rotation clause is what resolves the
+checkerboard's 4-fold orientation ambiguity: any single decoded window
+fixes the global orientation, after which corner ids are assigned in
+the pattern frame. ($2^9=512$ codes for $\sim$190 windows $\times$
+4 rotations leaves enough slack; the search is cheap and deterministic.)
+
+\paragraph{Reader algorithms.} Fixed choices, so two implementations
+decode identically:
+\emph{binarization} --- local mean over a $31\times31$ box (integral
+image) with $\pm$hysteresis; black/white radiometric references taken
+per region from the quiet border and the nearest grid cells.
+\emph{Saddle detection} --- correlation with a 4-phase saddle template
+bank ($r=5$\,px), candidates by non-maximum suppression, sub-pixel by
+2D quadratic fit on the $3\times3$ response neighborhood (the same
+parabola rule as the stereo matcher).
+\emph{Grid assembly} --- seed at the strongest saddle, estimate a local
+homography from its four lattice neighbors, grow breadth-first,
+predicting each next corner through the local homography and accepting
+within $0.3$ cell.
+\emph{Decoding} --- sample mark presence at cell centers through the
+local homography against the local black/white references; look up each
+$3\times3$ window (and its rotations) in the shipped table; majority
+vote fixes position and orientation.
+\emph{Counter/patches} --- sample cell and patch centers the same way;
+counter valid iff markers and both parity cells check; its
+\code{conf} field is the minimum sampling margin
+$\min_i |g_i - \tfrac12| \cdot 2 \in [0,1]$. \code{PHS} records are
+emitted only for $0.15<g<0.85$ (certain straddle).
+\emph{Banding} (mode M3) --- column-median intensity profile per frame;
+transition rows at gradient maxima; \code{BND} pitch $=$ median
+inter-transition spacing.
 
 \begin{figure}[ht]
 \centering
@@ -688,7 +768,7 @@ near/high-resolution cameras (\autoref{sec:rotating}, multi-scale).
   \fill[black!45] (0.6,2.9) rectangle (1.15,3.45);
   \fill[black!45] (10.9,2.9) rectangle (11.45,3.45);
   \fill[black!45] (5.7,5.75) rectangle (6.25,6.3);
-  \node[anchor=east, font=\tiny] at (11.5,6.55) {phase patches $\times\lceil T_d/t_e\rceil$, staggered};
+  \node[anchor=east, font=\tiny] at (11.5,6.55) {phase patches (scanout-staggered $+$ one half-rate)};
   % counter strip
   \foreach \i in {0,...,21} {
     \pgfmathtruncatemacro{\flag}{(mod(\i,3)==0 || mod(\i,7)==0) ? 1 : 0}
@@ -737,7 +817,7 @@ session is a scripted sequence of modes.
 \toprule
 Mode & Screen shows & Plate & Calibrates & Rationale \\
 \midrule
-M0 & flat gray ladder (0--100\%) & any & radiometric transfer, flat field & \autoref{sec:blend} \\
+M0 & flat gray ladder (0--100\%) & any & radiometric transfer, flat field & \autoref{sec:radiometry} \\
 M1 & Gray-code stripe sweep $+$ inverses & parked & dense correspondences $\to$ $\K$, pose & \autoref{sec:display} \\
 M2 & composite layout (\autoref{fig:layout}) & $\omega$ const. & $\K,\R,\tv,k$; orbit; $\phi,T$ & \autoref{sec:rotating}, \autoref{sec:tempcalib} \\
 M3 & full-screen toggle at $T_d$ & parked & $\tau$ (banding), $t_e$ & \autoref{ex:banding} \\
@@ -765,11 +845,74 @@ Record & Fields & Emitted & Consumed by \\
 \code{PHS} & cam, $k$, patch id, gray level & straddled patches & clock fit (fine $\phi$); $t_e$ \\
 \code{CRN} & cam, $k$, corner id, $u$, $v$ & per detected corner & homographies $\to$ Zhang, orbit fit \\
 \code{BND} & cam, $k$, band pitch, direction & mode M3 & row time $\tau$ \\
+\code{DSP} & display frame $k$, host time & display app, per frame & clock cross-check \\
 \bottomrule
 \end{tabular}
 \caption{Calibration record schema (all ASCII, one record per line).}
 \label{tab:records}
 \end{table}
+
+Field-level grammar: whitespace-separated \code{key=value} after the
+record tag; times are seconds as decimal doubles on the host
+\code{CLOCK\_MONOTONIC}; image coordinates are \emph{raw distorted}
+pixels (undistortion is the estimators' job); corner \code{id} is the
+pattern-frame lattice index of \autoref{tab:patternspec}. Example
+lines:
+\begin{quote}\ttfamily\footnotesize
+VER spec=1 w=1920 h=1080 pitch\_mm=0.2745 Td\_ms=16.667\\
+FRM cam=0 k=1234 t=5182.30412\\
+CTR cam=0 k=1234 count=48213 conf=0.94\\
+PHS cam=0 k=1234 patch=2 g=0.371\\
+CRN cam=0 k=1234 id=57 u=812.431 v=402.117\\
+BND cam=0 k=87 pitch=289.3 dir=down\\
+DSP k=309882 t=5182.29561
+\end{quote}
+
+\paragraph{Session manifest and capture interface.} Each session
+directory holds a manifest (\code{key=value} text): rig id; per camera
+--- id, serial, driver, nominal fps, lens focal; display --- resolution,
+pixel pitch, $T_d$; plate --- nominal $\omega$, cant angle; all RNG
+seeds. The capture layer, shared verbatim with the inference sidecar
+(\autoref{sec:sidecar}), is a three-call C contract:
+\code{open(device)}, blocking \code{get(frame)}, \code{close()}, where a
+frame is 8-bit mono pixels $+$ width/height/stride $+$ camera id $+$
+driver sequence number $+$ arrival time (\code{CLOCK\_MONOTONIC} at
+driver dequeue --- the timestamp whose limitations
+\autoref{sec:softsync} exists to overcome). Recorded streams are PGM
+sequences plus an index of \code{FRM} lines; a recorded session replays
+bit-identically through reader and estimators.
+
+\paragraph{Estimator definitions.} \emph{Orbit fit}: unknowns are the
+plate axis (unit vector, 2 dof), a point on the axis (2 dof), $\omega$,
+phase $\phi_0$, the fixed display-to-plate mount (6 dof), and each
+camera's pose (6 dof each); the display pose at time $t$ is the mount
+composed with rotation about the axis by $\omega t+\phi_0$, and the
+cost is total corner reprojection error over all cameras and gated
+frames, Huber-robustified at $1$\,px. Initialization: per-frame Zhang
+extrinsics (\autoref{sec:zhang}) give a display-center trajectory per
+camera; its plane normal initializes the axis, its circle fit
+(\autoref{sec:occupancy}'s known machinery) the center, and the
+\code{CTR} timeline $\omega,\phi_0$. \emph{Clock fit}: per camera,
+Theil--Sen (deterministic median-of-slopes) on
+(\code{CTR.count}$\cdot T_d$) vs frame index rejects counter
+misdecodes, a 3-MAD gate then admits samples to least squares for
+$(\phi_i, T_i)$, and \code{PHS} straddle samples jointly refine
+$\phi_i$ and $t_e$ against the scanout-phase model of
+\autoref{sec:tempcalib}. Acceptance bands for both are the
+\autoref{sec:statrules} machinery evaluated at the rig's \emph{measured}
+noise (\autoref{sec:radiometry}), not at the synthetic
+$\sigma=0.3$\,px.
+
+\paragraph{Display-app guarantees.} Fullscreen exclusive; compositor
+scaling disabled and verified optically (a single-pixel checker in the
+quiet border must alias to gray in any camera --- if it resolves, the
+path is not 1:1); all emitted values pure 0 or 255 (gamma-immune);
+counter incremented in the vsync callback, and after a missed vsync
+advanced by the number of elapsed refreshes; the app logs its own
+\code{DSP} record per displayed frame as the display-side ground truth.
+The pattern generator itself lives in \code{libmv} (emitting frames the
+app only blits), so every layer of \autoref{tab:patternspec} is
+unit-testable against the reader without a display.
 
 \paragraph{Session choreography and acceptance.} A session is:
 M0 ladder $\to$ M3 ($\sim$30 frames) $\to$ M2 for $N$ revolutions
@@ -2364,6 +2507,44 @@ instance of this appendix's theme that a \emph{modeled} defect becomes a
 term of the estimator rather than a bias. The trigger tier
 (\autoref{sec:trigger}) remains the clean answer where the hardware
 allows it.
+
+\subsection{Radiometric and noise measurement procedures}
+\label{sec:radiometry}
+
+The cameras are the rig's own best measuring instruments; these four
+procedures, run once per rig (modes M0/flat scenes,
+\autoref{tab:modes}), produce the numbers everything else consumes.
+
+\begin{enumerate}
+  \item \emph{Photon-transfer curve} $\to$ the noise scale $\sigma$.
+        Capture repeated frames of a static scene at several exposure
+        levels; per-pixel temporal variance vs mean is linear with slope
+        $1/\text{gain}$ (e$^-$/DN) and intercept the read-noise floor.
+        The resulting intensity noise, propagated through the matcher,
+        is the rig's \emph{measured} $\sigma$ --- the number that
+        re-scales every acceptance band of \autoref{sec:statrules}
+        (which this document evaluates at the synthetic $0.3$\,px).
+  \item \emph{Flicker audit.} High-rate (or exposure-phase-swept)
+        capture of a blank wall; the FFT of mean intensity at
+        $2f_{\text{mains}}$ (100/120\,Hz) gives the modulation depth.
+        Rule: keep it below $\sim$1--2\%, or set
+        $t_e = n/(2f_{\text{mains}})$, which nulls it exactly.
+  \item \emph{Inter-camera radiometric transfer.} A gray card (or the
+        display's M0 ladder) viewed by both cameras; the joint
+        histogram gives the gain/offset map between them. Flat and
+        linear clears plain SAD matching; visible curvature is the
+        signal to switch the matcher to a rank/census cost.
+  \item \emph{Flat-field / vignetting.} The display showing uniform
+        gray (M0), imaged defocused; the per-pixel gain map is stored
+        and divides all subsequent frames; it also supplies the local
+        white references the reader's decoding rules assume
+        (\autoref{sec:calibspec}).
+\end{enumerate}
+
+A cheap lux meter anchors the ladder in absolute units so results
+transfer between sites; the display's off-axis brightness falloff ---
+measured for free as the plate sweeps (\autoref{sec:rotating}) ---
+completes the radiometric picture of the fixture itself.
 
 \subsection{Interface: UVC vs machine-vision stacks}
 \label{sec:uvc}

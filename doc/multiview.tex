@@ -2046,6 +2046,121 @@ appearance, and cross-checks from their disagreement --- the
 $N$-camera analysis of \autoref{sec:scaling} applies unchanged, since
 every camera carries its own $\K$, distortion, and noise model.
 
+%----------------------------------------------------------------------
+\section{Root-mean-square (RMS) error: definition and use}
+\label{sec:rms}
+
+Nearly every quantitative claim in this document is an RMS figure. This
+appendix defines it, explains why it is the right summary here, and maps
+every way the document uses it.
+
+\subsection{Definition}
+For scalar errors $e_1,\dots,e_N$,
+\begin{equation}
+\mathrm{RMS} \;=\; \sqrt{\tfrac1N\textstyle\sum_{i=1}^N e_i^2},
+\label{eq:rmsdef}
+\end{equation}
+the square root of the mean of the squares. For vector errors (a 2D
+reprojection offset, a 3D position error) the same formula is applied to
+the \emph{norms}: $\mathrm{RMS}=\sqrt{\frac1N\sum\|\vect e_i\|^2}$,
+which is also $\sqrt{\sum_k \mathrm{RMS}_k^2}$ over the components ---
+components add \emph{in quadrature}.
+
+\begin{example}[RMS vs mean vs max]
+\label{ex:rmsbasic}
+Errors $\{1,2,2,5\}$: mean $=2.5$; RMS
+$=\sqrt{(1+4+4+25)/4}=\sqrt{8.5}\approx2.92$; max $=5$. RMS always lies
+between mean and max, weighting large errors more than the mean does
+(squaring makes the $5$ contribute $25/34$ of the total). This document
+reports RMS as the headline and max separately when tails matter
+(e.g.\ \autoref{tab:trackresults}).
+\end{example}
+
+\subsection{Why squares}
+Three reasons, in increasing depth. (i) \emph{Calculus}: squared error is
+smooth, so least-squares problems have closed forms --- every estimator in
+this system (\autoref{ex:nullvec} onward) minimizes a sum of squares, and
+RMS is exactly the quantity those estimators optimize, expressed per
+sample. (ii) \emph{Probability}: for zero-mean Gaussian noise the RMS of
+the errors converges to the distribution's $\sigma$; reporting RMS is
+reporting the fitted noise scale, directly comparable to the injected
+$\sigma$ in every experiment. Least squares \emph{is} maximum likelihood
+under Gaussian noise, closing the loop. (iii) \emph{Composition}:
+independent error sources add in quadrature,
+$\sigma_{\text{tot}}^2=\sum_j\sigma_j^2$ --- the working rule behind the
+two-coordinate pixel distance, the two-camera angular noise
+\eqref{eq:hetero}, and the disparity noise $\sigma_d=\sqrt2\,\sigma$ used
+throughout.
+
+\begin{example}[quadrature]
+\label{ex:rmsquad}
+Per-coordinate pixel noise $\sigma=0.3$\,px: the Euclidean reprojection
+\emph{distance} has RMS $\sqrt{0.3^2+0.3^2}=0.424$\,px --- the baseline
+against which the residuals of \autoref{sec:statrules} are judged.
+Disparity, a difference of two independent $0.3$\,px coordinates,
+likewise has $\sigma_d=\sqrt2\cdot0.3\approx0.42$\,px
+(\autoref{ex:deptherr}).
+\end{example}
+
+\subsection{Bias, variance, and what RMS cannot tell you}
+RMS mixes systematic and random error:
+\begin{equation}
+\mathrm{RMS}^2 \;=\; \underbrace{\bar e^{\,2}}_{\text{bias}^2}
+\;+\; \underbrace{\tfrac1N\sum (e_i-\bar e)^2}_{\text{variance}} .
+\label{eq:biasvar}
+\end{equation}
+
+\begin{example}[decomposition]
+\label{ex:rmsbias}
+A constant bias of $3$ plus zero-mean noise of standard deviation $4$
+gives $\mathrm{RMS}=\sqrt{3^2+4^2}=5$. Two very different failure modes,
+one number. This is precisely why the diagnostics of \autoref{sec:budget}
+never rely on a single RMS: the $\sigma$-sweep separates the terms ---
+variance scales with $\sigma$, bias does not --- and the $\sigma=0$ run
+isolates bias exactly.
+\end{example}
+
+\subsection{Statistical handling}
+Two facts about RMS as an \emph{estimate}, both load-bearing in
+\autoref{sec:statrules}. First, a sample RMS over $N$ Gaussian errors
+fluctuates with relative standard deviation $\approx1/\sqrt{2N}$
+($\chi^2$ with $N$ degrees of freedom): with $N=250$ that is $4.5\%$,
+which sets the $\pm3/\sqrt{2N}$ null bands of the T2/T5 tripwires.
+Second, residuals of a least-squares fit are \emph{smaller} than the
+noise, because the fit absorbs $p$ degrees of freedom:
+$\mathrm{RMS}_{\text{resid}}=\sigma\sqrt{1-p/n}$ for $p$ parameters and
+$n$ residual coordinates. Triangulation ($p=3$, $n=4$) leaves
+$\sigma\sqrt{1/4}\cdot\sqrt2=\sigma/\sqrt2$ per-view distance ---
+$0.212$\,px at $\sigma=0.3$, matching the measured $0.218$
+(\autoref{tab:results}); calibration ($p=42$, $n=756$) should leave
+$0.412$\,px, and the measured $0.484$ is the fired T5 flag of
+\autoref{sec:statrules}. An RMS \emph{below} the corrected prediction
+signals overfitting just as surely as one above signals underfitting.
+
+\subsection{Where this document uses RMS}
+\begin{itemize}
+  \item \emph{Reprojection RMS} (px): residual image distance after
+        triangulation or calibration --- the fitted noise scale;
+        compare to $\sqrt2\,\sigma\sqrt{1-p/n}$
+        (\autoref{tab:results}, \autoref{tab:calibresults}).
+  \item \emph{3D / position RMS} (m or mm): Euclidean reconstruction or
+        tracking error against ground truth; components reported
+        separately when anisotropy matters (depth vs lateral,
+        \autoref{tab:diagtrack}).
+  \item \emph{Timing RMS} (s or min): event and sunrise timing in the
+        scenario studies (\autoref{sec:scenarios}); same formula, time
+        errors instead of distances.
+  \item \emph{Jitter RMS about an offset}: variance-only RMS after
+        removing a known constant (the sunrise estimator's offset,
+        \autoref{sec:lightscen}) --- i.e.\ the second term of
+        \eqref{eq:biasvar} alone, used deliberately when the bias is
+        understood and harmless.
+  \item \emph{Predicted RMS}: the error laws \eqref{eq:deptherr},
+        \eqref{eq:hetero} are statements about the RMS of infinite
+        repetitions; measured-over-predicted ratios are the consistency
+        statistics of \autoref{sec:statrules}.
+\end{itemize}
+
 \bibliographystyle{alpha}
 \bibliography{refs}
 

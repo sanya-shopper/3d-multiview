@@ -303,10 +303,10 @@ producing epipolar residual and phantom depth in exactly the way
 quantified in \autoref{ex:sync}. Simultaneity, like zero distortion, is
 thus an idealization to be \emph{calibrated}: the clock parameters of
 \eqref{eq:clock} are estimable state, not assumptions --- the display
-fixture measures them directly (its dynamic layers,
-\autoref{sec:rotating}) and moving scene content re-estimates them at
-run time, with the measurement and correction practice developed in
-\autoref{sec:softsync}. When all cameras share a hardware trigger,
+fixture measures them directly through a dedicated temporal calibration
+signal (\autoref{sec:tempcalib}) and moving scene content re-estimates
+them at run time, with the measurement and correction practice developed
+in \autoref{sec:softsync}. When all cameras share a hardware trigger,
 $\phi$, $T$ collapse to common values and the temporal model disappears
 back into the geometric one --- the trigger is, in this language, a way
 of buying \eqref{eq:clock} exactly rather than estimating it.
@@ -575,6 +575,76 @@ per-frame homographies from the self-identifying grid; per-camera Zhang
 intrinsics from the gated set; joint orbit fit for all extrinsics $+$
 axis $+$ $\omega$ $+$ phase --- the natural first customer for the planned
 Levenberg--Marquardt stage.
+
+\subsection{Temporal calibration: the display as a clock signal}
+\label{sec:tempcalib}
+
+Geometric calibration shows the cameras a known \emph{spatial} structure;
+the temporal camera model \eqref{eq:clock} is calibrated the same way,
+by showing a known \emph{temporal} structure --- and the requirements
+mirror \autoref{sec:display} exactly: the signal must be
+\emph{unambiguous} (coded, not periodic-only, or time aliases the way an
+uncoded stripe pattern aliases in space), \emph{fine} (containing
+transitions faster than the precision sought), and \emph{covering}
+(transitions must actually land inside camera exposures often enough to
+be sampled). Each clock parameter of \eqref{eq:clock} gets its own layer
+of the signal:
+
+\begin{itemize}
+  \item \emph{Offset $\phi$, coarse:} the Gray-coded frame counter
+        (\autoref{sec:rotating}) --- an absolute, self-delimiting time
+        word, readable in any single frame, quantized to the display
+        refresh $T_d$.
+  \item \emph{Offset $\phi$, fine:} phase patches toggling every display
+        frame. A camera exposure of length $t_e$ that straddles a toggle
+        integrates part old, part new value: the recorded gray level
+        $g\in(0,1)$ \emph{is} the toggle's position inside the exposure,
+        refining the timestamp below $T_d$. Coverage is a design
+        parameter: one patch straddles with probability $t_e/T_d$ per
+        frame, so $\lceil T_d/t_e\rceil$ patches with staggered toggle
+        phases (e.g.\ 4 patches for $t_e=5$\,ms at $T_d=16.7$\,ms)
+        guarantee at least one straddle in \emph{every} frame.
+  \item \emph{Period $T$:} no extra signal needed --- a linear fit of
+        decoded display time against camera frame index over seconds
+        (\autoref{ex:skew}); the inevitable beat between camera and
+        display rates is a \emph{feature}, sweeping the sampling phase
+        through the display cycle so all phases get observed without any
+        genlock.
+  \item \emph{Row time $\tau$ (rolling shutter):} a full-screen toggle
+        turns the rolling readout into its own measuring instrument ---
+        rows exposed before the toggle record one value, rows after it
+        the other, so the captured frame shows horizontal \emph{bands}
+        whose pitch is the number of rows read per display period:
+        $\tau = T_d / (\text{rows per band cycle})$, plus the readout
+        direction for free.
+  \item \emph{Exposure $t_e$:} recovered jointly with the fine phase ---
+        the fraction of frames whose patches straddle, and the
+        distribution of recorded gray levels, both depend on $t_e$ alone
+        once $\phi, T$ are known.
+\end{itemize}
+
+\begin{example}[row time from banding]
+\label{ex:banding}
+A rolling-shutter camera photographs the display running a full-screen
+toggle at $T_d=16.7$\,ms (bright/dark half-periods of $8.33$\,ms). The
+captured frame shows bands $289$ rows tall. Then
+$\tau = 8.33\,\text{ms}/289 \approx 28.8\,\mu$s per row --- and the full
+$1080$-row readout takes $1080\cdot28.8\,\mu\text{s}\approx31$\,ms,
+nearly the whole $33$\,ms frame period, which is typical: rolling
+sensors read continuously. One captured frame of a blinking screen
+measures the parameter that \autoref{ex:rolling} showed corrupting the
+moving-target calibration --- and once $\tau$ is known, every row's
+timestamp is known, turning the rolling-shutter \emph{bias} into just
+more timestamped measurements per \autoref{sec:timemodel}.
+\end{example}
+
+The same session that calibrates geometry therefore calibrates every
+clock parameter: one revolution of the fixture, read by all cameras,
+yields $(\K,\R,\tv,k)$ from the corner grid and
+$(\phi,T,\tau,t_e)$ from the temporal layers --- the display is the
+rig's ruler and its metronome. Run-time maintenance of the clock model
+without the display (movers, LED beacon, golden pairs) is the practice
+material of \autoref{sec:softsync}.
 
 %----------------------------------------------------------------------
 \section{Two-view epipolar geometry}

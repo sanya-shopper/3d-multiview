@@ -272,6 +272,45 @@ $\R\Cv+\tv=(0\!\cdot\!0+0\!\cdot\!0-1\!\cdot\!3,\,0,\,0\!\cdot\!3)+(3,0,0)
 must.
 \end{example}
 
+\subsection{The temporal dimension: a camera is also a clock}
+\label{sec:timemodel}
+
+Equations \eqref{eq:pinhole}--\eqref{eq:distortion} describe \emph{where}
+a camera maps a world point; a complete model must also say \emph{when}.
+Each camera runs on its own oscillator, so frame $k$ (and, for a
+rolling-shutter sensor, row $r$ within it) is captured at the world time
+\begin{equation}
+t_i(k, r) \;=\; \phi_i \;+\; k\,T_i \;+\; r\,\tau_i \;+\; \tfrac12 t_e,
+\label{eq:clock}
+\end{equation}
+where $\phi_i$ is the camera's clock offset, $T_i$ its true frame period
+(consumer crystals deviate from nominal by 50--100\,ppm, so $T_i$ differs
+per camera and $\phi_i$ drifts), $\tau_i$ the row-readout time (zero for
+global shutter), and $t_e$ the exposure whose midpoint is the effective
+sampling instant. The full camera state is therefore
+$(\K,\R,\tv,\,k_{1..5};\;\phi,T,\tau,t_e)$ --- geometry \emph{and}
+clock --- and a measurement is not a pixel but a \emph{timestamped}
+pixel: a ray with a time attached.
+
+The multi-view machinery of
+\autoref{sec:epipolar}--\autoref{sec:stereo} silently assumes
+simultaneity: the epipolar constraint \eqref{eq:epiconstraint} and the
+triangulation stack \eqref{eq:dlt} relate observations \emph{of the same
+world state}. For static scenes the assumption is vacuous; for a point
+moving at velocity $\vect v$, a timestamp mismatch $\Delta t$ between the
+paired observations displaces one of them by $\vect v\,\Delta t$ ---
+producing epipolar residual and phantom depth in exactly the way
+quantified in \autoref{ex:sync}. Simultaneity, like zero distortion, is
+thus an idealization to be \emph{calibrated}: the clock parameters of
+\eqref{eq:clock} are estimable state, not assumptions --- the display
+fixture measures them directly (its dynamic layers,
+\autoref{sec:rotating}) and moving scene content re-estimates them at
+run time, with the measurement and correction practice developed in
+\autoref{sec:softsync}. When all cameras share a hardware trigger,
+$\phi$, $T$ collapse to common values and the temporal model disappears
+back into the geometric one --- the trigger is, in this language, a way
+of buying \eqref{eq:clock} exactly rather than estimating it.
+
 %----------------------------------------------------------------------
 \section{Calibration from planar targets}
 \label{sec:calib}
@@ -2033,7 +2072,10 @@ flicker and locking capture to the display's frame counter
 \subsection{Software synchronization: measuring and correcting the clocks}
 \label{sec:softsync}
 
-When no trigger line exists (the consumer tier), frames from independent,
+This subsection is the practice counterpart of the temporal camera model
+\eqref{eq:clock} of \autoref{sec:timemodel}: how the clock parameters
+$(\phi_i, T_i)$ are actually measured and their effect corrected. When no
+trigger line exists (the consumer tier), frames from independent,
 possibly heterogeneous cameras are never simultaneous: free-running
 30\,fps streams differ by up to half a frame period ($|\Delta t|$
 averaging $\sim$8\,ms), and consumer crystals drift 50--100\,ppm, so the

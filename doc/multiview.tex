@@ -2703,32 +2703,95 @@ sensors and fixtures are stateless.}
 \section{Roadmap}
 \label{sec:roadmap}
 
-\sloppy In dependency order: (1) \emph{[done]} saddle-point corner detection
-with sub-pixel refinement (\code{mv/reader.h}, validated in
-\autoref{tab:patresults}); (2) \emph{[partially done]} the calibration
-subsystem to the contract of \autoref{sec:calibspec}: pattern generator,
-synthetic renderer, and blind reader are implemented and sim-validated;
-remaining are the display app (modes M0--M3), the record-emitting
-wrapper (\autoref{tab:records}; the reader does not yet check the
-version block or sample the phase patches), and the joint
-orbit $+$ clock fit; (3) Levenberg--Marquardt refinement
-of calibration (and later bundle adjustment \cite{Triggs2000}); (4) feature
-detection/description and robust matching (enables live correspondences,
-RANSAC-gated by \autoref{sec:epipolar}); (5) image warping by the
-rectifying homographies with bilinear resampling, closing the dense video
-path end-to-end; (6) temporal cloud statistics for static/moving
-segmentation (\autoref{sec:models}); (7) photo-collection registration
-(\autoref{sec:photos}); (8) Hartley--Sturm optimal triangulation;
-(9) \emph{[done at sim tier]} meshing by the TSDF route of
-\autoref{sec:tsdf}: \code{mv/tsdf.h} implements the enriched-sample
-fold and marching-tetrahedra extraction, validated in
-\autoref{tab:tsdfresults}; remaining are the dense-depth producer
-(item 5) and the voxel-major fast path; (10) the detector/identity
-sidecar of \autoref{sec:faces} (ONNX Runtime seam, recorded-oracle
-replay tests); and, if the hardware materializes, the optional
-range-finder integration of \autoref{sec:range}. Each step lands
-as a new module behind the same conventions (\autoref{tab:modules}) with
-its own noiseless-exact tests and a synthetic experiment extending
+Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
+(why it fits this system now); statuses reflect v0.4.0.
+
+\begin{enumerate}
+  \item \textbf{Saddle-point corner detection} --- \emph{done}
+        (\code{mv/reader.h}, \autoref{tab:patresults}). Sub-pixel
+        template detection, validated blind through the rendered
+        pipeline at $0.25$--$0.35$\,px.
+  \item \textbf{Calibration subsystem completion} ---
+        \emph{partially done}. Remaining: the display app (modes
+        M0--M3), the record-emitting wrapper of \autoref{tab:records}
+        (the reader does not yet check the version block or sample the
+        phase patches), and the joint orbit $+$ clock fits.
+        \emph{Pitch}: this turns the fixture design into a push-button
+        session --- one revolution in, geometry and clocks out --- and
+        every missing piece already has its spec (\autoref{sec:calibspec})
+        and its acceptance statistic waiting; nothing needs inventing,
+        only building.
+  \item \textbf{Levenberg--Marquardt refinement} (later: bundle
+        adjustment \cite{Triggs2000}). Joint nonlinear minimization of
+        reprojection error over intrinsics, poses, and distortion.
+        \emph{Pitch}: the single most attractive item on the list ---
+        the fired T5 flag of \autoref{sec:statrules} is a
+        \emph{pre-registered acceptance test} (the residual ratio must
+        fall from $1.17$ to $1.00\pm0.03$, else the implementation is
+        wrong); it tightens every calibration number in
+        \autoref{sec:results}, and the same LM core serves the orbit
+        fit, the clock fit, and eventually bundle adjustment.
+  \item \textbf{Feature detection and robust matching}. General interest
+        points with descriptors, matched under the RANSAC gate of
+        \autoref{sec:epipolar}. \emph{Pitch}: unlocks everything
+        ``live'' --- the $\F$-drift and $\Delta t$ monitors get real
+        correspondences to chew on, and movers become trackable from
+        images rather than simulated detections.
+  \item \textbf{Rectification warping and the dense path}. Bilinear
+        image resampling through the precomputed homographies of
+        \autoref{sec:stereo}, connecting real frames to the existing
+        block matcher. \emph{Pitch}: the last missing link between
+        camera and depth map --- it closes the pipeline of
+        \autoref{sec:overview} end-to-end and is the named missing
+        input of the TSDF (item 9); the bilinear machinery already
+        exists in \code{mv/render.h}.
+  \item \textbf{Temporal statistics and the background model}.
+        Per-pixel median depth over time, fused into a background TSDF
+        (\autoref{sec:background}); movers by disagreement.
+        \emph{Pitch}: mostly \emph{composition} of parts that now exist
+        --- and it delivers the headline products at once: a furniture-level
+        mesh of the room and the unified mover-separation front end that
+        the scenario trackers (\autoref{sec:scenarios}) currently
+        simulate.
+  \item \textbf{Photo-collection registration}
+        (\autoref{sec:photos}). Resection of auxiliary photos against
+        triangulated structure; $N$-view DLT already accepts the extra
+        views. \emph{Pitch}: coverage where the rig cannot see
+        (the topology argument of \autoref{sec:occlusion}) --- and its
+        dynamic limit is the tracked mobile camera with measured poses,
+        the self-tracking extension of \autoref{sec:capabilities}.
+  \item \textbf{Optimal and weighted estimators}. Hartley--Sturm
+        triangulation \cite{HartleySturm1997}, Mahalanobis-weighted
+        model fits, weighted DLT (\autoref{sec:heterogeneous}).
+        \emph{Pitch}: retires the \emph{documented} estimator floors ---
+        the circle-fit anisotropy of \autoref{tab:diagtrack} and the
+        equal-weight DLT --- each with its regression already measured,
+        so improvement is provable, not aspirational.
+  \item \textbf{TSDF completion} --- \emph{done at sim tier}
+        (\code{mv/tsdf.h}, \autoref{tab:tsdfresults}). Remaining: the
+        dense-depth producer (item 5), the voxel-major fast path, and
+        then RANSAC plane/primitive extraction on the background model.
+        \emph{Pitch}: every remaining piece rides on item 5 or 6;
+        primitives (\autoref{sec:ladder}) then give the furniture-level
+        scene description almost for free.
+  \item \textbf{The identity sidecar} (\autoref{sec:faces}). Person and
+        face detection behind the ONNX Runtime seam, replayed oracles as
+        fixtures. \emph{Pitch}: the contract is fully specified down to
+        the license table and quality metrics
+        (\autoref{tab:plugins}--\autoref{tab:pluginquality}); it
+        upgrades occupancy from height-cohort identification to named
+        persons at the door chokepoint, with its acceptance test
+        (\autoref{sec:openset}) already defined.
+\end{enumerate}
+
+If the hardware materializes, the optional range-finder integration of
+\autoref{sec:range} slots in without redesign. A suggested near-term
+order: item 3 first (its acceptance test is pre-registered and it
+uplifts everything already built), then 2 (completes the calibration
+story), then 5 --- after which 6 and 9 are largely composition and the
+system produces its first real-image room model. Each step lands as a
+new module behind the same conventions (\autoref{tab:modules}) with its
+own noiseless-exact tests and a synthetic experiment extending
 \autoref{sec:results}.
 
 \appendix

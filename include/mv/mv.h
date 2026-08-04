@@ -19,5 +19,9 @@
 #include "mv/img.h"
 #include "mv/cloud.h"
 #include "mv/tsdf.h"
+#include "mv/refine.h"
+#include "mv/optimal.h"
+#include "mv/feat.h"
+#include "mv/session.h"
 
 #endif /* MV_MV_H */

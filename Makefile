@@ -5,7 +5,8 @@ LDLIBS   = -lm
 
 SRC = src/mat.c src/cam.c src/epipolar.c src/triangulate.c src/rectify.c \
       src/stereo.c src/img.c src/cloud.c src/target.c src/graycode.c \
-      src/calib.c src/pattern.c src/render.c src/reader.c src/tsdf.c
+      src/calib.c src/pattern.c src/render.c src/reader.c src/tsdf.c \
+      src/refine.c src/optimal.c src/feat.c src/session.c
 OBJ = $(SRC:.c=.o)
 
 all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv
@@ -64,11 +65,27 @@ demo_track: demo/track_robot.o libmv.a
 test_mv: tests/test_mv.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tests/test_mv.o libmv.a $(LDLIBS)
 
+test_refine: tests/test_refine.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_refine.o libmv.a $(LDLIBS)
+
+test_optimal: tests/test_optimal.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_optimal.o libmv.a $(LDLIBS)
+
+test_feat: tests/test_feat.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_feat.o libmv.a $(LDLIBS)
+
+test_session: tests/test_session.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_session.o libmv.a $(LDLIBS)
+
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-check: test_mv
+check: test_mv test_refine test_optimal test_feat test_session
 	./test_mv
+	./test_refine
+	./test_optimal
+	./test_feat
+	./test_session
 	python3 tests/check_bib.py
 
 checkbib:
@@ -96,7 +113,7 @@ doc/multiview.pdf: doc/multiview.tex doc/refs.bib
 	&& pdflatex -interaction=nonstopmode multiview >/dev/null
 
 clean:
-	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o demo/roomsim.o demo/slightsim.o tools/calibreal.o tools/scenecloud.o tools/rigcalib.o tools/annotate.o tools/slreal.o tests/test_mv.o libmv.a \
+	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o demo/roomsim.o demo/slightsim.o tools/calibreal.o tools/scenecloud.o tools/rigcalib.o tools/annotate.o tools/slreal.o tests/test_mv.o tests/test_refine.o tests/test_optimal.o tests/test_feat.o tests/test_session.o libmv.a \
 	      demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv out_cloud.ply out_track.ply \
 	      target_letter.pgm \
 	      doc/*.aux doc/*.log doc/*.bbl doc/*.blg doc/*.out doc/*.toc doc/*.brf

@@ -1205,9 +1205,42 @@ controlled-environment charter.
 \label{sec:tsdf}
 
 Since rung 2 is where this system's model extraction will live, it
-deserves more than a name. A \emph{truncated signed distance function}
-discretizes the working volume into voxels; each voxel $v$ stores two
-numbers, a distance estimate $D(v)$ and a weight $W(v)$. When a depth
+deserves more than a name --- starting with its plumbing.
+
+\paragraph{Inputs, state, outputs.} The TSDF's \emph{input} is a stream
+of calibrated depth maps: per camera and frame, a depth value per pixel
+(from the dense stereo of \autoref{sec:stereo}, disparity $\to$ depth
+via \eqref{eq:depth}) together with that camera's fixed calibration.
+Its \emph{state} --- the TSDF itself --- is a voxel grid over the
+working volume holding two numbers per voxel. Its \emph{outputs} are
+three: a triangulated mesh (the ``proper model,'' extracted on demand,
+exported as PLY); a queryable distance field (how far is any point from
+the nearest surface --- \autoref{sec:background}'s foreground test is
+exactly ``does this new depth sample disagree with $D$?''); and, by
+raycasting the field, synthetic depth/normal maps from any viewpoint
+\cite{Newcombe2011}. Build-side and use-side data flow:
+\[
+\underbrace{\text{depth maps} + \text{calibration}}_{\text{per frame}}
+\;\rightarrow\;
+\underbrace{\text{voxel sweep \eqref{eq:tsdf}}}_{\text{fusion}}
+\;\rightarrow\;
+\underbrace{(D,W)\ \text{grid}}_{\text{state}}
+\;\rightarrow\;
+\begin{cases}
+\text{marching cubes} \rightarrow \text{mesh (PLY)}\\
+\text{point queries} \rightarrow \text{foreground/change}\\
+\text{raycast} \rightarrow \text{depth, normals}
+\end{cases}
+\]
+Fusion is \emph{incremental and order-insensitive} --- the update
+\eqref{eq:tsdf} below is a running average, so frames can arrive in any
+order, streams from the two cameras interleave freely, and there is
+never a batch step; the mesh is extracted whenever wanted without
+interrupting accumulation.
+
+\paragraph{The state and its update.} A \emph{truncated signed distance
+function} discretizes the working volume into voxels; each voxel $v$
+stores two numbers, a distance estimate $D(v)$ and a weight $W(v)$. When a depth
 map arrives, every voxel looks up the depth $Z_{\text{obs}}$ at the
 pixel it projects to, compares it with its own depth $Z_v$ along that
 camera ray, and forms the signed offset

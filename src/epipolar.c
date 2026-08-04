@@ -5,6 +5,7 @@
 #include "mv/core.h"
 #include "mv/mat.h"
 #include "mv/epipolar.h"
+#include "mv/triangulate.h"
 
 /* Unit Frobenius norm, canonical sign: largest-|.| entry positive. */
 static void canonicalize(double F[9])
@@ -149,4 +150,122 @@ double mv_sym_epipolar_dist(const double F[9], const double uv1[2],
     if (n1 < 1e-300 || n2 < 1e-300)
         return HUGE_VAL;
     return 0.5 * (fabs(v) / n1 + fabs(v) / n2);
+}
+
+int mv_essential_pose(double R[9], double t[3], const double E[9],
+                      const double *x1, const double *x2, int n)
+{
+    static const double Wm[9] = { 0, -1, 0, 1, 0, 0, 0, 0, 1 };
+    double U[9], S[3], V[9], Vt[9], Wt[9], tmp[9];
+    double Rc[2][9], tc[2][3];
+    int best = -1, bestvotes = -1, ri, ti, i, j;
+
+    memcpy(U, E, sizeof(U));
+    if (mv_svd(U, S, V, 3, 3) != MV_OK)
+        return MV_ERR;
+    /* force proper rotations out of the factors */
+    {
+        double dU = U[0] * (U[4] * U[8] - U[5] * U[7])
+                  - U[1] * (U[3] * U[8] - U[5] * U[6])
+                  + U[2] * (U[3] * U[7] - U[4] * U[6]);
+        double dV = V[0] * (V[4] * V[8] - V[5] * V[7])
+                  - V[1] * (V[3] * V[8] - V[5] * V[6])
+                  + V[2] * (V[3] * V[7] - V[4] * V[6]);
+        if (dU < 0.0)
+            for (i = 0; i < 3; i++)
+                U[i * 3 + 2] = -U[i * 3 + 2];
+        if (dV < 0.0)
+            for (i = 0; i < 3; i++)
+                V[i * 3 + 2] = -V[i * 3 + 2];
+    }
+    mv_mat_transpose(Vt, V, 3, 3);
+    mv_mat_transpose(Wt, Wm, 3, 3);
+    mv_mat_mul(tmp, U, Wm, 3, 3, 3);
+    mv_mat_mul(Rc[0], tmp, Vt, 3, 3, 3);
+    mv_mat_mul(tmp, U, Wt, 3, 3, 3);
+    mv_mat_mul(Rc[1], tmp, Vt, 3, 3, 3);
+    for (i = 0; i < 3; i++) {
+        tc[0][i] = U[i * 3 + 2];
+        tc[1][i] = -U[i * 3 + 2];
+    }
+
+    for (ri = 0; ri < 2; ri++)
+        for (ti = 0; ti < 2; ti++) {
+            mv_camera c1, c2;
+            const mv_camera *cams[2];
+            int votes = 0;
+            mv_cam_set_K(&c1, 1.0, 1.0, 0.0, 0.0);
+            mv_cam_set_identity_pose(&c1);
+            memset(c1.k, 0, sizeof(c1.k));
+            c2 = c1;
+            memcpy(c2.R, Rc[ri], sizeof(c2.R));
+            for (j = 0; j < 3; j++)
+                c2.t[j] = tc[ti][j];
+            cams[0] = &c1;
+            cams[1] = &c2;
+            for (i = 0; i < n; i++) {
+                double X[3], uvs[4], z2;
+                uvs[0] = x1[2 * i];
+                uvs[1] = x1[2 * i + 1];
+                uvs[2] = x2[2 * i];
+                uvs[3] = x2[2 * i + 1];
+                if (mv_triangulate(X, cams, uvs, 2) != MV_OK)
+                    continue;
+                z2 = c2.R[6] * X[0] + c2.R[7] * X[1] + c2.R[8] * X[2]
+                     + c2.t[2];
+                if (X[2] > 0.0 && z2 > 0.0)
+                    votes++;
+            }
+            if (votes > bestvotes) {
+                bestvotes = votes;
+                best = 2 * ri + ti;
+            }
+        }
+    if (best < 0 || bestvotes < n / 2 || bestvotes < 2)
+        return MV_ERR;
+    memcpy(R, Rc[best / 2], 9 * sizeof(double));
+    memcpy(t, tc[best % 2], 3 * sizeof(double));
+    return MV_OK;
+}
+
+static int fcmp_dbl(const void *a, const void *b)
+{
+    double d = *(const double *)a - *(const double *)b;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+int mv_fundamental_8point_robust(double F[9], double *uv1, double *uv2,
+                                 int *n)
+{
+    int round, i, m;
+    if (mv_fundamental_8point(F, uv1, uv2, *n) != MV_OK)
+        return MV_ERR;
+    for (round = 0; round < 2; round++) {
+        double *resid, medr;
+        resid = (double *)malloc((size_t)*n * 2 * sizeof(double));
+        if (!resid)
+            return MV_ERR;
+        for (i = 0; i < *n; i++) {
+            resid[i] = mv_sym_epipolar_dist(F, uv1 + 2 * i, uv2 + 2 * i);
+            resid[*n + i] = resid[i];
+        }
+        qsort(resid + *n, (size_t)*n, sizeof(double), fcmp_dbl);
+        medr = resid[*n + *n / 2];
+        m = 0;
+        for (i = 0; i < *n; i++)
+            if (resid[i] <= 3.0 * medr + 1e-9) {
+                uv1[2 * m] = uv1[2 * i];
+                uv1[2 * m + 1] = uv1[2 * i + 1];
+                uv2[2 * m] = uv2[2 * i];
+                uv2[2 * m + 1] = uv2[2 * i + 1];
+                m++;
+            }
+        free(resid);
+        if (m < 8)
+            return MV_ERR;
+        *n = m;
+        if (mv_fundamental_8point(F, uv1, uv2, *n) != MV_OK)
+            return MV_ERR;
+    }
+    return MV_OK;
 }

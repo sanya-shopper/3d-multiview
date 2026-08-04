@@ -641,6 +641,221 @@ static void test_pattern_coarse(void)
     }
 }
 
+static int sl_cmp_dbl(const void *a, const void *b)
+{
+    double d = *(const double *)a - *(const double *)b;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+static void sl_set_plane(mv_plane *p, unsigned char *tex, int tw, int th,
+                         double pitch, const double r1[3],
+                         const double r2[3], const double t[3])
+{
+    double r3[3];
+    int i;
+    mv_cross3(r3, r1, r2);
+    for (i = 0; i < 3; i++) {
+        p->R[i * 3 + 0] = r1[i];
+        p->R[i * 3 + 1] = r2[i];
+        p->R[i * 3 + 2] = r3[i];
+        p->t[i] = t[i];
+    }
+    p->tex = tex;
+    p->tw = tw;
+    p->th = th;
+    p->pitch = pitch;
+}
+
+/* paint plane textures with what the projector casts on them */
+static void sl_project_onto(unsigned char *tex, const mv_plane *pl,
+                            const mv_camera *proj,
+                            const unsigned char *code, int cw, int ch)
+{
+    int i, j;
+    for (j = 0; j < pl->th; j++)
+        for (i = 0; i < pl->tw; i++) {
+            /* 3x3 supersample per texel: a real projector has no
+             * intermediate raster, so the sim must not alias one in */
+            double acc = 0.0;
+            int k, a, b, ns = 0;
+            for (b = 0; b < 3; b++)
+                for (a = 0; a < 3; a++) {
+                    double X[3], uv[2];
+                    int u, v;
+                    for (k = 0; k < 3; k++)
+                        X[k] = pl->R[k * 3 + 0]
+                                   * (i + (a + 0.5) / 3.0) * pl->pitch
+                             + pl->R[k * 3 + 1]
+                                   * (j + (b + 0.5) / 3.0) * pl->pitch
+                             + pl->t[k];
+                    if (mv_cam_project(uv, proj, X) != MV_OK) {
+                        acc += 10.0;
+                        ns++;
+                        continue;
+                    }
+                    u = (int)(uv[0] + 0.5);
+                    v = (int)(uv[1] + 0.5);
+                    acc += (u >= 0 && v >= 0 && u < cw && v < ch)
+                           ? code[v * cw + u] : 10.0;
+                    ns++;
+                }
+            tex[j * pl->tw + i] = (unsigned char)(acc / ns + 0.5);
+        }
+}
+
+static void test_structured_light(void)
+{
+    /* Projected structured light, end to end in sim: a projector casts
+     * the Gray-code sequence onto two planes; two calibrated cameras
+     * decode it, match by code, and recover their relative pose from
+     * the essential matrix -- with no feature detector and no pattern
+     * display in view. */
+    enum { CW = 480, CH = 270, IW = 320, IH = 240, TW = 400, TH = 275 };
+    static unsigned char code[CW * CH];
+    static unsigned char texA[2][TW * TH], texB[2][TW * TH];
+    static unsigned char img1[2][18][IW * IH], img2[2][18][IW * IH];
+    static int colc1[IW * IH], rowc1[IW * IH], colc2[IW * IH],
+        rowc2[IW * IH], tmpc[IW * IH];
+    static unsigned char va1[IW * IH], vb1[IW * IH], va2[IW * IH],
+        vb2[IW * IH];
+    static double uv1[2 * 40000], uv2[2 * 40000];
+    static float zTrue[IW * IH];
+    mv_camera proj, c1, c2;
+    mv_plane pls[2];
+    unsigned long long seed = 20260805ULL;
+    int nbx = mv_graycode_bits(CW), nby = mv_graycode_bits(CH);
+    int axis, bit, inv, i, nm;
+
+    /* projector at the origin looking +z; cameras 0.4 m apart */
+    mv_cam_set_K(&proj, 500.0, 500.0, CW / 2.0, CH / 2.0);
+    mv_cam_set_identity_pose(&proj);
+    memset(proj.k, 0, sizeof(proj.k));
+    mv_cam_set_K(&c1, 400.0, 400.0, IW / 2.0, IH / 2.0);
+    mv_cam_set_identity_pose(&c1);
+    memset(c1.k, 0, sizeof(c1.k));
+    c1.t[0] = 0.2; /* camera 1 left of projector */
+    c2 = c1;
+    {
+        double C2pos[3] = { 0.4, 0.0, 0.0 };
+        mv_cam_set_pose_yaw(&c2, -0.12, C2pos);
+    }
+
+    {
+        static const double ex[3] = { 1, 0, 0 }, ey[3] = { 0, 1, 0 };
+        static const double exs[3] = { 0.9701, 0, -0.2425 };
+        double t0[3];
+        t0[0] = -1.6; t0[1] = -1.1; t0[2] = 3.2;
+        sl_set_plane(&pls[0], texA[0], TW, TH, 0.008, ex, ey, t0);
+        t0[0] = 0.4; t0[1] = -1.1; t0[2] = 2.6;
+        sl_set_plane(&pls[1], texB[0], TW, TH, 0.008, exs, ey, t0);
+    }
+
+    /* render the full sequence: axis x/y, each bit + inverse */
+    for (axis = 0; axis < 2; axis++) {
+        int nb = axis ? nby : nbx;
+        for (bit = 0; bit < nb; bit++)
+            for (inv = 0; inv < 2; inv++) {
+                int slot = 2 * bit + inv;
+                mv_graycode_frame(code, CW, CH, axis, bit, nb, inv);
+                sl_project_onto(texA[0], &pls[0], &proj, code, CW, CH);
+                sl_project_onto(texB[0], &pls[1], &proj, code, CW, CH);
+                mv_render_scene(img1[axis][slot], (axis == 0 && slot == 0)
+                                ? zTrue : NULL, IW, IH, &c1, pls, 2, 5,
+                                0.0, &seed);
+                mv_render_scene(img2[axis][slot], NULL, IW, IH, &c2, pls,
+                                2, 5, 0.0, &seed);
+            }
+    }
+
+    /* decode both axes in both cameras */
+    for (i = 0; i < 2; i++) {
+        const unsigned char *fr[16], *fi[16];
+        int nb = i ? nby : nbx, b;
+        for (b = 0; b < nb; b++) {
+            fr[b] = img1[i][2 * b];
+            fi[b] = img1[i][2 * b + 1];
+        }
+        mv_graycode_decode(i ? rowc1 : colc1, i ? vb1 : va1, fr, fi, nb,
+                           IW * IH, 12);
+        for (b = 0; b < nb; b++) {
+            fr[b] = img2[i][2 * b];
+            fi[b] = img2[i][2 * b + 1];
+        }
+        mv_graycode_decode(i ? rowc2 : colc2, i ? vb2 : va2, fr, fi, nb,
+                           IW * IH, 12);
+    }
+    for (i = 0; i < IW * IH; i++) {
+        va1[i] = va1[i] && vb1[i];
+        va2[i] = va2[i] && vb2[i];
+        tmpc[i] = 0;
+    }
+    (void)tmpc;
+
+    nm = mv_graycode_match(uv1, uv2, 40000, colc1, rowc1, va1, IW, IH,
+                           colc2, rowc2, va2, IW, IH, CW, CH);
+    if (getenv("MV_SL_DEBUG"))
+        fprintf(stderr, "SL nm=%d\n", nm);
+    CHECK(nm > 500, "structured light: dense cross-camera matches");
+
+    /* pose from the matches alone */
+    {
+        double F[9], E[9], K1i[9], R[9], t[3];
+        static double x1[2 * 40000], x2[2 * 40000];
+        double Rrel[9], trel[3], tn, terr, rerr, tr;
+        int j;
+        CHECK(mv_fundamental_8point(F, uv1, uv2, nm) == MV_OK,
+              "structured light: 8-point F");
+        CHECK(mv_fundamental_8point_robust(F, uv1, uv2, &nm) == MV_OK,
+              "structured light: robust F refit");
+        if (getenv("MV_SL_DEBUG"))
+            fprintf(stderr, "SL after trim nm=%d\n", nm);
+        mv_essential_from_fundamental(E, F, c1.K, c2.K);
+        mv_mat_inv3(K1i, c1.K);
+        for (i = 0; i < nm; i++) {
+            x1[2 * i] = K1i[0] * uv1[2 * i] + K1i[2];
+            x1[2 * i + 1] = K1i[4] * uv1[2 * i + 1] + K1i[5];
+            x2[2 * i] = K1i[0] * uv2[2 * i] + K1i[2];
+            x2[2 * i + 1] = K1i[4] * uv2[2 * i + 1] + K1i[5];
+        }
+        CHECK(mv_essential_pose(R, t, E, x1, x2, nm) == MV_OK,
+              "structured light: essential pose recovered");
+        /* ground truth relative pose: x2 = Rrel x1cam + trel */
+        {
+            double R1t[9];
+            mv_mat_transpose(R1t, c1.R, 3, 3);
+            mv_mat_mul(Rrel, c2.R, R1t, 3, 3, 3);
+            mv_mat_mul(trel, Rrel, c1.t, 3, 3, 1);
+            for (j = 0; j < 3; j++)
+                trel[j] = c2.t[j] - trel[j];
+        }
+        {
+            double Rt[9], D[9];
+            mv_mat_transpose(Rt, Rrel, 3, 3);
+            mv_mat_mul(D, R, Rt, 3, 3, 3);
+            tr = (D[0] + D[4] + D[8] - 1.0) / 2.0;
+            if (tr > 1.0)
+                tr = 1.0;
+            if (tr < -1.0)
+                tr = -1.0;
+            rerr = acos(tr) * 180.0 / 3.14159265358979324;
+        }
+        tn = mv_norm(trel, 3);
+        for (j = 0; j < 3; j++)
+            trel[j] /= tn;
+        terr = 0.0;
+        for (j = 0; j < 3; j++)
+            terr += trel[j] * t[j];
+        CHECK(rerr < 0.3,
+              "structured light: rotation within 0.3 deg of truth");
+        if (getenv("MV_SL_DEBUG"))
+            fprintf(stderr, "SL terr=%.6f (angle %.3f deg) t=(%.3f %.3f %.3f) trel=(%.3f %.3f %.3f)\n",
+                    terr, acos(fabs(terr) > 1 ? 1 : fabs(terr)) * 57.2958,
+                    t[0], t[1], t[2], trel[0], trel[1], trel[2]);
+        CHECK(fabs(terr) > 0.99995,
+              "structured light: baseline direction within ~0.5 deg");
+    }
+}
+
 static void test_tsdf(void)
 {
     mv_camera c1, c2;
@@ -786,6 +1001,7 @@ int main(void)
     test_graycode();
     test_pattern();
     test_pattern_coarse();
+    test_structured_light();
     test_tsdf();
     test_warp_scene();
     if (failures) {

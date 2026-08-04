@@ -25,6 +25,9 @@ demo_tsdf: demo/tsdfsim.o libmv.a
 demo_room: demo/roomsim.o libmv.a
 	$(CC) $(CFLAGS) -o $@ demo/roomsim.o libmv.a $(LDLIBS)
 
+demo_slight: demo/slightsim.o libmv.a
+	$(CC) $(CFLAGS) -o $@ demo/slightsim.o libmv.a $(LDLIBS)
+
 calibreal: tools/calibreal.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/calibreal.o libmv.a $(LDLIBS)
 
@@ -36,6 +39,9 @@ rigcalib: tools/rigcalib.o libmv.a
 
 annotate: tools/annotate.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/annotate.o libmv.a $(LDLIBS)
+
+slreal: tools/slreal.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tools/slreal.o libmv.a $(LDLIBS)
 
 demo_patternsim: demo/patternsim.o libmv.a
 	$(CC) $(CFLAGS) -o $@ demo/patternsim.o libmv.a $(LDLIBS)
@@ -90,7 +96,7 @@ doc/multiview.pdf: doc/multiview.tex doc/refs.bib
 	&& pdflatex -interaction=nonstopmode multiview >/dev/null
 
 clean:
-	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o demo/roomsim.o tools/calibreal.o tools/scenecloud.o tools/rigcalib.o tools/annotate.o tests/test_mv.o libmv.a \
+	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o demo/roomsim.o demo/slightsim.o tools/calibreal.o tools/scenecloud.o tools/rigcalib.o tools/annotate.o tools/slreal.o tests/test_mv.o libmv.a \
 	      demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv out_cloud.ply out_track.ply \
 	      target_letter.pgm \
 	      doc/*.aux doc/*.log doc/*.bbl doc/*.blg doc/*.out doc/*.toc doc/*.brf

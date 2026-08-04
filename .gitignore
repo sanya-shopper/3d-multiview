@@ -30,3 +30,5 @@ out_room_change.pgm
 out_room.ply
 out_room_rect.pgm
 out_room_truth.pgm
+out_room_truth.ppm
+out_room_mesh.ppm

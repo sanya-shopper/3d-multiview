@@ -535,6 +535,36 @@ static void test_pattern(void)
         }
         CHECK(rr.counter_valid && rr.counter == 777777u,
               "pattern: counter decodes exactly");
+
+        /* display outline: on a dark background the lit panel edges
+         * are recovered within a few pixels of the true plane extent */
+        {
+            double quad[8], maxerr = 0.0;
+            static const double ext[4][2] = {
+                { 0, 0 }, { MV_PAT_W, 0 },
+                { MV_PAT_W, MV_PAT_H }, { 0, MV_PAT_H }
+            };
+            seed = 1;
+            mv_render_plane(img, 640, 480, &cam, pat, MV_PAT_W,
+                            MV_PAT_H, 0.0002745, 20, 0.0, &seed);
+            CHECK(mv_read_pattern(&rr, img, 640, 480) == MV_OK,
+                  "outline: read on dark background");
+            CHECK(mv_display_outline(quad, &rr, img, 640, 480) == MV_OK,
+                  "outline: lit panel found");
+            for (i = 0; i < 4; i++) {
+                double X[3], uv[2], e;
+                X[0] = ext[i][0] * 0.0002745;
+                X[1] = ext[i][1] * 0.0002745;
+                X[2] = 0.0;
+                mv_cam_project(uv, &cam, X);
+                e = fabs(uv[0] - quad[2 * i])
+                    + fabs(uv[1] - quad[2 * i + 1]);
+                if (e > maxerr)
+                    maxerr = e;
+            }
+            CHECK(maxerr < 4.0,
+                  "outline: panel corners within 4 px of truth");
+        }
     }
 }
 

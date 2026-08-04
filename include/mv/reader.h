@@ -49,4 +49,17 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
 int mv_read_coarse(mv_read_result *res, const unsigned char *img,
                    int w, int h);
 
+/* Locate the physical display in the image, given a successful read
+ * (either tier): flood-fills the lit-panel glow outward from the
+ * decoded pattern (brightness references sampled from the pattern's
+ * own white and black cells), robust-fits the four boundary lines of
+ * the flooded region, and intersects them.  quad receives the four
+ * corners of the lit display area in image pixels, ordered
+ * top-left, top-right, bottom-right, bottom-left in pattern
+ * orientation.  This is the first scene-object detector: the screen
+ * is found, not assumed.  MV_ERR if the flood degenerates (region
+ * too small, or leaks past half the image). */
+int mv_display_outline(double quad[8], const mv_read_result *rr,
+                       const unsigned char *img, int w, int h);
+
 #endif /* MV_READER_H */

@@ -1129,3 +1129,141 @@ int mv_read_coarse(mv_read_result *res, const unsigned char *img,
     }
     return MV_ERR;
 }
+
+/* ================= display outline (see reader.h) ==================== */
+
+static void proj_H(const double H[9], double X, double Y, double *u,
+                   double *v)
+{
+    double W = H[6] * X + H[7] * Y + H[8];
+    if (fabs(W) < 1e-12)
+        W = 1e-12;
+    *u = (H[0] * X + H[1] * Y + H[2]) / W;
+    *v = (H[3] * X + H[4] * Y + H[5]) / W;
+}
+
+int mv_display_outline(double quad[8], const mv_read_result *rr,
+                       const unsigned char *img, int w, int h)
+{
+    double whiteref = 0.0, blackref = 0.0, thr;
+    int nw = 0, nb = 0;
+    int fine = rr->n > 10;
+    int gx0 = fine ? MV_PAT_GRID_X0 : MV_PAT2_GRID_X0;
+    int gy0 = fine ? MV_PAT_GRID_Y0 : MV_PAT2_GRID_Y0;
+    int cell = fine ? MV_PAT_CELL : MV_PAT2_CELL;
+    int cols = fine ? MV_PAT_GRID_COLS : MV_PAT2_GRID_COLS;
+    int rows = fine ? MV_PAT_GRID_ROWS : MV_PAT2_GRID_ROWS;
+    int r, c, i, side;
+    double lim[4]; /* panel bounds in pattern coords: xl, xr, yt, yb */
+
+    /* brightness references from the pattern's own cells, sampled off
+     * center to dodge marks and dots */
+    for (r = 0; r < rows; r++)
+        for (c = 0; c < cols; c++) {
+            double u, v, g;
+            proj_H(rr->H, gx0 + (c + 0.30) * cell, gy0 + (r + 0.30) * cell,
+                   &u, &v);
+            g = sample3(img, w, h, u, v);
+            if (g < 0.0)
+                continue;
+            if ((r + c) % 2 == 0) {
+                blackref += g;
+                nb++;
+            } else {
+                whiteref += g;
+                nw++;
+            }
+        }
+    if (nw < 4 || nb < 4)
+        return MV_ERR;
+    whiteref /= nw;
+    blackref /= nb;
+    if (whiteref - blackref < 20.0)
+        return MV_ERR;
+    thr = blackref + 0.35 * (whiteref - blackref);
+
+    /* march rays OUTWARD in pattern-plane coordinates, where the lit
+     * panel's edges are axis-aligned straight lines by construction.
+     * Each side takes the MEDIAN stop coordinate over its rays, which
+     * is immune to leaks through any single bright bridge (a lit arm,
+     * a bright wall touching the panel in the image) -- the failure
+     * mode of region flooding. */
+    for (side = 0; side < 4; side++) {
+        double stops[64];
+        int ns = 0;
+        for (i = 0; i < 48; i++) {
+            /* ray anchor spread along the pattern's extent */
+            double along = (i + 0.5) / 48.0;
+            double px, py, dx = 0.0, dy = 0.0, pos, g, u, v;
+            int dark = 0, steps;
+            switch (side) {
+            case 0: /* left: start in left margin, march -x */
+                px = gx0 * 0.5;
+                py = MV_PAT_H * along;
+                dx = -8.0;
+                break;
+            case 1: /* right */
+                px = (gx0 + cols * cell + MV_PAT_W) * 0.5;
+                py = MV_PAT_H * along;
+                dx = 8.0;
+                break;
+            case 2: /* top */
+                px = MV_PAT_W * along;
+                py = gy0 * 0.5;
+                dy = -8.0;
+                break;
+            default: /* bottom */
+                px = MV_PAT_W * along;
+                py = (gy0 + rows * cell + MV_PAT_H) * 0.5;
+                dy = 8.0;
+                break;
+            }
+            /* the anchor itself must be lit (it sits in the pattern's
+             * white margin); otherwise skip this ray */
+            proj_H(rr->H, px, py, &u, &v);
+            g = sample3(img, w, h, u, v);
+            if (g < thr)
+                continue;
+            pos = (side < 2) ? px : py;
+            for (steps = 0; steps < 400 && dark < 3; steps++) {
+                px += dx;
+                py += dy;
+                proj_H(rr->H, px, py, &u, &v);
+                if (u < 1.0 || v < 1.0 || u > w - 2.0 || v > h - 2.0)
+                    break; /* image border: panel extends past view */
+                g = sample3(img, w, h, u, v);
+                if (g < thr) {
+                    dark++;
+                } else {
+                    dark = 0;
+                    pos = (side < 2) ? px : py;
+                }
+            }
+            if (ns < 64)
+                stops[ns++] = pos;
+        }
+        if (ns < 8)
+            return MV_ERR;
+        {
+            int j, k;
+            for (j = 1; j < ns; j++)
+                for (k = j; k > 0 && stops[k] < stops[k - 1]; k--) {
+                    double t = stops[k];
+                    stops[k] = stops[k - 1];
+                    stops[k - 1] = t;
+                }
+            lim[side] = stops[ns / 2];
+        }
+    }
+    if (lim[0] >= lim[1] || lim[2] >= lim[3])
+        return MV_ERR;
+
+    /* rectangle in pattern coords -> image quad through H */
+    {
+        static const int cx[4] = { 0, 1, 1, 0 }, cy[4] = { 2, 2, 3, 3 };
+        for (i = 0; i < 4; i++)
+            proj_H(rr->H, lim[cx[i]], lim[cy[i]], &quad[2 * i],
+                   &quad[2 * i + 1]);
+    }
+    return MV_OK;
+}

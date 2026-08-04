@@ -183,6 +183,17 @@ static int extrinsics_from_H(mv_camera *cam, const double K[9],
     return MV_OK;
 }
 
+int mv_calib_plane_pose(mv_camera *cam, const double K[9],
+                        const double *obj, const double *img, int n)
+{
+    double H[9];
+    if (n < 4)
+        return MV_ERR;
+    if (mv_homography_dlt(H, obj, img, n) != MV_OK)
+        return MV_ERR;
+    return extrinsics_from_H(cam, K, H);
+}
+
 /* linear least-squares k1,k2 given intrinsics and per-view poses:
  * u_d - u = (u - u0)(k1 r^2 + k2 r^4), likewise for v (Zhang sect. 3.3) */
 static int radial_linear(double k[2], const double K[9],

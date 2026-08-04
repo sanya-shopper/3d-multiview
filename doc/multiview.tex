@@ -2240,6 +2240,34 @@ consistent with focus breathing, the effective-focal shift of an
 autofocus lens with subject distance (\autoref{sec:hardware}); a
 per-session calibration, which the pattern makes cheap, sidesteps it.
 
+\paragraph{Round four: the resolution floor, measured in the field.}
+An ambitious capture --- three fixed cameras (two 720p laptop webcams,
+one phone) watching the pattern laptop being carried around a room at
+$2$--$3$\,m --- produced a clean negative result: $2/196$, $7/200$, and
+$0/193$ frames decoded, and every decoded counter strip invalid. The
+frames explain it exactly. At that range the pattern spans
+$\sim$$170$\,px, so one $80$\,px grid cell subtends $\sim$$9$\,px, an
+M-array dot $2$--$3$\,px, and a counter cell $\sim$$7$\,px: the saddle
+\emph{lattice} survives (camera B repeatedly found all 162 corners),
+but the identity dots and counter bits are below the sensor's
+resolving floor --- the information is not on the sensor, and no
+escalation ladder can decode bits that were never resolved. The
+successful rounds ran at $\sim$$21$\,px/cell; the working rule that
+falls out is that a camera can use the pattern out to roughly
+\begin{equation}
+Z_{\max} \approx \frac{f\,W_{\mathrm{pat}}}{320\ \mathrm{px}}
+\label{eq:patrange}
+\end{equation}
+(pattern width $W_{\mathrm{pat}}=217.5$\,mm on our display, $320$\,px
+$\approx$ 19 cells at the empirically safe $\sim$$17$\,px/cell): about
+$1.1$\,m for the phones ($f\approx1600$\,px) and only $\sim$$0.6$\,m
+for a 720p webcam. Reading the same display across a whole room needs
+either longer focal lengths, more pixels, or a coarser signal --- a
+range-tiered pattern (a temporally multiplexed coarse layer with
+$4\times$ cells, giving $4\times$ the range from $1/16$ the corner
+density) is the designed follow-on in the roadmap
+(\autoref{sec:roadmap}).
+
 \paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
 disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the
 monitored volume for 20\,s at $0.3$\,m/s with random turns, on a floor
@@ -3038,6 +3066,21 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         clock-modeled rig), and the M0 radiometric path that the
         lighting/diurnal scenario (\autoref{sec:lightscen}) needs on
         real hardware.
+  \item \textbf{Range-tiered pattern (spec v2)} --- a temporally
+        multiplexed coarse layer for room-scale reading: on a known
+        counter parity the display shows a $4\times$-cell version of
+        the pattern (320\,px cells, 96\,px marks, its own short
+        counter), quadrupling the usable range of \eqref{eq:patrange}
+        at $1/16$ the corner density; cameras use whichever tier they
+        can decode, and the shared refresh clock stitches the tiers
+        together. \emph{Pitch}: round four measured the need directly
+        --- three fixed cameras watching a room could find the saddle
+        lattice but not one identity dot; this is the cheapest path to
+        pattern-based calibration at deployment geometry, and it is a
+        display-app + reader change only (no new mathematics).
+        \emph{Unlocks}: rig calibration at room scale with commodity
+        webcams --- the actual deployment scenario of
+        \autoref{sec:overview}.
   \item \textbf{Levenberg--Marquardt refinement} (later: bundle
         adjustment \cite{Triggs2000}). Joint nonlinear minimization of
         reprojection error over intrinsics, poses, and distortion.

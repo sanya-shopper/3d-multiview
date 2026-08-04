@@ -256,6 +256,18 @@ static void test_calib(void)
     CHECK(perr < 1e-5, "zhang: poses exact on noiseless data");
     CHECK(mv_calib_reproj_rms(est, views, 5) < 1e-6,
           "zhang: reprojection ~ 0");
+    {
+        /* single-view localizer agrees with the full pipeline */
+        mv_camera pc;
+        double e = 0.0;
+        CHECK(mv_calib_plane_pose(&pc, K, obj, img[0], n) == MV_OK,
+              "plane pose succeeds");
+        for (j = 0; j < 9; j++)
+            e += fabs(pc.R[j] - gt[0].R[j]);
+        for (j = 0; j < 3; j++)
+            e += fabs(pc.t[j] - gt[0].t[j]);
+        CHECK(e < 1e-5, "plane pose exact on noiseless view");
+    }
 }
 
 static void test_radial(void)

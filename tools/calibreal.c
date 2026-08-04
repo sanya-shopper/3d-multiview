@@ -27,8 +27,9 @@ int main(int argc, char **argv)
     static double imgs[MAXV][2 * MV_READ_MAXC];
     mv_calib_view views[MAXV];
     mv_camera est[MAXV];
+    unsigned char inl[MAXV];
     double K[9], k_radial[2], pitch;
-    int nviews = 0, i, f;
+    int nviews = 0, nin = 0, i, f;
 
     if (argc < 3) {
         fprintf(stderr, "usage: %s <pitch_mm> <frames.pgm...>\n", argv[0]);
@@ -80,16 +81,33 @@ int main(int argc, char **argv)
         printf("need >= 3 good views for calibration\n");
         return 1;
     }
-    if (mv_calib_planar(K, est, k_radial, views, nviews, 1) != MV_OK) {
+    if (mv_calib_planar_robust(K, est, k_radial, views, nviews, 1,
+                               inl) != MV_OK) {
         printf("calibration FAILED\n");
         return 1;
     }
+    for (i = 0; i < nviews; i++)
+        nin += inl[i];
+    printf("robust fit: %d of %d views used (redundant or inconsistent "
+           "views set aside)\n", nin, nviews);
     printf("\nintrinsics (pixels)\n");
     printf("  fx = %.1f   fy = %.1f\n", K[0], K[4]);
     printf("  cx = %.1f   cy = %.1f\n", K[2], K[5]);
     printf("  k1 = %+.4f  k2 = %+.4f\n", k_radial[0], k_radial[1]);
-    printf("  reprojection RMS = %.3f px over %d views\n",
-           mv_calib_reproj_rms(est, views, nviews), nviews);
+    {
+        static mv_calib_view iv[MAXV];
+        static mv_camera ie[MAXV];
+        int m = 0;
+        for (i = 0; i < nviews; i++)
+            if (inl[i]) {
+                iv[m] = views[i];
+                ie[m++] = est[i];
+            }
+        printf("  reprojection RMS = %.3f px over the %d fitted views\n",
+               mv_calib_reproj_rms(ie, iv, m), m);
+        printf("  (%.3f px over all %d views incl. the set-aside ones)\n",
+               mv_calib_reproj_rms(est, views, nviews), nviews);
+    }
     printf("\nper-view camera-to-screen-center distance "
            "(at pitch %.4f mm):\n  ", pitch * 1000.0);
     for (i = 0; i < nviews; i++) {

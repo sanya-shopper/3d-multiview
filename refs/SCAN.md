@@ -1,0 +1,38 @@
+# refs/ retrieval and screening record
+
+Retrieved 2026-08-04 from publisher/author/institutional open-access
+sources (arXiv, NIST, university pages) via curl; see git history for
+exact URLs. VirusTotal was not available in this environment; screening
+was heuristic: PDF magic verified, and object-level scan for active
+content (JavaScript/Launch actions, embedded files), including inside
+decompressed streams. /OpenAction and /AA tokens alone are ordinary
+viewer navigation actions and were not treated as findings.
+
+| file | size | active-content findings | embedded files |
+|---|---|---|---|
+| CurlessLevoy1996.pdf | 677 K | none | no |
+| Deng2019.pdf | 11186 K | none | no |
+| Deng2020.pdf | 5910 K | none | no |
+| FischlerBolles1981.pdf | 1204 K | none | no |
+| Ge2021.pdf | 851 K | none | no |
+| Grother2019.pdf | 28858 K | none | no |
+| Guo2021.pdf | 4955 K | none | no |
+| Hartley1997.pdf | 4408 K | none | no |
+| HartleySturm1997.pdf | 431 K | none | no |
+| Hoppe1992.pdf | 562 K | none | yes |
+| Horn1987.pdf | 1436 K | none | no |
+| Hornung2013.pdf | 3592 K | none | no |
+| Huang2007.pdf | 218 K | none | no |
+| Kazhdan2006.pdf | 4463 K | none | yes |
+| Keller2013.pdf | 2390 K | none | no |
+| KutulakosSeitz2000.pdf | 861 K | none | no |
+| Lowe2004.pdf | 444 K | none | no |
+| Maze2018.pdf | 4057 K | none | no |
+| Newcombe2011.pdf | 8099 K | none | no |
+| Redmon2018.pdf | 2398 K | none | no |
+| ScharsteinSzeliski2002.pdf | 1470 K | none | no |
+| Schroff2015.pdf | 4594 K | none | no |
+| Seitz2006.pdf | 1786 K | none | no |
+| Snavely2006.pdf | 1681 K | none | no |
+
+Files with real active-content findings: 0.

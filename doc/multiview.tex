@@ -2713,6 +2713,8 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         \code{MV\_READER\_DEBUG=1} for tracing). Sub-pixel template
         detection, validated blind through the rendered pipeline at
         $0.25$--$0.35$\,px (\autoref{tab:patresults}).
+        \emph{Unlocks}: the image-tier calibration chain that every
+        entry below assumes.
   \item \textbf{[partially done] Calibration subsystem completion} ---
         built so far: pattern generator, synthetic renderer, and blind
         reader (\code{mv/pattern.h}, \code{mv/render.h},
@@ -2726,7 +2728,11 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         session --- one revolution in, geometry and clocks out --- and
         every missing piece already has its spec (\autoref{sec:calibspec})
         and its acceptance statistic waiting; nothing needs inventing,
-        only building.
+        only building. \emph{Unlocks}: real-rig deployment of every
+        scenario in \autoref{sec:scenarios} (all assume a calibrated,
+        clock-modeled rig), and the M0 radiometric path that the
+        lighting/diurnal scenario (\autoref{sec:lightscen}) needs on
+        real hardware.
   \item \textbf{Levenberg--Marquardt refinement} (later: bundle
         adjustment \cite{Triggs2000}). Joint nonlinear minimization of
         reprojection error over intrinsics, poses, and distortion.
@@ -2737,12 +2743,19 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         wrong); it tightens every calibration number in
         \autoref{sec:results}, and the same LM core serves the orbit
         fit, the clock fit, and eventually bundle adjustment.
+        \emph{Unlocks}: no new scenario --- it upgrades all of them;
+        tightened $\K$ and clocks propagate into every tracking and
+        model figure, and the drift monitor gains sensitivity.
   \item \textbf{Feature detection and robust matching}. General interest
         points with descriptors, matched under the RANSAC gate of
         \autoref{sec:epipolar}. \emph{Pitch}: unlocks everything
         ``live'' --- the $\F$-drift and $\Delta t$ monitors get real
         correspondences to chew on, and movers become trackable from
-        images rather than simulated detections.
+        images rather than simulated detections. \emph{Unlocks}: live
+        insect counting and robot tracking
+        (\autoref{sec:insects}, \autoref{tab:trackresults}) on real
+        footage, and the run-time $\Delta t$ estimator of
+        \autoref{sec:softsync}.
   \item \textbf{Rectification warping and the dense path}. Bilinear
         image resampling through the precomputed homographies of
         \autoref{sec:stereo}, connecting real frames to the existing
@@ -2750,7 +2763,10 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         camera and depth map --- it closes the pipeline of
         \autoref{sec:overview} end-to-end and is the named missing
         input of the TSDF (item 9); the bilinear machinery already
-        exists in \code{mv/render.h}.
+        exists in \code{mv/render.h}. \emph{Unlocks}: dense change
+        detection and moving-object silhouettes (sharpening the
+        occupancy trajectories of \autoref{sec:occupancy}), and ---
+        with items 6 and 9 --- the first real-image room model.
   \item \textbf{Temporal statistics and the background model}.
         Per-pixel median depth over time, fused into a background TSDF
         (\autoref{sec:background}); movers by disagreement.
@@ -2758,7 +2774,10 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         --- and it delivers the headline products at once: a furniture-level
         mesh of the room and the unified mover-separation front end that
         the scenario trackers (\autoref{sec:scenarios}) currently
-        simulate.
+        simulate. \emph{Unlocks}: the furniture-level room mesh and
+        scene-rearrangement events as standing applications, and it
+        upgrades insect, robot, and occupancy tracking from
+        per-scenario detectors to one background-subtraction pipeline.
   \item \textbf{Photo-collection registration}
         (\autoref{sec:photos}). Resection of auxiliary photos against
         triangulated structure; $N$-view DLT already accepts the extra
@@ -2766,13 +2785,20 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         (the topology argument of \autoref{sec:occlusion}) --- and its
         dynamic limit is the tracked mobile camera with measured poses,
         the self-tracking extension of \autoref{sec:capabilities}.
+        \emph{Unlocks}: high-fidelity topology capture (the coverage
+        argument of \autoref{sec:occlusion}) and the drone /
+        self-tracking scenario itself.
   \item \textbf{Optimal and weighted estimators}. Hartley--Sturm
         triangulation \cite{HartleySturm1997}, Mahalanobis-weighted
         model fits, weighted DLT (\autoref{sec:heterogeneous}).
         \emph{Pitch}: retires the \emph{documented} estimator floors ---
         the circle-fit anisotropy of \autoref{tab:diagtrack} and the
         equal-weight DLT --- each with its regression already measured,
-        so improvement is provable, not aspirational.
+        so improvement is provable, not aspirational. \emph{Unlocks}:
+        mover tracking in the regimes the current fits leave
+        (\autoref{tab:diagtrack}) --- fast insects at range, robots in
+        dim light --- and honest fusion of unequal cameras
+        (\autoref{sec:heterogeneous}).
   \item \textbf{[done at sim tier] TSDF completion} --- implemented
         in \code{src/tsdf.c}; setup and run instructions are in the
         comment atop \code{mv/tsdf.h} (\code{make demo\_tsdf}; mesh
@@ -2782,7 +2808,10 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         plane/primitive extraction on the background model.
         \emph{Pitch}: every remaining piece rides on item 5 or 6;
         primitives (\autoref{sec:ladder}) then give the furniture-level
-        scene description almost for free.
+        scene description almost for free. \emph{Unlocks}: continuous
+        room-model maintenance and geometric change detection as a
+        standing application beside the \autoref{sec:scenarios}
+        trackers.
   \item \textbf{The identity sidecar} (\autoref{sec:faces}). Person and
         face detection behind the ONNX Runtime seam, replayed oracles as
         fixtures. \emph{Pitch}: the contract is fully specified down to
@@ -2790,7 +2819,8 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         (\autoref{tab:plugins}--\autoref{tab:pluginquality}); it
         upgrades occupancy from height-cohort identification to named
         persons at the door chokepoint, with its acceptance test
-        (\autoref{sec:openset}) already defined.
+        (\autoref{sec:openset}) already defined. \emph{Unlocks}:
+        named-person occupancy timelines and stranger detection.
 \end{enumerate}
 
 If the hardware materializes, the optional range-finder integration of
@@ -2802,6 +2832,37 @@ system produces its first real-image room model. Each step lands as a
 new module behind the same conventions (\autoref{tab:modules}) with its
 own noiseless-exact tests and a synthetic experiment extending
 \autoref{sec:results}.
+
+\autoref{tab:unlocks} inverts the list: for each application scenario in
+the document, which roadmap items unlock it, what can be developed and
+validated in simulation alone, and what genuinely requires hardware.
+
+\begin{table}[ht]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{l c l l}
+\toprule
+Scenario & Items & Sim-only development & Requires hardware \\
+\midrule
+robot tracking (\autoref{tab:trackresults}) & 2, 4 & \emph{done} (tracker $+$ fits) & rig $+$ live detections \\
+insect counting (\autoref{sec:insects}) & 2, 4, 8 & \emph{done} (tracker, gating, stats) & rig; detection is at image tier \\
+occupancy, height-ID (\autoref{sec:occupancy}) & 2, 4, 5 & \emph{done} (tracking, ID, paths) & rig $+$ live detections \\
+lighting / diurnal (\autoref{sec:lightscen}) & 2 & \emph{done} (analyzer, 120-day synthetic) & calibrated camera $+$ M0; real lamps \\
+calibration session (\autoref{sec:calibspec}) & 2, 3 & reader \emph{done}; orbit/clock fits simmable & display, plate, cameras \\
+room model $+$ change detection (\autoref{sec:background}) & 5, 6, 9 & TSDF \emph{done}; background composable & rig for real-image depth \\
+topology capture (\autoref{sec:occlusion}) & 7 & fully simmable (rendered scenes) & photos of real objects \\
+named-person identity (\autoref{sec:faces}) & 2, 10 & fusion logic, synthetic embeddings & identity camera $+$ sidecar; real faces \\
+drone / self-tracking (\autoref{sec:capabilities}) & 4, 7, 8 & fully simmable (mover carrying a sensor) & drone $+$ rig \\
+\bottomrule
+\end{tabular}
+\caption{Scenario unlock map. ``Items'' are the roadmap entries above;
+\emph{done} marks sim-tier validation already reported in
+\autoref{sec:results}--\autoref{sec:scenarios}. Every scenario's
+\emph{estimation} layer is sim-developable; hardware enters for real
+detections, real radiometry, and real faces.}
+\label{tab:unlocks}
+\end{table}
 
 \appendix
 %----------------------------------------------------------------------

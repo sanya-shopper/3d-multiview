@@ -48,6 +48,10 @@ test_mv: tests/test_mv.o libmv.a
 
 check: test_mv
 	./test_mv
+	python3 tests/check_bib.py
+
+checkbib:
+	python3 tests/check_bib.py
 
 demo: demo_synthetic demo_calibrate demo_track demo_diagnose \
       demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf

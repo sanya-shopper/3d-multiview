@@ -37,8 +37,9 @@ section to its module and its validating test or experiment.
   the printable target (`target_letter.pgm`)
 - further deterministic experiments: tracking (`track_robot`, `track_insects`,
   `track_people`), photometric analysis (`lightlog`), error diagnostics
-  (`diagnose`), the calibration-pattern pipeline (`patternsim`), and TSDF
-  fusion (`tsdfsim`) — `make demo` runs them all
+  (`diagnose`), the calibration-pattern pipeline (`patternsim`), TSDF
+  fusion (`tsdfsim`), and the dense room model with change detection
+  (`roomsim`) — `make demo` runs them all
 - `tests/test_mv.c` — exact-property unit tests on noiseless data
 - `doc/` — self-contained LaTeX documentation with local bibliography
 

@@ -496,6 +496,59 @@ static void test_tsdf(void)
     mv_tsdf_free(&t);
 }
 
+static void test_warp_scene(void)
+{
+    /* warp: identity homography reproduces the image exactly */
+    static unsigned char src[64 * 48], dst[64 * 48];
+    double Hid[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    int i, ok = 1;
+    for (i = 0; i < 64 * 48; i++)
+        src[i] = (unsigned char)((i * 37) & 0xff);
+    CHECK(mv_warp_homography(dst, 64, 48, src, 64, 48, Hid, 0) == MV_OK,
+          "warp: runs");
+    for (i = 0; i < 64 * 48; i++)
+        if (dst[i] != src[i] && i % 64 < 63 && i / 64 < 47)
+            ok = 0;
+    CHECK(ok, "warp: identity homography is exact");
+
+    /* scene renderer: frontal plane at Z=2 gives depth 2 at center */
+    {
+        static unsigned char tex[32 * 32], img[64 * 48];
+        static float zc[64 * 48];
+        mv_camera cam;
+        mv_plane pl;
+        static const double ex[3] = { 1, 0, 0 }, ey[3] = { 0, 1, 0 };
+        double r3[3], t0[3] = { -0.32, -0.24, 2.0 };
+        int j;
+        for (i = 0; i < 32 * 32; i++)
+            tex[i] = (unsigned char)(i & 0xff);
+        mv_cam_set_K(&cam, 100.0, 100.0, 32.0, 24.0);
+        mv_cam_set_identity_pose(&cam);
+        memset(cam.k, 0, sizeof(cam.k));
+        for (j = 0; j < 3; j++) {
+            pl.R[j * 3 + 0] = ex[j];
+            pl.R[j * 3 + 1] = ey[j];
+            pl.t[j] = t0[j];
+        }
+        mv_cross3(r3, ex, ey);
+        for (j = 0; j < 3; j++)
+            pl.R[j * 3 + 2] = r3[j];
+        pl.tex = tex;
+        pl.tw = 32;
+        pl.th = 32;
+        pl.pitch = 0.02;
+        {
+            unsigned long long seed = 5;
+            CHECK(mv_render_scene(img, zc, 64, 48, &cam, &pl, 1, 7, 0.0,
+                                  &seed) == MV_OK, "scene render: runs");
+        }
+        CHECK(fabs(zc[24 * 64 + 32] - 2.0) < 1e-9,
+              "scene render: center depth exact");
+        CHECK(zc[0] == HUGE_VALF || zc[0] == 2.0f,
+              "scene render: miss marked or hit");
+    }
+}
+
 int main(void)
 {
     test_inv3();
@@ -510,6 +563,7 @@ int main(void)
     test_graycode();
     test_pattern();
     test_tsdf();
+    test_warp_scene();
     if (failures) {
         printf("\n%d FAILURE(S)\n", failures);
         return 1;

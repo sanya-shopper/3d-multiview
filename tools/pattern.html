@@ -6,6 +6,7 @@
 
      Keys / taps:
        1  mode M2: composite pattern, counter advancing (calibration)
+       4  mode M4: coarse tier (spec v2) -- room-range calibration
        2  mode M3: full-screen toggle (rolling-shutter banding)
        3  mode M0: flat gray ladder (radiometrics)
        f  fullscreen        i  info overlay        d  download DSP log
@@ -99,6 +100,26 @@ function drawM2(k){
 }
 function drawM3(k){ g2.fillStyle = (k&1)?'#000':'#fff';
                     g2.fillRect(0,0,PW,PH); }
+/* coarse tier (pattern spec v2, mv/pattern.h): 6x3 checker of 270 px
+   cells, mark L for orientation, isolated-square 8-bit counter strip
+   -- readable at ~3.4x the range of the fine tier */
+function drawM4(k){
+  const C2=270, X2=150, Y2=90, MK=90, CX2=150, CY2=1005, CC2=135, CH2=60;
+  g2.fillStyle='#fff'; g2.fillRect(0,0,PW,PH);
+  const B=(x,y,w,h,on)=>{ g2.fillStyle = on?'#000':'#fff';
+                          g2.fillRect(x,y,w,h); };
+  const mark=(c,r)=>((r===0&&(c===0||c===1))||(r===1&&c===0));
+  for(let r=0;r<3;r++) for(let c=0;c<6;c++){
+    const x=X2+C2*c, y=Y2+C2*r, black=((r+c)%2===0);
+    if(black) B(x,y,C2,C2,1);
+    if(mark(c,r)){ const d0=(C2-MK)/2;
+      B(x+d0,y+d0,MK,MK, black?0:1); }
+  }
+  { const gv=gray(k&255); let par=0; const bits=[1,0];
+    for(let i=7;i>=0;i--){ const b=(gv>>>i)&1; par^=b; bits.push(b); }
+    bits.push(par, par^1);
+    bits.forEach((b,i)=>{ if(b) B(CX2+CC2*i+22,CY2,MK,CH2,1); }); }
+}
 function drawM0(k){ const lv=[0,64,128,192,255];
   const l=lv[Math.floor(k/180)%lv.length];      /* ~3 s per step */
   g2.fillStyle=`rgb(${l},${l},${l})`; g2.fillRect(0,0,PW,PH); }
@@ -115,7 +136,8 @@ function tick(t){
   }
   if(!paused){
     k = Math.round((t - t0)/Td);
-    if(mode===1) drawM2(k); else if(mode===2) drawM3(k); else drawM0(k);
+    if(mode===1) drawM2(k); else if(mode===2) drawM3(k);
+    else if(mode===4) drawM4(k); else drawM0(k);
     if(log.length<200000) log.push('DSP k='+k+' t='+(t/1000).toFixed(6));
   }
   requestAnimationFrame(tick);
@@ -126,12 +148,12 @@ function showInfo(){
   info.style.display = info.style.display==='none'?'block':'none';
   info.innerHTML =
    'multiview pattern spec v'+SPECVER+' &nbsp; mode M'+
-   (mode===1?'2 composite':mode===2?'3 toggle':'0 ladder')+
+   (mode===1?'2 composite':mode===2?'3 toggle':mode===4?'4 coarse (room range)':'0 ladder')+
    '<br>refresh Td &approx; '+Td.toFixed(3)+' ms, frame k='+k+
    '<br>render scale 1:'+scale+' (device px)'+
    '<br><br>MEASURE: one grid square with a ruler;'+
    '<br>pitch = measured mm / '+(CELL*scale)+' &rarr; session manifest.'+
-   '<br><br>keys: 1/2/3 mode &middot; f fullscreen &middot; '+
+   '<br><br>keys: 1/2/3/4 mode &middot; f fullscreen &middot; '+
    'd download log &middot; i hide';
 }
 function dl(){
@@ -141,7 +163,8 @@ function dl(){
 }
 addEventListener('keydown',e=>{
   if(e.key==='1')mode=1; else if(e.key==='2')mode=2;
-  else if(e.key==='3')mode=3; else if(e.key==='f')
+  else if(e.key==='3')mode=3; else if(e.key==='4')mode=4;
+  else if(e.key==='f')
     (document.fullscreenElement?document.exitFullscreen()
      :document.documentElement.requestFullscreen());
   else if(e.key==='i')showInfo(); else if(e.key==='d')dl();
@@ -150,7 +173,7 @@ addEventListener('keydown',e=>{
 /* touch: tap cycles mode, two-finger tap = info (for the iPhone case) */
 addEventListener('touchend',e=>{
   if(e.touches.length===0 && e.changedTouches.length===1)
-    mode = mode%3+1;
+    mode = mode%4+1;
   else showInfo();
 });
 </script>

@@ -45,24 +45,36 @@ int main(int argc, char **argv)
             printf("%-28s : unreadable\n", argv[f]);
             continue;
         }
+        int tier = 1;
         if (mv_read_pattern(&rr, img, w, h) != MV_OK) {
-            printf("%-28s : no pattern found\n", argv[f]);
-            free(img);
-            continue;
+            if (mv_read_coarse(&rr, img, w, h) != MV_OK) {
+                printf("%-28s : no pattern found\n", argv[f]);
+                free(img);
+                continue;
+            }
+            tier = 2;
         }
-        printf("%-28s : %3d corners, rot %d, counter %s%u (conf %.2f)\n",
-               argv[f], rr.n, rr.rot, rr.counter_valid ? "" : "INVALID ",
-               rr.counter, rr.counter_conf);
+        printf("%-28s : %3d corners%s, rot %d, counter %s%u "
+               "(conf %.2f)\n", argv[f], rr.n,
+               tier == 2 ? " (coarse)" : "", rr.rot,
+               rr.counter_valid ? "" : "INVALID ", rr.counter,
+               rr.counter_conf);
         if (getenv("MV_DUMP_CORNERS")) {
             for (i = 0; i < rr.n; i++)
                 fprintf(stderr, "CRN %d %d %.3f %.3f\n", f - 2,
                         rr.id[i], rr.uv[2 * i], rr.uv[2 * i + 1]);
         }
-        if (rr.n >= 50 && nviews < MAXV) {
+        if (rr.n >= (tier == 1 ? 50 : 8) && nviews < MAXV) {
             for (i = 0; i < rr.n; i++) {
                 double xy[2];
-                mv_pattern_corner_px(rr.id[i] % MV_PAT_CORNER_COLS,
-                                     rr.id[i] / MV_PAT_CORNER_COLS, xy);
+                if (tier == 1)
+                    mv_pattern_corner_px(rr.id[i] % MV_PAT_CORNER_COLS,
+                                         rr.id[i] / MV_PAT_CORNER_COLS,
+                                         xy);
+                else
+                    mv_pattern2_corner_px(rr.id[i] % MV_PAT2_CORNER_COLS,
+                                          rr.id[i] / MV_PAT2_CORNER_COLS,
+                                          xy);
                 objs[nviews][2 * i] = xy[0] * pitch;
                 objs[nviews][2 * i + 1] = xy[1] * pitch;
                 imgs[nviews][2 * i] = rr.uv[2 * i];

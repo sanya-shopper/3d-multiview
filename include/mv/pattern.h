@@ -60,4 +60,46 @@ void mv_pattern_ctr_cell_px(int c, double xy[2]);
 /* Verify the shipped M-array properties exhaustively; MV_OK if valid. */
 int mv_pattern_selftest(void);
 
+/* ---- Coarse tier (pattern spec v2) --------------------------------
+ *
+ * Room-range layout: the fine tier above needs ~17 px per 80 px cell
+ * on the sensor (usable to ~1.1 m for a phone, ~0.6 m for a 720p
+ * webcam -- doc eq. "patrange"); the coarse tier scales every feature
+ * up ~3.4x for the same display, extending reach by the same factor.
+ * 6x3 checkerboard of 270 px cells (10 inner corners), an asymmetric
+ * L of three 90 px marks in the top-left cells for orientation (the
+ * mark set maps to a disjoint set under every non-identity rotation),
+ * and a 12-cell counter strip along the bottom: [1,0] sync + 8 Gray
+ * bits + parity + ~parity, wrapping every 256 refreshes (~4.3 s at
+ * 60 Hz; consumers disambiguate wraps by capture-time proximity or
+ * rig-rigidity consistency). */
+
+#define MV_PAT2_GRID_COLS 6
+#define MV_PAT2_GRID_ROWS 3
+#define MV_PAT2_CELL 270
+#define MV_PAT2_GRID_X0 150
+#define MV_PAT2_GRID_Y0 90
+#define MV_PAT2_CORNER_COLS 5 /* inner corner lattice */
+#define MV_PAT2_CORNER_ROWS 2
+#define MV_PAT2_MARK 90       /* orientation mark size */
+#define MV_PAT2_CTR_X0 150
+#define MV_PAT2_CTR_Y0 1005  /* strip centered 1.5 lattice steps below
+                              * the bottom corner row: the gutters
+                              * between adjacent squares are true
+                              * saddles, so they must sit where grid
+                              * growth (integer steps) cannot reach */
+#define MV_PAT2_CTR_CELL 135  /* counter cell width */
+#define MV_PAT2_CTR_H 60      /* square height (width MV_PAT2_MARK) */
+#define MV_PAT2_CTR_BITS 8
+#define MV_PAT2_CTR_CELLS 12  /* [1,0] + 8 bits + parity + ~parity */
+
+/* 1 if grid cell (col 0..5, row 0..2) carries an orientation mark. */
+int mv_pattern2_mark(int col, int row);
+
+/* Render the full coarse frame for a counter value (low 8 bits used). */
+void mv_pattern2_render(unsigned char *img, unsigned counter);
+
+/* Display-pixel coordinates of coarse inner corner (i 0..4, j 0..1). */
+void mv_pattern2_corner_px(int i, int j, double xy[2]);
+
 #endif /* MV_PATTERN_H */

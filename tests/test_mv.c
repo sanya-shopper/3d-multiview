@@ -538,6 +538,79 @@ static void test_pattern(void)
     }
 }
 
+static void test_pattern_coarse(void)
+{
+    /* Coarse tier (spec v2): must decode at the exact geometry that
+     * defeated the fine tier in the field -- a 720p webcam at room
+     * range, pattern ~160 px wide -- and under a 180-degree roll with
+     * noise. */
+    static unsigned char pat[MV_PAT_W * MV_PAT_H];
+    static unsigned char img[1280 * 720];
+    const double pitch = 0.0002745;
+    mv_camera cam;
+    mv_read_result rr;
+    unsigned long long seed = 9;
+    double center[3] = { MV_PAT_W / 2.0 * 0.0002745,
+                         MV_PAT_H / 2.0 * 0.0002745, 0.0 };
+    int i, v;
+
+    mv_pattern2_render(pat, 173u);
+    for (v = 0; v < 2; v++) {
+        double sigma = v ? 1.5 : 0.0;
+        mv_cam_set_K(&cam, 1100.0, 1100.0, 640.0, 360.0);
+        mv_cam_set_identity_pose(&cam);
+        memset(cam.k, 0, sizeof(cam.k));
+        if (v) { /* 180-degree roll plus a tilt */
+            double ca = cos(0.35), sa = sin(0.35);
+            double Rz[9] = { -1, 0, 0, 0, -1, 0, 0, 0, 1 };
+            double Rx[9];
+            Rx[0] = 1; Rx[1] = 0;  Rx[2] = 0;
+            Rx[3] = 0; Rx[4] = ca; Rx[5] = -sa;
+            Rx[6] = 0; Rx[7] = sa; Rx[8] = ca;
+            mv_mat_mul(cam.R, Rz, Rx, 3, 3, 3);
+        }
+        for (i = 0; i < 3; i++)
+            cam.t[i] = -(cam.R[i * 3 + 0] * center[0]
+                         + cam.R[i * 3 + 1] * center[1]
+                         + cam.R[i * 3 + 2] * center[2]);
+        cam.t[2] += 3.6; /* pattern spans ~160 px: round-four range */
+        CHECK(mv_render_plane(img, 1280, 720, &cam, pat, MV_PAT_W,
+                              MV_PAT_H, pitch, 128, sigma, &seed)
+              == MV_OK, "coarse: render succeeds");
+        CHECK(mv_read_coarse(&rr, img, 1280, 720) == MV_OK,
+              "coarse: blind read succeeds at room range");
+        CHECK(rr.n == 10, "coarse: all 10 corners found");
+        /* note: rr.rot is relative to the arbitrarily-oriented grown
+         * lattice, not to the camera roll; orientation correctness is
+         * checked below through the corner ids themselves */
+        {
+            double se = 0.0;
+            int id_bad = 0;
+            for (i = 0; i < rr.n; i++) {
+                double xy[2], X[3], uv[2], du, dv, e2;
+                mv_pattern2_corner_px(rr.id[i] % MV_PAT2_CORNER_COLS,
+                                      rr.id[i] / MV_PAT2_CORNER_COLS,
+                                      xy);
+                X[0] = xy[0] * pitch;
+                X[1] = xy[1] * pitch;
+                X[2] = 0.0;
+                mv_cam_project(uv, &cam, X);
+                du = rr.uv[2 * i] - uv[0];
+                dv = rr.uv[2 * i + 1] - uv[1];
+                e2 = du * du + dv * dv;
+                se += e2;
+                if (e2 > 4.0)
+                    id_bad++;
+            }
+            CHECK(id_bad == 0, "coarse: every corner id correct");
+            CHECK(sqrt(se / rr.n) < 1.0,
+                  "coarse: localization RMS < 1 px");
+        }
+        CHECK(rr.counter_valid && rr.counter == 173u,
+              "coarse: counter decodes exactly");
+    }
+}
+
 static void test_tsdf(void)
 {
     mv_camera c1, c2;
@@ -682,6 +755,7 @@ int main(void)
     test_calib_robust();
     test_graycode();
     test_pattern();
+    test_pattern_coarse();
     test_tsdf();
     test_warp_scene();
     if (failures) {

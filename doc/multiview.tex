@@ -1176,7 +1176,8 @@ upward:
         per-voxel averages \cite{CurlessLevoy1996}; incremental,
         noise-averaging, topology-agnostic --- the workhorse of the
         KinectFusion lineage \cite{Newcombe2011} and the natural
-        accumulation structure for our per-frame depth.
+        accumulation structure for our per-frame depth
+        (elaborated in \autoref{sec:tsdf}).
   \item \emph{Triangulated meshes}: extracted from a TSDF by marching
         cubes \cite{Lorensen1987}, or from oriented points by Poisson
         reconstruction \cite{Kazhdan2006}. Both are mature and reliable
@@ -1199,6 +1200,67 @@ Modern learned implicit representations (neural radiance fields, Gaussian
 splatting) excel at appearance and view synthesis but are not metrically
 superior for measurement, and sit outside this system's portable-C99,
 controlled-environment charter.
+
+\subsection{The TSDF, in detail}
+\label{sec:tsdf}
+
+Since rung 2 is where this system's model extraction will live, it
+deserves more than a name. A \emph{truncated signed distance function}
+discretizes the working volume into voxels; each voxel $v$ stores two
+numbers, a distance estimate $D(v)$ and a weight $W(v)$. When a depth
+map arrives, every voxel looks up the depth $Z_{\text{obs}}$ at the
+pixel it projects to, compares it with its own depth $Z_v$ along that
+camera ray, and forms the signed offset
+$\eta = Z_{\text{obs}} - Z_v$ --- positive if the voxel lies in front
+of the observed surface, negative behind it. The observation is
+\emph{truncated}, $d = \max(-\tau, \min(\tau, \eta))$, and fused by a
+weighted running average \cite{CurlessLevoy1996}:
+\begin{equation}
+D \leftarrow \frac{W\,D + w\,d}{W + w}, \qquad W \leftarrow W + w,
+\label{eq:tsdf}
+\end{equation}
+with voxels far \emph{behind} the surface ($\eta < -\tau$) left
+untouched --- a voxel is only carved by rays that pass near or through
+it. The reconstructed surface is the zero level set of $D$, extracted
+as a mesh by marching cubes \cite{Lorensen1987} with linear
+interpolation along voxel edges for sub-voxel placement.
+
+Three design choices connect \eqref{eq:tsdf} to the rest of this
+document. \emph{Truncation} $\tau$ should cover the depth noise:
+$\tau \approx 3\sigma_Z$ at the working depth ($\approx7$\,cm for our
+rig at $4.7$\,m, \autoref{ex:deptherr}) --- larger wastes the band on
+uninformative updates, smaller throws away genuine measurements.
+\emph{Weights} implement the fusion discipline of
+\autoref{sec:heterogeneous}: $w = 1/\sigma_Z^2(Z_{\text{obs}})$, so
+near observations (and, later, laser samples, \autoref{sec:range})
+dominate exactly in proportion to their information. And averaging
+\emph{in distance space} is what makes the TSDF better than averaging
+points: each voxel's $D$ is a $\sqrt n$-averaged estimate of the same
+physical quantity, so surface precision improves with observation count
+--- per-frame $\sigma_Z = 23$\,mm becomes a sub-millimetre statistical
+floor within a minute of video ($23/\sqrt{900}\approx0.8$\,mm),
+long before which systematic terms take over (\autoref{sec:budget}).
+
+The stationary rig adds one more gift: because the cameras never move,
+each voxel's projection into each camera --- the pixel it reads and its
+depth along the ray --- is \emph{constant}, computable once at start-up
+and stored. The per-frame update collapses to a table-driven sweep: one
+depth-map lookup, one compare, one multiply-add per voxel per camera.
+
+\begin{example}[TSDF budget]
+\label{ex:tsdf}
+The working volume ($2.0\times1.3\times2.1$\,m) at $1$\,cm voxels:
+$200\times130\times210 \approx 5.5$M voxels; at 6 bytes each (float $D$
+$+$ 16-bit $W$) $\approx 33$\,MB --- trivial. At $5$\,mm:
+$44$M voxels, $\approx260$\,MB --- still a desktop, not a cluster. The
+per-frame sweep at $1$\,cm and $30$\,fps costs
+$5.5\text{M}\times2$ cameras $\times30 \approx 330$M table-driven
+updates per second --- feasible in plain C, and reducible by an order
+of magnitude by updating only the truncation band around the current
+surface. Sub-voxel zero-crossing interpolation means the $1$\,cm grid
+does not limit surface accuracy to $1$\,cm; the averaged noise does,
+and it is far smaller.
+\end{example}
 
 \subsection{Background extraction: the easiest product}
 \label{sec:background}
@@ -2514,10 +2576,15 @@ rectifying homographies with bilinear resampling, closing the dense video
 path end-to-end; (6) temporal cloud statistics for static/moving
 segmentation (\autoref{sec:models}); (7) photo-collection registration
 (\autoref{sec:photos}); (8) Hartley--Sturm optimal triangulation;
-(9) meshing; (10) the detector/identity sidecar of \autoref{sec:faces}
-(ONNX Runtime seam, recorded-oracle replay tests); and, if the hardware
-materializes, the optional range-finder integration of
-\autoref{sec:range}. Each step lands
+(9) meshing by the TSDF route of \autoref{sec:tsdf} --- \code{mv\_tsdf}
+fusion with precomputed voxel projections plus marching cubes, first
+validated at the sim tier by fusing noisy synthetic depth maps of a
+known object and scoring surface RMS against the $\sqrt n$ prediction
+(this step needs only the existing depth model, so it can proceed before
+the dense image path of item (5) closes); (10) the detector/identity
+sidecar of \autoref{sec:faces} (ONNX Runtime seam, recorded-oracle
+replay tests); and, if the hardware materializes, the optional
+range-finder integration of \autoref{sec:range}. Each step lands
 as a new module behind the same conventions (\autoref{tab:modules}) with
 its own noiseless-exact tests and a synthetic experiment extending
 \autoref{sec:results}.

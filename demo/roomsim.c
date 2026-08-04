@@ -13,8 +13,9 @@
  * Out: out_room_left.pgm   raw left view          (Preview opens PGM)
  *      out_room_rect.pgm   rectified left view
  *      out_room_disp.pgm   disparity map
- *      out_room_truth.pgm  shaded view of the TRUE generating model
- *      out_room_mesh.pgm   shaded view of the reconstructed mesh
+ *      out_room_truth.ppm  shaded color view of the TRUE model
+ *      out_room_mesh.ppm   shaded color view of the reconstruction
+ *                          (hue encodes surface orientation)
  *      out_room_change.pgm change mask after the box moves
  *      out_room.ply        the room mesh itself */
 
@@ -169,12 +170,27 @@ static void write_norm_pgm(const char *path, const float *v, int w, int h,
     free(img);
 }
 
-/* ---- shaded software preview of a triangle soup ---------------------- */
+/* ---- shaded software preview of a triangle soup ----------------------
+ * Color output (PPM P6): value from lighting + depth cue, hue from the
+ * surface normal (|nx| -> red, |ny| -> green, |nz| -> blue), so side
+ * walls read red-ish, floor and box top green-ish, back wall and box
+ * front blue-ish. */
+static void write_ppm(const char *path, const unsigned char *rgb, int w,
+                      int h)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return;
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    fwrite(rgb, 1, (size_t)w * h * 3, f);
+    fclose(f);
+}
+
 static void mesh_preview(const char *path, const double *tris, int ntri,
                          const double *alb)
 {
     mv_camera pc;
-    static unsigned char img[W * H];
+    static unsigned char img[W * H * 3];
     static float zb[W * H];
     double Cpos[3] = { 1.5, -1.0, 2.0 }; /* above-right, looking in */
     double light[3] = { -0.45, 0.65, 0.6 };
@@ -198,6 +214,7 @@ static void mesh_preview(const char *path, const double *tris, int ntri,
     memset(img, 15, sizeof(img));
     for (i = 0; i < W * H; i++)
         zb[i] = HUGE_VALF;
+
 
     for (k = 0; k < ntri; k++) {
         const double *a = tris + 9 * k, *b = a + 3, *c = a + 6;
@@ -245,18 +262,25 @@ static void mesh_preview(const char *path, const double *tris, int ntri,
                     z = l1 * za + l2 * zbv + l3 * zc2;
                     if (z > 0 && z < zb[y * W + x]) {
                         double att = 3.0 / z; /* mild depth cue */
-                        double v2;
+                        double v2, rr, gg, bb;
                         if (att < 0.55) att = 0.55;
                         if (att > 1.15) att = 1.15;
                         v2 = shade * att;
+                        rr = v2 * (0.30 + 0.70 * fabs(n[0]));
+                        gg = v2 * (0.30 + 0.70 * fabs(n[1]));
+                        bb = v2 * (0.30 + 0.70 * fabs(n[2]));
                         zb[y * W + x] = (float)z;
-                        img[y * W + x] =
-                            (unsigned char)(v2 > 255 ? 255 : v2);
+                        img[3 * (y * W + x) + 0] =
+                            (unsigned char)(rr > 255 ? 255 : rr);
+                        img[3 * (y * W + x) + 1] =
+                            (unsigned char)(gg > 255 ? 255 : gg);
+                        img[3 * (y * W + x) + 2] =
+                            (unsigned char)(bb > 255 ? 255 : bb);
                     }
                 }
         }
     }
-    mv_pgm_write(path, img, W, H);
+    write_ppm(path, img, W, H);
 }
 
 int main(void)
@@ -383,7 +407,7 @@ int main(void)
             alb[ngt] = PALB[p];
             ngt++;
         }
-        mesh_preview("out_room_truth.pgm", gt, ngt, alb);
+        mesh_preview("out_room_truth.ppm", gt, ngt, alb);
     }
 
     /* ---- fuse background into TSDF, extract, preview, score -------- */
@@ -425,7 +449,7 @@ int main(void)
                "(%.1f%% of vertices scored)\n", ntri,
                1000.0 * sqrt(se / ns), 100.0 * ns / (3.0 * ntri));
         mv_tsdf_write_ply(&t, "out_room.ply");
-        mesh_preview("out_room_mesh.pgm", tris, ntri, NULL);
+        mesh_preview("out_room_mesh.ppm", tris, ntri, NULL);
         free(tris);
     }
     mv_tsdf_free(&t);
@@ -508,6 +532,6 @@ int main(void)
                100.0 * tp / (tp + fn), 100.0 * fp / (W * H));
         mv_pgm_write("out_room_change.pgm", mask, W, H);
     }
-    printf("\nwrote out_room_left/disp/mesh/change.pgm and out_room.ply\n");
+    printf("\nwrote out_room_left/disp/change.pgm, truth/mesh.ppm, out_room.ply\n");
     return 0;
 }

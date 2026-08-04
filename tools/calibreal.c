@@ -19,7 +19,7 @@
 
 #include "mv/mv.h"
 
-#define MAXV 64
+#define MAXV 220
 
 int main(int argc, char **argv)
 {

@@ -2319,6 +2319,42 @@ confirmed stereo points, no smoothing, no mesh.}
 \label{fig:scenecloud}
 \end{figure}
 
+\paragraph{Round five: three cameras, and the first real extrinsics.}
+A reshoot with the cameras close to the pattern's dwell region
+delivered the multi-camera milestone. All three cameras calibrated ---
+including the first two \emph{webcam} calibrations ($f_x/f_y$
+$926.5/927.0$ at $0.612$\,px RMS over 192 accepted views, and
+$966.9/965.7$ at $0.418$\,px; the phone at $1676.1/1680.7$,
+$0.333$\,px). Notably the first webcam's inlier refit was
+\emph{accepted} by the robust estimator's guard: with genuine pose
+diversity in the video, 192 of 212 views contribute --- the guard
+distinguishes healthy sets from degenerate ones automatically, in
+both directions. Each camera also produced a point cloud
+(\code{tools/scenecloud.c}), with an instructive inversion: for a
+\emph{fixed} camera watching a \emph{moving} display, reconstruction
+happens in the display's frame, so the cloud is a turntable-style
+scan of whatever moves rigidly with the pattern (the laptop, crisply)
+while the static room, parallax-free in that frame, is suppressed by
+cross-pair confirmation.
+
+The extrinsics came from the display counter as a shared clock. Each
+camera's decoded counters fit a linear clock to $\pm1$ refresh over
+two minutes (the temporal camera model of \autoref{sec:timemodel} on
+real data), which located, for each webcam valid-counter instant, the
+sub-second window of the phone's video containing the simultaneous
+frame; dense extraction there manufactured counter-matched pairs.
+\code{tools/rigcalib.c} then solved phone$\to$webcam from three
+simultaneous observations: baseline $0.330$\,m, relative rotation
+$12.6^\circ$, with median pair-to-pair consistency $2.3^\circ$ /
+$6$\,mm --- three independent estimates, taken $\sim$$100$\,s apart,
+agreeing at millimetre scale (which also certifies both cameras held
+still). The second webcam yielded only one simultaneous view: the
+fine tier's $64$\,px counter cells are its weakest feature at range
+(valid in $2$--$5\%$ of decoded frames vs.\ $21\%$ for the phone),
+which is precisely the deficiency the coarse tier's isolated-square
+counter (\autoref{sec:coarsetier}) removes; the next capture runs in
+mode M4.
+
 \paragraph{Round four: the resolution floor, measured in the field.}
 An ambitious capture --- three fixed cameras (two 720p laptop webcams,
 one phone) watching the pattern laptop being carried around a room at
@@ -3136,9 +3172,10 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         (\autoref{sec:calibrobust}), the single-frame localizer
         \code{mv\_calib\_plane\_pose}, and the rig-extrinsics tool
         \code{tools/rigcalib.c} (counter-matched simultaneous views
-        $\to$ chordal-mean relative poses). All field-proven except
-        rigcalib, which awaits a capture with two cameras inside the
-        range law. Remaining: the record-emitting wrapper of
+        $\to$ chordal-mean relative poses). All components field-proven,
+        rigcalib included: the round-five capture produced the first
+        real camera-to-camera extrinsics ($0.330$\,m baseline at
+        $2.3^\circ$/$6$\,mm pair consistency). Remaining: the record-emitting wrapper of
         \autoref{tab:records} (the reader does not yet check the
         version block or sample the phase patches), and the joint
         orbit $+$ clock fits.

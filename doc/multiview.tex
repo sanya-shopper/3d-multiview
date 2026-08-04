@@ -2355,6 +2355,40 @@ which is precisely the deficiency the coarse tier's isolated-square
 counter (\autoref{sec:coarsetier}) removes; the next capture runs in
 mode M4.
 
+\paragraph{Detecting the laptop itself.} The noisy point clouds
+invite a cleaner demonstration of what the system knows: draw it on
+the image. \code{mv\_display\_outline} (\code{mv/reader.h}) is the
+system's first scene-object detector: given a decoded pattern read,
+it marches rays \emph{outward in pattern-plane coordinates} --- where
+the lit panel's edges are axis-aligned straight lines by construction
+--- sampling brightness through the homography until each ray goes
+dark, and takes the median stop per side. The median is the point:
+an earlier region-flooding version leaked through any bright object
+touching the panel in the image (a lit arm, a bright couch) and bent
+the fitted edges; a median over 48 rays shrugs off such bridges.
+Brightness references come from the pattern's own black and white
+cells, so no absolute thresholds are assumed.
+\autoref{fig:detect} shows \code{tools/annotate.c} on a real webcam
+frame: detected sub-pixel corners, the identified lattice, the
+pattern extent under the fitted homography, and the laptop's lit
+panel found by the detector --- the system drawing a box around the
+laptop it is looking at. The sim round trip (\code{make check})
+requires the recovered panel corners within 4\,px of ground truth.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.9\textwidth]{figs/detect_frame.png}
+\caption{Everything the system detected in one real 720p webcam
+frame (\code{tools/annotate.c}). Green: 159 sub-pixel saddle
+corners. Cyan: the identified corner lattice. Yellow: the pattern's
+$1920\times1080$ extent mapped through the fitted homography. Red:
+the laptop's lit display panel, \emph{detected} by
+\code{mv\_display\_outline}'s pattern-frame ray marching --- found
+in the image, not assumed from a spec. The hand adjusting the lid
+and the couch behind do not disturb the median-based edges.}
+\label{fig:detect}
+\end{figure}
+
 \paragraph{Round four: the resolution floor, measured in the field.}
 An ambitious capture --- three fixed cameras (two 720p laptop webcams,
 one phone) watching the pattern laptop being carried around a room at

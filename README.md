@@ -1,9 +1,11 @@
 # multiview
 
 A portable, dependency-free **C99** library for multiview-geometry scene
-analysis and 3D model extraction from the video of **two stationary
-cameras** observing an overlapping volume — optionally augmented by a
-collection of still photos, and later by range-finder data.
+analysis and 3D model extraction from the video of **fixed (stationary)
+cameras** — two in the reference rig — observing an overlapping volume;
+optionally augmented by a collection of still photos, later by
+range-finder data, and extensible to tracked mobile cameras that borrow
+their poses from the fixed backbone.
 
 Calibration is part of the system: the rig calibrates itself (Zhang's
 method) from views of a **printed letter-page checkerboard** of known square
@@ -33,6 +35,10 @@ section to its module and its validating test or experiment.
 - `demo/synthetic.c` — deterministic two-camera reconstruction experiment
 - `demo/calibrate.c` — deterministic calibration experiment; also renders
   the printable target (`target_letter.pgm`)
+- further deterministic experiments: tracking (`track_robot`, `track_insects`,
+  `track_people`), photometric analysis (`lightlog`), error diagnostics
+  (`diagnose`), the calibration-pattern pipeline (`patternsim`), and TSDF
+  fusion (`tsdfsim`) — `make demo` runs them all
 - `tests/test_mv.c` — exact-property unit tests on noiseless data
 - `doc/` — self-contained LaTeX documentation with local bibliography
 

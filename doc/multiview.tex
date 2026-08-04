@@ -31,7 +31,7 @@
 \newcommand{\Cv}{\vect{C}}
 \newcommand{\code}[1]{\texttt{#1}}
 
-\title{\textsc{multiview}: A Portable C99 System for Two-Camera\\
+\title{\textsc{multiview}: A Portable C99 System for Fixed-Camera\\
 Scene Analysis and 3D Model Extraction\\[4pt]
 \large A self-contained overview of the system and its mathematics}
 \author{Project documentation --- v0.4.0}
@@ -62,8 +62,15 @@ deterministic test programs in the repository.
 \section{Introduction and capabilities}
 \label{sec:capabilities}
 
-The target deployment is deliberately narrow and fully under our control: two
-cameras are rigidly mounted and observe the same working volume. The system
+The target deployment is deliberately narrow and fully under our control:
+\emph{fixed} cameras --- two in the reference rig --- are rigidly mounted
+and observe the same working volume. ``Fixed'' is the load-bearing word:
+the contrast is with mobile-camera systems (handheld, vehicle- or
+drone-mounted), which must solve ego-motion before they can measure
+anything. Here the cameras never move, so every rig-dependent quantity is
+computed once --- and a \emph{mobile} camera entering the volume is not a
+rival architecture but just another tracked mover, one that happens to
+carry a sensor (\autoref{sec:photos}). The system
 first \emph{calibrates itself} from views of a known planar target
 (\autoref{sec:calib}); thereafter video is processed frame by frame. Because
 the cameras do not move, every geometric quantity that depends only on the
@@ -71,7 +78,7 @@ rig --- projection matrices, the fundamental matrix, the rectifying
 homographies --- is computed \emph{once} and reused for every frame, which is
 the central efficiency win of the stationary-rig assumption.
 
-The implemented core (v0.2.0) provides:
+The implemented core (v0.4.0) provides:
 \begin{enumerate}
   \item plane-based calibration of intrinsics, distortion, and pose from a
         printed letter-page checkerboard or from a controlled display
@@ -88,6 +95,14 @@ The implemented core (v0.2.0) provides:
   \item planar stereo rectification of the pair, and dense correspondence by
         block matching with sub-pixel refinement, giving per-pixel depth
         (\autoref{sec:stereo});
+  \item the calibration-subsystem front half: the spec-v1 composite
+        screen generator with its shipped M-array, a synthetic renderer,
+        and the blind pattern reader --- corners, identities,
+        orientation, and frame counter from a single frame
+        (\autoref{sec:calibspec});
+  \item TSDF fusion over enriched samples with marching-tetrahedra mesh
+        extraction --- the first model representation beyond point
+        clouds (\autoref{sec:tsdf});
   \item point-cloud assembly and PLY
         export\footnote{PLY, the \emph{polygon file format} (also
         ``Stanford triangle format''), is the de-facto interchange
@@ -1656,6 +1671,17 @@ metric scale --- the classic scale ambiguity of pure SfM does not arise.
 Dense multiview stereo over the registered set (e.g.\ patch-based methods
 \cite{FurukawaPonce2010}) is a further optional stage.
 
+The dynamic limit of this idea is the \emph{tracked mobile camera}: a
+drone or handheld camera moving through the volume is, to the fixed rig,
+a rigid mover like any other (\autoref{sec:movers}) --- so the rig can
+track its pose over time with the machinery already validated in
+\autoref{sec:scenarios}, timestamp it via \autoref{sec:softsync}, and
+hand the mobile camera its own trajectory. Its frames then enter as
+registered auxiliary views with poses \emph{measured rather than
+estimated}: no ego-motion SfM, scale and drift anchored by the fixed
+backbone. The system becomes self-tracking in the useful sense --- the
+fixed cameras are the ground truth that mobile sensors borrow.
+
 \subsection{Range-finder fusion (optional, kept open)}
 \label{sec:range}
 
@@ -1746,7 +1772,7 @@ give bit-identical outputs across runs, so every regression is reproducible.
 \label{sec:results}
 
 Three validation layers accompany the library. \code{tests/test\_mv.c}
-checks exact properties on noiseless data (30 assertions: SVD
+checks exact properties on noiseless data (47 assertions: SVD
 reconstruction and orthonormality, ray/projection consistency,
 \eqref{eq:epiconstraint} to $10^{-8}$, exact homography and triangulation
 recovery, exact intrinsic/pose recovery by Zhang's method, Gray-code
@@ -2676,7 +2702,9 @@ with sub-pixel refinement (\code{mv/reader.h}, validated in
 subsystem to the contract of \autoref{sec:calibspec}: pattern generator,
 synthetic renderer, and blind reader are implemented and sim-validated;
 remaining are the display app (modes M0--M3), the record-emitting
-wrapper (\autoref{tab:records}), and the joint orbit $+$ clock fit; (3) Levenberg--Marquardt refinement
+wrapper (\autoref{tab:records}; the reader does not yet check the
+version block or sample the phase patches), and the joint
+orbit $+$ clock fit; (3) Levenberg--Marquardt refinement
 of calibration (and later bundle adjustment \cite{Triggs2000}); (4) feature
 detection/description and robust matching (enables live correspondences,
 RANSAC-gated by \autoref{sec:epipolar}); (5) image warping by the
@@ -3211,7 +3239,7 @@ Paper & Implementation & Validated by \\
 \autoref{sec:tsdf} & \code{mv/tsdf.h}, \code{src/tsdf.c} & sign/mesh tests; \autoref{tab:tsdfresults} \\
 \autoref{sec:results} diagnostics & \code{demo/diagnose.c} & the tripwires of \autoref{sec:statrules} \\
 \autoref{sec:scenarios} & \code{demo/track\_robot,insects,people}; \code{lightlog} & their ground-truth scoring \\
-\autoref{sec:statrules} T1 & \code{tests/test\_mv.c} (40 assertions) & \code{make check} \\
+\autoref{sec:statrules} T1 & \code{tests/test\_mv.c} (47 assertions) & \code{make check} \\
 \bottomrule
 \end{tabular}
 \caption{Code--paper cross-reference. Demos print exactly the numbers

@@ -7,7 +7,8 @@
 /* Calibration pattern reader (spec v1, doc section "The calibration
  * subsystem"): consumes one camera frame, returns identified corners in
  * pattern coordinates, the decoded frame counter, and the fitted
- * pattern->image homography. Blind: no pose prior needed. */
+ * pattern->image homography. Blind: no pose prior needed.
+ * Not reentrant: uses static working buffers; one reader call at a time. */
 
 #define MV_READ_MAXC 256
 

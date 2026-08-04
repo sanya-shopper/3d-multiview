@@ -13,7 +13,10 @@
  * sufficient for static-scene reconstruction. Mesh extraction is the
  * table-free marching-tetrahedra variant of marching cubes (six
  * tetrahedra per cube around the main diagonal, linear interpolation on
- * edges, triangles oriented outward). */
+ * edges, triangles oriented outward).
+ * Note: the band walk steps at 0.7 voxel, so one ray may update a voxel
+ * twice with correlated values -- weights are mildly optimistic; treat W
+ * as relative confidence, not an exact observation count. */
 
 typedef struct {
     int nx, ny, nz;

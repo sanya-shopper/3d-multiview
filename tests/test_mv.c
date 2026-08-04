@@ -419,6 +419,83 @@ static void test_pattern(void)
     }
 }
 
+static void test_tsdf(void)
+{
+    mv_camera c1, c2;
+    const mv_camera *cams[2];
+    double C2pos[3] = { 0.5, 0.0, 0.0 };
+    double ctr[3] = { 0.0, 0.1, 4.7 };
+    mv_tsdf t;
+    double *tris;
+    int ntri, ci, x, y, i;
+
+    mv_cam_set_K(&c1, 800.0, 800.0, 320.0, 240.0);
+    mv_cam_set_identity_pose(&c1);
+    memset(c1.k, 0, sizeof(c1.k));
+    c2 = c1;
+    mv_cam_set_pose_yaw(&c2, -6.0 * MV_PI / 180.0, C2pos);
+    cams[0] = &c1;
+    cams[1] = &c2;
+    CHECK(mv_tsdf_init(&t, ctr[0] - 0.45, ctr[1] - 0.45, ctr[2] - 0.45,
+                       0.9, 0.9, 0.9, 0.01, 0.05) == MV_OK,
+          "tsdf: init");
+    /* fuse noiseless depth of a r=0.3 sphere at ctr */
+    for (ci = 0; ci < 2; ci++) {
+        double O[3];
+        mv_cam_center(O, cams[ci]);
+        for (y = 0; y < 480; y++)
+            for (x = 0; x < 640; x++) {
+                double uv[2] = { (double)x, (double)y };
+                double orig[3], dir[3], oc[3], b, c, disc, s, p[3];
+                if (mv_cam_ray(orig, dir, cams[ci], uv) != MV_OK)
+                    continue;
+                for (i = 0; i < 3; i++)
+                    oc[i] = orig[i] - ctr[i];
+                b = mv_dot(oc, dir, 3);
+                c = mv_dot(oc, oc, 3) - 0.09;
+                disc = b * b - c;
+                if (disc < 0.0)
+                    continue;
+                s = -b - sqrt(disc);
+                for (i = 0; i < 3; i++)
+                    p[i] = orig[i] + s * dir[i];
+                mv_tsdf_fuse(&t, p, O, 1.0);
+            }
+    }
+    /* signed queries just outside / inside the front surface */
+    {
+        double qo[3] = { 0.0, 0.1, 4.7 - 0.3 - 0.03 };
+        double qi[3] = { 0.0, 0.1, 4.7 - 0.3 + 0.03 };
+        double vo = mv_tsdf_query(&t, qo), vi = mv_tsdf_query(&t, qi);
+        CHECK(vo < HUGE_VAL && vo > 0.01 && vo < 0.05,
+              "tsdf: positive outside the surface");
+        CHECK(vi < HUGE_VAL && vi < -0.01 && vi > -0.05,
+              "tsdf: negative inside the surface");
+    }
+    {
+        double far_q[3] = { 0.4, 0.4, 4.7 }; /* off the sphere band */
+        CHECK(mv_tsdf_query(&t, far_q) == HUGE_VAL,
+              "tsdf: unobserved voxels report unknown");
+    }
+    CHECK(mv_tsdf_mesh(&t, &tris, &ntri) == MV_OK && ntri > 1000,
+          "tsdf: mesh extraction");
+    {
+        double se = 0.0;
+        for (i = 0; i < 3 * ntri; i++) {
+            double d[3], e;
+            int a;
+            for (a = 0; a < 3; a++)
+                d[a] = tris[3 * i + a] - ctr[a];
+            e = mv_norm(d, 3) - 0.3;
+            se += e * e;
+        }
+        CHECK(sqrt(se / (3 * ntri)) < 0.003,
+              "tsdf: noiseless surface RMS < 3 mm");
+    }
+    free(tris);
+    mv_tsdf_free(&t);
+}
+
 int main(void)
 {
     test_inv3();
@@ -432,6 +509,7 @@ int main(void)
     test_radial();
     test_graycode();
     test_pattern();
+    test_tsdf();
     if (failures) {
         printf("\n%d FAILURE(S)\n", failures);
         return 1;

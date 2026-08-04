@@ -18,5 +18,6 @@
 #include "mv/stereo.h"
 #include "mv/img.h"
 #include "mv/cloud.h"
+#include "mv/tsdf.h"
 
 #endif /* MV_MV_H */

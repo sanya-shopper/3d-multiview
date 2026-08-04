@@ -385,6 +385,195 @@ out:
     }
 }
 
+/* ---- robust view-subset fit (see calib.h) ------------------------ */
+
+static unsigned long long rob_next(unsigned long long *s)
+{
+    *s = *s * 6364136223846793005ULL + 1442695040888963407ULL;
+    return *s >> 33;
+}
+
+/* reprojection RMS of one view under candidate K, pose from its own H */
+static double view_rms(const double K[9], const double H[9],
+                       const mv_calib_view *vw)
+{
+    mv_camera cam;
+    if (extrinsics_from_H(&cam, K, H) != MV_OK)
+        return HUGE_VAL;
+    return mv_calib_reproj_rms(&cam, vw, 1);
+}
+
+static double median_of(double *tmp, const double *x, int n)
+{
+    int i, j;
+    memcpy(tmp, x, (size_t)n * sizeof(double));
+    for (i = 1; i < n; i++) { /* insertion sort: n is a view count */
+        double v = tmp[i];
+        for (j = i; j > 0 && tmp[j - 1] > v; j--)
+            tmp[j] = tmp[j - 1];
+        tmp[j] = v;
+    }
+    return (n & 1) ? tmp[n / 2] : 0.5 * (tmp[n / 2 - 1] + tmp[n / 2]);
+}
+
+static double score_K(const double K[9], const double *Hs, const int *ok,
+                      const mv_calib_view *views, int nviews, double *rms,
+                      double *tmp)
+{
+    int i, nu = 0;
+    for (i = 0; i < nviews; i++) {
+        rms[i] = ok[i] ? view_rms(K, Hs + 9 * i, &views[i]) : HUGE_VAL;
+        if (ok[i])
+            tmp[nu++] = rms[i];
+    }
+    return nu ? median_of(tmp, tmp, nu) : HUGE_VAL;
+}
+
+int mv_calib_planar_robust(double K[9], mv_camera *cams, double k_radial[2],
+                           const mv_calib_view *views, int nviews,
+                           int zero_skew, unsigned char *inlier)
+{
+    enum { TRIALS = 64, SUBSET = 6 };
+    unsigned long long seed = 20260804ULL;
+    double *Hs = NULL, *rms = NULL, *tmp = NULL;
+    int *ok = NULL, *fitidx = NULL;
+    mv_calib_view *fitv = NULL;
+    mv_camera *fitcams = NULL;
+    double bestK[9], bestmed = HUGE_VAL, thr, kk[2] = { 0.0, 0.0 };
+    int bestpick[SUBSET];
+    int i, j, t, nusable = 0, nfit = 0, ret = MV_ERR;
+
+    if (nviews < 2 || !cams)
+        return MV_ERR;
+    if (nviews <= SUBSET) { /* too few views to subsample: plain fit */
+        if (mv_calib_planar(K, cams, k_radial, views, nviews,
+                            zero_skew) != MV_OK)
+            return MV_ERR;
+        if (inlier)
+            memset(inlier, 1, (size_t)nviews);
+        return MV_OK;
+    }
+
+    Hs = (double *)malloc((size_t)nviews * 9 * sizeof(double));
+    rms = (double *)malloc((size_t)nviews * sizeof(double));
+    tmp = (double *)malloc((size_t)nviews * sizeof(double));
+    ok = (int *)calloc((size_t)nviews, sizeof(int));
+    fitidx = (int *)malloc((size_t)nviews * sizeof(int));
+    fitv = (mv_calib_view *)malloc((size_t)nviews * sizeof(*fitv));
+    fitcams = (mv_camera *)malloc((size_t)nviews * sizeof(*fitcams));
+    if (!Hs || !rms || !tmp || !ok || !fitidx || !fitv || !fitcams)
+        goto done;
+
+    for (i = 0; i < nviews; i++) {
+        ok[i] = views[i].n >= 4
+             && mv_homography_dlt(Hs + 9 * i, views[i].obj, views[i].img,
+                                  views[i].n) == MV_OK;
+        nusable += ok[i];
+    }
+    if (nusable <= SUBSET) { /* not enough to subsample either */
+        if (mv_calib_planar(K, cams, k_radial, views, nviews,
+                            zero_skew) != MV_OK)
+            goto done;
+        if (inlier)
+            memset(inlier, 1, (size_t)nviews);
+        ret = MV_OK;
+        goto done;
+    }
+
+    for (t = 0; t < TRIALS; t++) {
+        int pick[SUBSET], np = 0;
+        mv_calib_view sub[SUBSET];
+        mv_camera subcams[SUBSET];
+        double Kt[9], med;
+        while (np < SUBSET) {
+            int c = (int)(rob_next(&seed) % (unsigned long long)nviews);
+            int dup = !ok[c];
+            for (j = 0; j < np; j++)
+                if (pick[j] == c)
+                    dup = 1;
+            if (!dup)
+                pick[np++] = c;
+        }
+        for (j = 0; j < SUBSET; j++)
+            sub[j] = views[pick[j]];
+        if (calib_once(Kt, subcams, sub, SUBSET, zero_skew) != MV_OK)
+            continue;
+        med = score_K(Kt, Hs, ok, views, nviews, rms, tmp);
+        if (med < bestmed) {
+            bestmed = med;
+            memcpy(bestK, Kt, sizeof(bestK));
+            memcpy(bestpick, pick, sizeof(bestpick));
+        }
+    }
+    if (bestmed == HUGE_VAL)
+        goto done;
+
+    /* inliers under the best subset's K, then refit on them */
+    score_K(bestK, Hs, ok, views, nviews, rms, tmp);
+    thr = 3.0 * bestmed + 1e-9;
+    for (i = 0; i < nviews; i++)
+        if (ok[i] && rms[i] <= thr)
+            fitidx[nfit++] = i;
+    memcpy(K, bestK, sizeof(bestK));
+    if (nfit >= 3) {
+        double K2[9], med2;
+        for (i = 0; i < nfit; i++)
+            fitv[i] = views[fitidx[i]];
+        if (mv_calib_planar(K2, fitcams, k_radial ? kk : NULL, fitv, nfit,
+                            zero_skew) == MV_OK) {
+            med2 = score_K(K2, Hs, ok, views, nviews, rms, tmp);
+            if (med2 <= 1.1 * bestmed + 1e-9)
+                memcpy(K, K2, sizeof(K2));
+            else
+                nfit = 0; /* refit worsened things: keep bestK */
+        } else {
+            nfit = 0;
+        }
+    } else {
+        nfit = 0;
+    }
+    if (!nfit) { /* fall back to refitting on the winning subset itself */
+        for (i = 0; i < SUBSET; i++)
+            fitv[i] = views[bestpick[i]];
+        if (mv_calib_planar(K, fitcams, k_radial ? kk : NULL, fitv, SUBSET,
+                            zero_skew) != MV_OK)
+            goto done;
+        memcpy(fitidx, bestpick, sizeof(bestpick));
+        nfit = SUBSET;
+    }
+
+    /* poses for every view: fitted ones from the accepted fit, the rest
+     * by decomposing their homography under the final K */
+    if (inlier)
+        memset(inlier, 0, (size_t)nviews);
+    for (i = 0; i < nviews; i++)
+        if (!ok[i] || extrinsics_from_H(&cams[i], K, Hs + 9 * i) != MV_OK)
+            memset(&cams[i], 0, sizeof(cams[i]));
+    for (i = 0; i < nfit; i++) {
+        cams[fitidx[i]] = fitcams[i];
+        if (inlier)
+            inlier[fitidx[i]] = 1;
+    }
+    for (i = 0; i < nviews; i++) {
+        cams[i].k[0] = kk[0];
+        cams[i].k[1] = kk[1];
+    }
+    if (k_radial) {
+        k_radial[0] = kk[0];
+        k_radial[1] = kk[1];
+    }
+    ret = MV_OK;
+done:
+    free(Hs);
+    free(rms);
+    free(tmp);
+    free(ok);
+    free(fitidx);
+    free(fitv);
+    free(fitcams);
+    return ret;
+}
+
 double mv_calib_reproj_rms(const mv_camera *cams, const mv_calib_view *views,
                            int nviews)
 {

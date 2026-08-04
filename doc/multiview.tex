@@ -460,6 +460,52 @@ $k_1$ and $k_2$ are individually ill-determined even when their combined
 targets, or the full-field display target of \autoref{sec:display}, are the
 cure when the individual coefficients matter.
 
+\subsection{Robust fitting from video: view selection}
+\label{sec:calibrobust}
+
+Filming the target instead of photographing it changes the statistics of
+the input in a way the estimator must respect. A one-minute video yields a
+hundred-plus decoded views, but they are not a hundred independent,
+well-chosen poses: most frames sit within a degree or two of wherever the
+camera happened to dwell, and near-fronto-parallel views are exactly the
+singular configuration of plane-based calibration
+\cite{SturmMaybank1999}. The linear system of \autoref{sec:zhang} weighs
+every view equally, so two hundred rows of noise-dominated near-degenerate
+constraints can outvote the handful of tilted frames that actually carry
+the focal length --- and a single corrupted decode (a mislabeled corner
+lattice) poisons the fit outright. Both failure modes were first observed
+on real handheld videos (\autoref{sec:results}), not in simulation:
+the full-video fit returned $f_x\approx458$ at 35\,px RMS while a
+hand-picked six-frame subset of the \emph{same} video returned
+$f_x\approx1599$ at 0.39\,px.
+
+The cure is classical: random sample consensus over \emph{views}
+\cite{FischlerBolles1981}. \code{mv\_calib\_planar\_robust}
+(\code{mv/calib.h}) fits Zhang's closed form on 64 deterministic random
+six-view subsets; each candidate $\K$ is scored by the \emph{median},
+across all views, of the per-view reprojection RMS with that view's pose
+recovered from its own homography under the candidate $\K$. The median
+makes the score indifferent to a minority of corrupted views, while a
+degenerate subset produces a garbage $\K$ that fits almost \emph{no} view
+and scores itself out. The winner defines inliers (per-view RMS within
+$3\times$ the best median); a final full fit with radial alternation runs
+on those inliers and is accepted only if it does not worsen the median
+score --- so the answer is never worse than the best subset found. The
+seed is fixed: the same frames give the same calibration, byte for byte.
+
+The unit test for this estimator (\code{test\_calib\_robust},
+\code{tests/test\_mv.c}) reproduces the field failure in simulation ---
+36 near-fronto-parallel views, four tilted ones, one corrupted, noise
+$\sigma=0.3$\,px --- and demands the robust fit recover the focal length
+within 2\% while plain Zhang, on the same data, fails outright. Building
+that test surfaced a trap worth recording: ``corrupting'' a view by
+\emph{reversing} its point order corrupts nothing, because a checkerboard
+lattice is centro-symmetric and reversal is precisely a $180^\circ$
+rotation of the plane --- still a perfectly valid homography. It is the
+same rotation ambiguity the pattern's M-array exists to resolve
+(\autoref{sec:calibspec}). A genuine corruption must be a non-projective
+scramble (the test swaps adjacent point pairs).
+
 \subsection{The printed target}
 \label{sec:printed}
 
@@ -2167,6 +2213,32 @@ display motion, and no estimator can conjure pose diversity that
 physics did not provide. The constant-distance printout is the
 practical degeneracy alarm: motion shows up as stepping distances
 (\autoref{tab:realcalib}) or it did not happen.
+
+\paragraph{Round three: robust video calibration, both cameras.} The
+reshoot round supplied minute-long videos from both phones and, with
+them, the failure that motivated \autoref{sec:calibrobust}: on the
+first video, plain Zhang over all 117 decoded frames returned
+$f_x=458$ at $35$\,px RMS, while a hand-picked six-frame subset of the
+same video returned $f_x\approx1599$ at $0.39$\,px --- the informative
+tilted frames were being outvoted by the fronto-parallel majority.
+\code{mv\_calib\_planar\_robust} settles it automatically: camera A
+calibrates to $f_x{=}1606.4$, $f_y{=}1607.0$ (square to $0.04\%$),
+RMS $0.315$\,px, distances $0.83$--$0.96$\,m; camera B to
+$f_x{=}1582.6$, $f_y{=}1627.4$, RMS $0.367$\,px at a near-constant
+$1.26$\,m --- flagged as weakly conditioned (the $2.8\%$ focal
+asymmetry and inflated $k_2$ are the fingerprints; its per-view
+distances barely step). Instructively, the estimator's guard rejected
+the inlier refit and kept a six-view fit in both cases: the redundant
+fronto-parallel frames are geometric \emph{inliers} under the correct
+$\K$ --- consensus cannot exclude them --- yet refitting on them still
+degrades the solution, so outlier rejection alone is insufficient; the
+median-score guard is what actually protects the answer. One more
+real-data observation worth recording: camera A's focal came out
+$4.8\%$ below its round-two value ($1687$ at $0.93$--$1.09$\,m focus
+vs.\ $1606$ at $0.83$--$0.96$\,m) at identical video resolution ---
+consistent with focus breathing, the effective-focal shift of an
+autofocus lens with subject distance (\autoref{sec:hardware}); a
+per-session calibration, which the pattern makes cheap, sidesteps it.
 
 \paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
 disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the

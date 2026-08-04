@@ -310,6 +310,113 @@ static void test_radial(void)
     }
 }
 
+static void test_calib_robust(void)
+{
+    /* A video-like view set: 36 near-fronto-parallel frames, 4 tilted
+     * ones, one corrupted read, noise sigma = 0.3 px.  Plain Zhang is
+     * swamped by the redundant frames (Sturm-Maybank degeneracy) and
+     * poisoned by the corrupt view; the robust fit must recover K from
+     * the informative minority and reject the corrupt view. */
+    enum { NV = 40, TILT0 = 36, BAD = 20 };
+    const double fx = 1600.0, fy = 1600.0, cxx = 540.0, cyy = 960.0;
+    static double obj[2 * MV_TARGET_LETTER_COLS * MV_TARGET_LETTER_ROWS];
+    static double img[NV][2 * MV_TARGET_LETTER_COLS * MV_TARGET_LETTER_ROWS];
+    mv_calib_view views[NV];
+    static mv_camera gt[NV], est[NV];
+    unsigned char inl[NV];
+    double K[9], k_radial[2];
+    unsigned long long s = 20260804ULL;
+    int n, v, i, j;
+
+#define TCR_U() ((double)((s = s * 6364136223846793005ULL \
+                               + 1442695040888963407ULL) >> 33) / 2147483648.0)
+    n = mv_target_checkerboard(obj, MV_TARGET_LETTER_COLS,
+                               MV_TARGET_LETTER_ROWS,
+                               MV_TARGET_LETTER_SQUARE);
+    for (v = 0; v < NV; v++) {
+        double ax, ay;
+        double cax, sax, cay, say, Rx[9], Ry[9];
+        if (v < TILT0) { /* fronto-parallel to within ~1.5 degrees */
+            ax = 0.025 * sin(0.7 * v);
+            ay = 0.025 * cos(1.1 * v);
+        } else { /* the informative minority: ~25 degree tilts */
+            ax = (v & 1) ? 0.45 : -0.45;
+            ay = (v & 2) ? 0.40 : -0.40;
+        }
+        cax = cos(ax); sax = sin(ax); cay = cos(ay); say = sin(ay);
+        Rx[0] = 1; Rx[1] = 0;   Rx[2] = 0;
+        Rx[3] = 0; Rx[4] = cax; Rx[5] = -sax;
+        Rx[6] = 0; Rx[7] = sax; Rx[8] = cax;
+        Ry[0] = cay; Ry[1] = 0; Ry[2] = -say;
+        Ry[3] = 0;   Ry[4] = 1; Ry[5] = 0;
+        Ry[6] = say; Ry[7] = 0; Ry[8] = cay;
+        mv_cam_set_K(&gt[v], fx, fy, cxx, cyy);
+        mv_mat_mul(gt[v].R, Rx, Ry, 3, 3, 3);
+        for (j = 0; j < 3; j++)
+            gt[v].t[j] = -(gt[v].R[j * 3 + 0] * 0.072
+                           + gt[v].R[j * 3 + 1] * 0.096);
+        gt[v].t[2] += 0.9 + 0.003 * v;
+        memset(gt[v].k, 0, sizeof(gt[v].k));
+        for (i = 0; i < n; i++) {
+            double X[3] = { obj[2 * i], obj[2 * i + 1], 0.0 };
+            double g0, g1;
+            mv_cam_project(img[v] + 2 * i, &gt[v], X);
+            /* gaussian-ish noise: sum of 12 uniforms - 6 */
+            g0 = g1 = -6.0;
+            for (j = 0; j < 12; j++) {
+                g0 += TCR_U();
+                g1 += TCR_U();
+            }
+            img[v][2 * i] += 0.3 * g0;
+            img[v][2 * i + 1] += 0.3 * g1;
+        }
+        views[v].obj = obj;
+        views[v].img = img[v];
+        views[v].n = n;
+    }
+#undef TCR_U
+    /* corrupt one fronto view by swapping adjacent point pairs.  NOTE:
+     * reversing the whole point order would NOT corrupt it - a checker
+     * grid is centro-symmetric, so reversal is a 180-degree rotation of
+     * the plane, still a perfectly valid homography (the same trap as
+     * the reader's rotation ambiguity).  Adjacent swaps are not a
+     * projective map, so this is a genuinely bad decode. */
+    for (i = 0; i + 1 < n; i += 2) {
+        double t0 = img[BAD][2 * i], t1 = img[BAD][2 * i + 1];
+        img[BAD][2 * i] = img[BAD][2 * (i + 1)];
+        img[BAD][2 * i + 1] = img[BAD][2 * (i + 1) + 1];
+        img[BAD][2 * (i + 1)] = t0;
+        img[BAD][2 * (i + 1) + 1] = t1;
+    }
+    CHECK(mv_calib_planar_robust(K, est, k_radial, views, NV, 1, inl)
+              == MV_OK, "robust calibration succeeds");
+    CHECK(fabs(K[0] - fx) / fx < 0.02 && fabs(K[4] - fy) / fy < 0.02,
+          "robust: focal within 2% on degenerate-heavy set");
+    CHECK(fabs(K[2] - cxx) < 25.0 && fabs(K[5] - cyy) < 25.0,
+          "robust: principal point within 25 px");
+    CHECK(!inl[BAD], "robust: corrupted view rejected");
+    {
+        int nin = 0;
+        for (v = 0; v < NV; v++)
+            nin += inl[v];
+        CHECK(nin >= 10, "robust: healthy views retained");
+    }
+    /* the discriminating half: plain Zhang on the same data must do
+     * WORSE than robust, or this test guards nothing */
+    {
+        static mv_camera pest[NV];
+        double Kp[9], kp[2], errp, errr;
+        if (mv_calib_planar(Kp, pest, kp, views, NV, 1) == MV_OK) {
+            errp = fabs(Kp[0] - fx) + fabs(Kp[4] - fy);
+            errr = fabs(K[0] - fx) + fabs(K[4] - fy);
+            CHECK(errp > errr,
+                  "robust: beats plain Zhang on the degenerate-heavy set");
+        } else {
+            CHECK(1, "robust: plain Zhang fails outright here");
+        }
+    }
+}
+
 static void test_graycode(void)
 {
     /* encode/decode roundtrip for a 1280-wide display axis */
@@ -560,6 +667,7 @@ int main(void)
     test_homography();
     test_calib();
     test_radial();
+    test_calib_robust();
     test_graycode();
     test_pattern();
     test_tsdf();

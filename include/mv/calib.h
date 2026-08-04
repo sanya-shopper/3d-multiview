@@ -37,4 +37,24 @@ int mv_calib_planar(double K[9], mv_camera *cams, double k_radial[2],
 double mv_calib_reproj_rms(const mv_camera *cams, const mv_calib_view *views,
                            int nviews);
 
+/* Robust variant for large redundant view sets (a video of the target).
+ * Plain Zhang weighs every view equally, so hundreds of near-fronto-
+ * parallel frames can swamp the few tilted, informative ones and drive
+ * the linear system toward the degenerate solution (Sturm-Maybank), and
+ * a single corrupted read poisons the fit.  This wrapper runs a
+ * deterministic RANSAC over small view subsets: fit Zhang on 6 random
+ * views, score the candidate K by the MEDIAN per-view reprojection RMS
+ * across ALL views, keep the best of 64 trials, then refit (with radial
+ * alternation) on the inlier views (per-view RMS within 3x the best
+ * median) - accepting the refit only if it does not worsen that median
+ * score.  Fixed internal seed: same inputs give the same answer.
+ *
+ * cams[i] is filled for every view, inliers from the accepted fit and
+ * outliers by decomposing their homography under the final K.  inlier
+ * may be NULL; if given, inlier[i] is set to 1 for views in the final
+ * fit and 0 otherwise.  Other arguments as mv_calib_planar. */
+int mv_calib_planar_robust(double K[9], mv_camera *cams, double k_radial[2],
+                           const mv_calib_view *views, int nviews,
+                           int zero_skew, unsigned char *inlier);
+
 #endif /* MV_CALIB_H */

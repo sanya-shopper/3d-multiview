@@ -33,6 +33,15 @@ int mv_homography_dlt(double H[9], const double *xy_plane, const double *uv,
 int mv_calib_planar(double K[9], mv_camera *cams, double k_radial[2],
                     const mv_calib_view *views, int nviews, int zero_skew);
 
+/* Pose of a plane with KNOWN intrinsics from n >= 4 correspondences
+ * (plane points obj as in mv_calib_view, observed UNDISTORTED pixels
+ * img): homography DLT, Zhang column extraction, rotation snapped to
+ * the nearest orthonormal matrix by SVD.  Fills cam fully (K copied,
+ * distortion zeroed).  This is the per-frame localizer: one decoded
+ * view of the pattern gives the camera's metric pose. */
+int mv_calib_plane_pose(mv_camera *cam, const double K[9],
+                        const double *obj, const double *img, int n);
+
 /* RMS reprojection error over all views/points, in pixels. */
 double mv_calib_reproj_rms(const mv_camera *cams, const mv_calib_view *views,
                            int nviews);

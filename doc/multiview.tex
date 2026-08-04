@@ -682,6 +682,28 @@ timestamp is known, turning the rolling-shutter \emph{bias} into just
 more timestamped measurements per \autoref{sec:timemodel}.
 \end{example}
 
+\paragraph{What the display cannot fake: pose diversity.} A tempting
+idea --- render the pattern pre-warped, as if the plane were rotating,
+so nothing need physically move --- fails for a fundamental reason
+worth recording. The camera observes the \emph{physical screen plane},
+whose pose is fixed: if the displayed pattern is warped by a chosen
+homography $\mat{W}_k$, the observed pattern-to-image map is
+$\Hm_k = \Hm_s \mat{W}_k$ with $\Hm_s$ the screen's one fixed
+physical homography. Since every $\mat{W}_k$ is known, the whole
+session carries exactly the information of the single view $\Hm_s$
+--- one homography, two Zhang constraints, $\K$ underdetermined
+(\autoref{sec:zhang}); and feeding the $\Hm_k$ to the estimator as if
+they were real poses forces a solution unrelated to the camera's
+$\K$. Calibration information lives in the \emph{physical}
+foreshortening of the light-emitting surface, and no amount of
+rendering synthesizes it. The practical consolations: (i) Zhang does
+not need \emph{pure} rotation --- any pose change serves, so
+inadvertent translation while repositioning is harmless; (ii) a laptop
+is its own rotation fixture: tilting the \emph{lid} rotates the screen
+about the hinge axis, and swiveling the base on the table provides the
+second axis --- ten paused lid/swivel combinations are a complete
+Zhang set with no careful handling at all.
+
 The same session that calibrates geometry therefore calibrates every
 clock parameter: one revolution of the fixture, read by all cameras,
 yields $(\K,\R,\tv,k)$ from the corner grid and

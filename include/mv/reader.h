@@ -8,7 +8,16 @@
  * subsystem"): consumes one camera frame, returns identified corners in
  * pattern coordinates, the decoded frame counter, and the fitted
  * pattern->image homography. Blind: no pose prior needed.
- * Not reentrant: uses static working buffers; one reader call at a time. */
+ * Not reentrant: uses static working buffers; one reader call at a time.
+ *
+ * Setup & run: needs only an 8-bit mono frame (any source; the demo
+ * renders one synthetically). Build and exercise end to end with
+ *     make demo_patternsim && ./demo_patternsim
+ * (renders the spec-v1 screen under seven poses, reads it blind, scores
+ * corners/counter/orientation against ground truth, then runs Zhang
+ * through the full pipeline; writes out_patternsim.pgm for inspection).
+ * Set MV_READER_DEBUG=1 for per-stage tracing on stderr. Unit coverage:
+ * make check (blind-read round trip among the 47 assertions). */
 
 #define MV_READ_MAXC 256
 

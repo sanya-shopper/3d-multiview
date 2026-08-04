@@ -8,7 +8,10 @@
  * into a TSDF; the zero level set is extracted by marching tetrahedra
  * and every mesh vertex is scored against the true sphere. Run at two
  * frame counts to verify the sqrt(n) averaging law (a T3-style scaling
- * tripwire). Deterministic. */
+ * tripwire). Deterministic.
+ *
+ * Run: make demo_tsdf && ./demo_tsdf
+ * Out: out_tsdf.ply (mesh; open in MeshLab/CloudCompare/Blender) */
 
 #include <math.h>
 #include <stdio.h>

@@ -16,7 +16,16 @@
  * edges, triangles oriented outward).
  * Note: the band walk steps at 0.7 voxel, so one ray may update a voxel
  * twice with correlated values -- weights are mildly optimistic; treat W
- * as relative confidence, not an exact observation count. */
+ * as relative confidence, not an exact observation count.
+ *
+ * Setup & run: mv_tsdf_init sizes the volume (origin corner, extents,
+ * voxel, tau ~ 3 sigma_Z), mv_tsdf_fuse folds in samples in any order,
+ * mv_tsdf_write_ply extracts the mesh. Exercise end to end with
+ *     make demo_tsdf && ./demo_tsdf
+ * (fuses depth-law-noisy views of a known sphere at two frame counts,
+ * scores surface RMS and the sqrt(n) scaling; writes out_tsdf.ply --
+ * open in MeshLab/CloudCompare/Blender). Unit coverage: make check
+ * (sign, unobserved, and noiseless-mesh assertions). */
 
 typedef struct {
     int nx, ny, nz;

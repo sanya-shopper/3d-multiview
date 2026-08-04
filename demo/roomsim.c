@@ -11,7 +11,9 @@
  *
  * Run: make demo_room && ./demo_room     (~20 s)
  * Out: out_room_left.pgm   raw left view          (Preview opens PGM)
+ *      out_room_rect.pgm   rectified left view
  *      out_room_disp.pgm   disparity map
+ *      out_room_truth.pgm  shaded view of the TRUE generating model
  *      out_room_mesh.pgm   shaded view of the reconstructed mesh
  *      out_room_change.pgm change mask after the box moves
  *      out_room.ply        the room mesh itself */
@@ -168,7 +170,8 @@ static void write_norm_pgm(const char *path, const float *v, int w, int h,
 }
 
 /* ---- shaded software preview of a triangle soup ---------------------- */
-static void mesh_preview(const char *path, const double *tris, int ntri)
+static void mesh_preview(const char *path, const double *tris, int ntri,
+                         const double *alb)
 {
     mv_camera pc;
     static unsigned char img[W * H];
@@ -212,7 +215,8 @@ static void mesh_preview(const char *path, const double *tris, int ntri)
         mv_cross3(n, e1, e2);
         if (mv_normalize(n, 3) != MV_OK)
             continue;
-        shade = 45.0 + 190.0 * fabs(mv_dot(n, light, 3));
+        shade = (45.0 + 190.0 * fabs(mv_dot(n, light, 3)))
+              * (alb ? alb[k] : 1.0);
         za = pc.R[6] * a[0] + pc.R[7] * a[1] + pc.R[8] * a[2] + pc.t[2];
         zbv = pc.R[6] * b[0] + pc.R[7] * b[1] + pc.R[8] * b[2] + pc.t[2];
         zc2 = pc.R[6] * c[0] + pc.R[7] * c[1] + pc.R[8] * c[2] + pc.t[2];
@@ -240,8 +244,14 @@ static void mesh_preview(const char *path, const double *tris, int ntri)
                         continue;
                     z = l1 * za + l2 * zbv + l3 * zc2;
                     if (z > 0 && z < zb[y * W + x]) {
+                        double att = 3.0 / z; /* mild depth cue */
+                        double v2;
+                        if (att < 0.55) att = 0.55;
+                        if (att > 1.15) att = 1.15;
+                        v2 = shade * att;
                         zb[y * W + x] = (float)z;
-                        img[y * W + x] = (unsigned char)shade;
+                        img[y * W + x] =
+                            (unsigned char)(v2 > 255 ? 255 : v2);
                     }
                 }
         }
@@ -309,6 +319,8 @@ int main(void)
             mv_pgm_write("out_room_left.pgm", imgL, W, H);
         mv_warp_homography(rectL, W, H, imgL, W, H, H1, 0);
         mv_warp_homography(rectR, W, H, imgR, W, H, H2, 0);
+        if (f == 0)
+            mv_pgm_write("out_room_rect.pgm", rectL, W, H);
         mv_stereo_sad(disp, rectL, rectR, W, H, HWIN, DMIN, DMAX);
         texture_gate(disp, rectL);
         for (i = 0; i < W * H; i++)
@@ -341,6 +353,37 @@ int main(void)
         }
         printf("background coverage : %.1f%% of pixels\n",
                100.0 * nvalid_px / (W * H));
+    }
+
+    /* ---- shaded view of the TRUE generating model ------------------- */
+    {
+        double gt[8 * 2 * 9]; /* two triangles per plane */
+        double alb[16];
+        /* distinct albedos so a human can tell the surfaces apart:
+         * floor light, back wall mid, side wall dark, box brightest */
+        static const double PALB[6] = { 1.0, 0.72, 0.5, 1.45, 1.3, 1.15 };
+        int ngt = 0, p, j;
+        for (p = 0; p < npl; p++) {
+            const mv_plane *pl = &pls[p];
+            double c00[3], c10[3], c01[3], c11[3];
+            for (j = 0; j < 3; j++) {
+                c00[j] = pl->t[j];
+                c10[j] = pl->t[j] + pl->R[j * 3 + 0] * pl->tw * pl->pitch;
+                c01[j] = pl->t[j] + pl->R[j * 3 + 1] * pl->th * pl->pitch;
+                c11[j] = c10[j] + pl->R[j * 3 + 1] * pl->th * pl->pitch;
+            }
+            memcpy(gt + 9 * ngt + 0, c00, 24);
+            memcpy(gt + 9 * ngt + 3, c10, 24);
+            memcpy(gt + 9 * ngt + 6, c11, 24);
+            alb[ngt] = PALB[p];
+            ngt++;
+            memcpy(gt + 9 * ngt + 0, c00, 24);
+            memcpy(gt + 9 * ngt + 3, c11, 24);
+            memcpy(gt + 9 * ngt + 6, c01, 24);
+            alb[ngt] = PALB[p];
+            ngt++;
+        }
+        mesh_preview("out_room_truth.pgm", gt, ngt, alb);
     }
 
     /* ---- fuse background into TSDF, extract, preview, score -------- */
@@ -382,7 +425,7 @@ int main(void)
                "(%.1f%% of vertices scored)\n", ntri,
                1000.0 * sqrt(se / ns), 100.0 * ns / (3.0 * ntri));
         mv_tsdf_write_ply(&t, "out_room.ply");
-        mesh_preview("out_room_mesh.pgm", tris, ntri);
+        mesh_preview("out_room_mesh.pgm", tris, ntri, NULL);
         free(tris);
     }
     mv_tsdf_free(&t);

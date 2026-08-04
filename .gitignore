@@ -28,3 +28,5 @@ out_room_disp.pgm
 out_room_mesh.pgm
 out_room_change.pgm
 out_room.ply
+out_room_rect.pgm
+out_room_truth.pgm

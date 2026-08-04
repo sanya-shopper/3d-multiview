@@ -34,7 +34,7 @@
 \title{\textsc{multiview}: A Portable C99 System for Two-Camera\\
 Scene Analysis and 3D Model Extraction\\[4pt]
 \large A self-contained overview of the system and its mathematics}
-\author{Project documentation --- v0.3.0}
+\author{Project documentation --- v0.4.0}
 \date{August 2, 2026}
 
 \begin{document}
@@ -145,6 +145,7 @@ Module & Header & Responsibility \\
 \code{stereo}      & \code{mv/stereo.h}      & dense block matching (SAD, sub-pixel) \\
 \code{img}         & \code{mv/img.h}         & PGM (P5) image I/O \\
 \code{cloud}       & \code{mv/cloud.h}       & point cloud container, PLY export \\
+\code{tsdf}        & \code{mv/tsdf.h}        & TSDF fusion over enriched samples; meshing \\
 \bottomrule
 \end{tabular}
 \caption{Module layout. \code{mv/mv.h} is the umbrella header.}
@@ -1238,6 +1239,41 @@ order, streams from the two cameras interleave freely, and there is
 never a batch step; the mesh is extracted whenever wanted without
 interrupting accumulation.
 
+\paragraph{The fusion interface: enriched samples.} A design decision
+worth recording: the TSDF is \emph{not} a function of a bare point
+cloud. Two of its essential ingredients are properties of the observing
+\emph{ray}, not of the point --- the \emph{sign} of distance (which
+side of the surface a voxel is on) and \emph{carving} (the measured
+emptiness of the space between camera and surface). A cloud that has
+discarded viewpoints forces the fragile normals-estimation path
+(estimate normals by local fits, then propagate a consistent
+orientation globally \cite{Hoppe1992} --- machinery that exists
+precisely because provenance was thrown away). The fix is one field,
+not a parallel pipeline: the fusion interchange type is the
+\emph{enriched sample}
+\[
+(\text{point},\ \text{origin},\ \text{weight},\ \text{time}),
+\]
+and the TSDF is a pure, commutative fold over a stream of such samples
+--- origin reconstructs the ray, sign, carving segment, and the
+inverse-variance weight; \emph{time} is the same per-measurement
+timestamp the temporal camera model (\autoref{sec:timemodel}) already
+demands. On a stationary rig the origin compresses to a camera id.
+This is standard practice, in three forms across the literature:
+per-scan viewpoints attached to clouds (the PCD \code{VIEWPOINT}
+field, E57 scan poses, and OctoMap's
+\code{insertPointCloud(cloud, origin)} API, whose free-space carving is
+exactly ours \cite{Hornung2013}); per-point attributes in scanning
+formats; and, at the fully-enriched limit, \emph{surfel maps}
+\cite{Keller2013}, where the enriched point is itself the fused model.
+The canonical TSDF papers \cite{CurlessLevoy1996,Newcombe2011} are
+instead depth-map-native --- equivalent content, dense packaging ---
+and this system takes both: the sample fold defines the semantics
+(so sparse feature points, dense depth pixels, and future laser
+returns, \autoref{sec:range}, all fuse through one interface), while
+the precomputed voxel-major sweep below is the fast path when the
+producer happens to be a dense static-camera depth map.
+
 \paragraph{The state and its update.} A \emph{truncated signed distance
 function} discretizes the working volume into voxels; each voxel $v$
 stores two numbers, a distance estimate $D(v)$ and a weight $W(v)$. When a depth
@@ -1829,6 +1865,45 @@ noise-floor-limited rather than implementation-limited. Second, the
 M-array machinery works as specified: zero misidentifications in
 $1134$ corners across strong obliquity and a fully rolled camera is the
 property the rotation-unique window design was bought for.
+
+\paragraph{TSDF fusion (\code{demo/tsdfsim.c}).} The first model
+extraction beyond point clouds: a sphere of known radius ($0.3$\,m at
+$4.7$\,m depth) observed by both cameras with depth-law noise
+($\sigma_Z\approx21$\,mm per sample at the sphere); enriched samples
+(point, origin, $1/\sigma_Z^2$) are fused into a $1$\,cm-voxel TSDF
+(\autoref{sec:tsdf}) and the zero level set is extracted by marching
+tetrahedra; every mesh vertex is scored against the true sphere.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lrr}
+\toprule
+ & 10 frames & 160 frames \\
+\midrule
+surface RMS error & $4.40$ mm & $2.17$ mm \\
+triangles         & $38{,}030$ & $33{,}726$ \\
+\bottomrule
+\end{tabular}
+\caption{TSDF-fusion experiment, seed 4242 (reproduce with
+\code{make demo}); mesh written to \code{out\_tsdf.ply}.}
+\label{tab:tsdfresults}
+\end{table}
+
+The frame-count ratio is $2.03$, not the naive $\sqrt{16}=4$ --- and
+this is the T3 plateau diagnostic of \autoref{sec:statrules} catching a
+floor, exactly as designed: the two measurements fit
+$e(n)=\sqrt{b^2+a^2/n}$ with $b=2.0$\,mm perfectly
+($\sqrt{2^2+3.9^2}=4.4$; $\sqrt{2^2+0.98^2}=2.2$). The noise term
+averages down as $\sqrt n$ per the fusion promise of
+\autoref{sec:tsdf}; the $2$\,mm floor ($\approx$ voxel$/5$) is the
+known \emph{projective-TSDF obliquity artifact} --- the along-ray
+offset $\eta$ degrades as a distance proxy near grazing incidence at
+the sphere's silhouette, a documented property of projective fusion,
+not a defect (the noiseless unit test measures the same floor). Known
+remedies when it matters: obliquity-weighted updates or
+gradient-corrected distances; at $21$\,mm-per-frame input noise
+producing a $2.2$\,mm surface from five seconds of video, the floor is
+not the binding constraint.
 
 \paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
 disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the
@@ -2609,12 +2684,11 @@ rectifying homographies with bilinear resampling, closing the dense video
 path end-to-end; (6) temporal cloud statistics for static/moving
 segmentation (\autoref{sec:models}); (7) photo-collection registration
 (\autoref{sec:photos}); (8) Hartley--Sturm optimal triangulation;
-(9) meshing by the TSDF route of \autoref{sec:tsdf} --- \code{mv\_tsdf}
-fusion with precomputed voxel projections plus marching cubes, first
-validated at the sim tier by fusing noisy synthetic depth maps of a
-known object and scoring surface RMS against the $\sqrt n$ prediction
-(this step needs only the existing depth model, so it can proceed before
-the dense image path of item (5) closes); (10) the detector/identity
+(9) \emph{[done at sim tier]} meshing by the TSDF route of
+\autoref{sec:tsdf}: \code{mv/tsdf.h} implements the enriched-sample
+fold and marching-tetrahedra extraction, validated in
+\autoref{tab:tsdfresults}; remaining are the dense-depth producer
+(item 5) and the voxel-major fast path; (10) the detector/identity
 sidecar of \autoref{sec:faces} (ONNX Runtime seam, recorded-oracle
 replay tests); and, if the hardware materializes, the optional
 range-finder integration of \autoref{sec:range}. Each step lands
@@ -3134,6 +3208,7 @@ Paper & Implementation & Validated by \\
 \autoref{sec:triangulation}, \autoref{sec:scaling} & \code{mv/triangulate.h}, \code{src/triangulate.c} & exactness tests; \autoref{tab:diagtri} \\
 \autoref{sec:stereo} & \code{mv/rectify.h}, \code{mv/stereo.h} & row-alignment tests \\
 \autoref{sec:models} & \code{mv/cloud.h}, \code{mv/img.h} & PLY/PGM outputs of all demos \\
+\autoref{sec:tsdf} & \code{mv/tsdf.h}, \code{src/tsdf.c} & sign/mesh tests; \autoref{tab:tsdfresults} \\
 \autoref{sec:results} diagnostics & \code{demo/diagnose.c} & the tripwires of \autoref{sec:statrules} \\
 \autoref{sec:scenarios} & \code{demo/track\_robot,insects,people}; \code{lightlog} & their ground-truth scoring \\
 \autoref{sec:statrules} T1 & \code{tests/test\_mv.c} (40 assertions) & \code{make check} \\

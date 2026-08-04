@@ -27,7 +27,7 @@ section to its module and its validating test or experiment.
 - `src/` — implementations: linear algebra + Jacobi SVD, camera model,
   planar targets + Gray-code display patterns, Zhang calibration,
   the spec-v1 calibration screen (M-array pattern generator), a synthetic
-  plane renderer, the blind pattern reader,
+  plane renderer, the blind pattern reader, TSDF fusion with mesh extraction,
   epipolar geometry, DLT triangulation, rectification, dense stereo,
   PGM image I/O, PLY point clouds
 - `demo/synthetic.c` — deterministic two-camera reconstruction experiment

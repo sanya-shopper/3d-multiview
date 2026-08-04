@@ -5,10 +5,10 @@ LDLIBS   = -lm
 
 SRC = src/mat.c src/cam.c src/epipolar.c src/triangulate.c src/rectify.c \
       src/stereo.c src/img.c src/cloud.c src/target.c src/graycode.c \
-      src/calib.c src/pattern.c src/render.c src/reader.c
+      src/calib.c src/pattern.c src/render.c src/reader.c src/tsdf.c
 OBJ = $(SRC:.c=.o)
 
-all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim test_mv
+all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf test_mv
 
 libmv.a: $(OBJ)
 	ar rcs $@ $(OBJ)
@@ -18,6 +18,9 @@ demo_synthetic: demo/synthetic.o libmv.a
 
 demo_calibrate: demo/calibrate.o libmv.a
 	$(CC) $(CFLAGS) -o $@ demo/calibrate.o libmv.a $(LDLIBS)
+
+demo_tsdf: demo/tsdfsim.o libmv.a
+	$(CC) $(CFLAGS) -o $@ demo/tsdfsim.o libmv.a $(LDLIBS)
 
 demo_patternsim: demo/patternsim.o libmv.a
 	$(CC) $(CFLAGS) -o $@ demo/patternsim.o libmv.a $(LDLIBS)
@@ -60,8 +63,8 @@ doc/multiview.pdf: doc/multiview.tex doc/refs.bib
 	&& pdflatex -interaction=nonstopmode multiview >/dev/null
 
 clean:
-	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o tests/test_mv.o libmv.a \
-	      demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim test_mv out_cloud.ply out_track.ply \
+	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o tests/test_mv.o libmv.a \
+	      demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf test_mv out_cloud.ply out_track.ply \
 	      target_letter.pgm \
 	      doc/*.aux doc/*.log doc/*.bbl doc/*.blg doc/*.out doc/*.toc doc/*.brf
 

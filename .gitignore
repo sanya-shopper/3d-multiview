@@ -20,3 +20,5 @@ demo_people
 doc/*.brf
 demo_patternsim
 out_patternsim.pgm
+demo_tsdf
+out_tsdf.ply

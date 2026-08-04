@@ -22,3 +22,9 @@ demo_patternsim
 out_patternsim.pgm
 demo_tsdf
 out_tsdf.ply
+demo_room
+out_room_left.pgm
+out_room_disp.pgm
+out_room_mesh.pgm
+out_room_change.pgm
+out_room.ply

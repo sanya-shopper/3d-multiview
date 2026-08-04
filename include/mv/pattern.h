@@ -8,7 +8,13 @@
  * calibration screen for a 1920x1080 reference display. The M-array is a
  * fixed constant (generated once by seeded search, verified: every 4x4
  * window is unique under all four rotations with pairwise Hamming
- * distance >= 2), so any decoded window fixes position AND orientation. */
+ * distance >= 2), so any decoded window fixes position AND orientation.
+ *
+ * Setup & run: mv_pattern_render emits full frames for a given counter
+ * value (the display app will blit these); mv_pattern_selftest verifies
+ * the shipped M-array exhaustively. Exercised end to end by
+ *     make demo_patternsim && ./demo_patternsim
+ * and covered by make check. */
 
 #define MV_PAT_SPEC_VERSION 1
 #define MV_PAT_W 1920

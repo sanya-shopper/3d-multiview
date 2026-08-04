@@ -2707,15 +2707,21 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
 (why it fits this system now); statuses reflect v0.4.0.
 
 \begin{enumerate}
-  \item \textbf{Saddle-point corner detection} --- \emph{done}
-        (\code{mv/reader.h}, \autoref{tab:patresults}). Sub-pixel
-        template detection, validated blind through the rendered
-        pipeline at $0.25$--$0.35$\,px.
-  \item \textbf{Calibration subsystem completion} ---
-        \emph{partially done}. Remaining: the display app (modes
-        M0--M3), the record-emitting wrapper of \autoref{tab:records}
-        (the reader does not yet check the version block or sample the
-        phase patches), and the joint orbit $+$ clock fits.
+  \item \textbf{[done] Saddle-point corner detection} --- implemented
+        in \code{src/reader.c}; setup and run instructions are in the
+        comment atop \code{mv/reader.h} (\code{make demo\_patternsim},
+        \code{MV\_READER\_DEBUG=1} for tracing). Sub-pixel template
+        detection, validated blind through the rendered pipeline at
+        $0.25$--$0.35$\,px (\autoref{tab:patresults}).
+  \item \textbf{[partially done] Calibration subsystem completion} ---
+        built so far: pattern generator, synthetic renderer, and blind
+        reader (\code{mv/pattern.h}, \code{mv/render.h},
+        \code{mv/reader.h}; each header carries its setup-and-run
+        notes, all exercised by \code{demo/patternsim.c}). Remaining:
+        the display app (modes M0--M3), the record-emitting wrapper of
+        \autoref{tab:records} (the reader does not yet check the
+        version block or sample the phase patches), and the joint
+        orbit $+$ clock fits.
         \emph{Pitch}: this turns the fixture design into a push-button
         session --- one revolution in, geometry and clocks out --- and
         every missing piece already has its spec (\autoref{sec:calibspec})
@@ -2767,10 +2773,13 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         the circle-fit anisotropy of \autoref{tab:diagtrack} and the
         equal-weight DLT --- each with its regression already measured,
         so improvement is provable, not aspirational.
-  \item \textbf{TSDF completion} --- \emph{done at sim tier}
-        (\code{mv/tsdf.h}, \autoref{tab:tsdfresults}). Remaining: the
-        dense-depth producer (item 5), the voxel-major fast path, and
-        then RANSAC plane/primitive extraction on the background model.
+  \item \textbf{[done at sim tier] TSDF completion} --- implemented
+        in \code{src/tsdf.c}; setup and run instructions are in the
+        comment atop \code{mv/tsdf.h} (\code{make demo\_tsdf}; mesh
+        lands in \code{out\_tsdf.ply}); validated in
+        \autoref{tab:tsdfresults}. Remaining: the dense-depth producer
+        (item 5), the voxel-major fast path, and then RANSAC
+        plane/primitive extraction on the background model.
         \emph{Pitch}: every remaining piece rides on item 5 or 6;
         primitives (\autoref{sec:ladder}) then give the furniture-level
         scene description almost for free.

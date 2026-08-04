@@ -9,7 +9,7 @@
 #include "mv/pattern.h"
 #include "mv/reader.h"
 
-#define MAXCAND 512
+#define MAXCAND 6144
 #define RDBG(...) do { if (getenv("MV_READER_DEBUG")) \
         fprintf(stderr, __VA_ARGS__); } while (0)
 #define GRIDN 48          /* lattice bookkeeping extent */
@@ -52,7 +52,7 @@ struct cand {
 };
 
 static int detect_saddles(struct cand *cd, const unsigned char *img,
-                          int w, int h)
+                          int w, int h, double relthr)
 {
     static struct offs o;
     static int o_init = 0;
@@ -83,13 +83,13 @@ static int detect_saddles(struct cand *cd, const unsigned char *img,
                 rmax = best;
         }
 
-    /* NMS + threshold + sub-pixel */
-    for (y = SADR + 2; y < h - SADR - 2 && n < MAXCAND; y++)
-        for (x = SADR + 2; x < w - SADR - 2 && n < MAXCAND; x++) {
+    /* NMS + threshold + sub-pixel; if the pool fills, keep strongest */
+    for (y = SADR + 2; y < h - SADR - 2; y++)
+        for (x = SADR + 2; x < w - SADR - 2; x++) {
             float r0 = R[y * w + x];
             int i, j, peak = 1;
             double dxs, dys, den;
-            if (r0 < 0.55 * rmax || r0 < 6.0)
+            if (r0 < relthr * rmax || r0 < 6.0)
                 continue;
             for (j = -2; j <= 2 && peak; j++)
                 for (i = -2; i <= 2 && peak; i++)
@@ -108,11 +108,24 @@ static int detect_saddles(struct cand *cd, const unsigned char *img,
                 dxs = 0.0;
             if (fabs(dys) > 1.0)
                 dys = 0.0;
-            cd[n].u = x + dxs;
-            cd[n].v = y + dys;
-            cd[n].resp = r0;
-            cd[n].used = 0;
-            n++;
+            if (n < MAXCAND) {
+                cd[n].u = x + dxs;
+                cd[n].v = y + dys;
+                cd[n].resp = r0;
+                cd[n].used = 0;
+                n++;
+            } else {
+                int wk = 0, q;
+                for (q = 1; q < n; q++)
+                    if (cd[q].resp < cd[wk].resp)
+                        wk = q;
+                if (r0 > cd[wk].resp) {
+                    cd[wk].u = x + dxs;
+                    cd[wk].v = y + dys;
+                    cd[wk].resp = r0;
+                    cd[wk].used = 0;
+                }
+            }
         }
     free(R);
     return n;
@@ -252,9 +265,10 @@ static int grow_from_seed(struct lattice *L, struct cand *cd, int n,
 
 static int grow_grid(struct lattice *L, struct cand *cd, int n)
 {
-    char tried[MAXCAND] = { 0 };
+    static char tried[MAXCAND];
     int attempt;
-    for (attempt = 0; attempt < 8; attempt++) {
+    memset(tried, 0, sizeof(tried));
+    for (attempt = 0; attempt < 24; attempt++) {
         int seed = -1, k, count;
         for (k = 0; k < n; k++)
             if (!tried[k] && (seed < 0 || cd[k].resp > cd[seed].resp))
@@ -325,55 +339,288 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
     int ncand, ngrid, i, j;
     double blackref = 255.0, whiteref = 0.0;
 
+    /* escalation ladder: threshold x scale; small-in-frame patterns
+     * (cells ~10 px) need the 2x upsample to re-enter the validated
+     * ~20 px regime */
+    static const double RELTHR[4] = { 0.55, 0.30, 0.55, 0.30 };
+    static const int SCALE[4] = { 1, 1, 2, 2 };
+    unsigned char *up = NULL;
+    const unsigned char *im;
+    int iw, ih, scale = 1;
+    int pass, decoded = 0;
+    int best_m = -1, best_u = 0, best_v = 0;
+
     memset(res, 0, sizeof(*res));
+
+    /* Detection-threshold escalation: the strict threshold suppresses
+     * dot L-corners when the pattern is large in frame (the sim regime);
+     * when the pattern is small, blur can drop alternate saddle
+     * polarities below it, leaving only the 45-degree sublattice -- so
+     * on decode failure retry with the permissive threshold (tiny dots
+     * cannot produce significant L-corner clutter). */
+    for (pass = 0; pass < 4 && !decoded; pass++) {
     memset(bit, -1, sizeof(bit));
 
-    ncand = detect_saddles(cd, img, w, h);
-    RDBG("reader: candidates %d\n", ncand);
+    scale = SCALE[pass];
+    if (scale == 1) {
+        im = img;
+        iw = w;
+        ih = h;
+    } else {
+        if (!up) {
+            int x2, y2;
+            up = (unsigned char *)malloc((size_t)w * h * 4);
+            if (!up)
+                break;
+            for (y2 = 0; y2 < 2 * h; y2++)
+                for (x2 = 0; x2 < 2 * w; x2++) {
+                    double sx = x2 * 0.5, sy = y2 * 0.5;
+                    int ix = (int)sx, iy2 = (int)sy;
+                    double fx = sx - ix, fy = sy - iy2;
+                    const unsigned char *q;
+                    if (ix >= w - 1) { ix = w - 2; fx = 1.0; }
+                    if (iy2 >= h - 1) { iy2 = h - 2; fy = 1.0; }
+                    q = img + iy2 * w + ix;
+                    up[y2 * 2 * w + x2] = (unsigned char)
+                        ((1 - fx) * (1 - fy) * q[0] + fx * (1 - fy) * q[1]
+                         + (1 - fx) * fy * q[w] + fx * fy * q[w + 1]
+                         + 0.5);
+                }
+        }
+        im = up;
+        iw = 2 * w;
+        ih = 2 * h;
+    }
+    ncand = detect_saddles(cd, im, iw, ih, RELTHR[pass]);
+    RDBG("reader: pass %d (scale %d) candidates %d\n", pass, scale,
+         ncand);
     if (ncand < 12)
-        return MV_ERR;
+        continue;
     ngrid = grow_grid(&L, cd, ncand);
     RDBG("reader: lattice corners %d\n", ngrid);
     if (ngrid < 12)
-        return MV_ERR;
+        continue;
 
-    /* --- decode cell bits (lattice square (i,j): corners i..i+1,j..j+1) */
+    /* --- decode cell bits (lattice square (i,j): corners i..i+1,j..j+1)
+     * Two passes: measure all cells first, then set bits with a threshold
+     * adaptive to the MEASURED contrast -- real cameras attenuate the
+     * small dots (blur, compression) far below the ideal 255 swing. */
     {
-        double bases[GRIDN * GRIDN];
-        int nb = 0;
-        double bmin = 255.0, bmax = 0.0;
+        static double bases[GRIDN * GRIDN], dots[GRIDN * GRIDN];
+        static int ci_[GRIDN * GRIDN], cj_[GRIDN * GRIDN];
+        int nb = 0, k;
+        double bmin = 255.0, bmax = 0.0, thr;
         for (j = 0; j < GRIDN - 1; j++)
             for (i = 0; i < GRIDN - 1; i++) {
                 double cu, cv, bs[4], b, dot;
-                int k;
                 if (!L.have[i][j] || !L.have[i + 1][j] || !L.have[i][j + 1]
                     || !L.have[i + 1][j + 1])
                     continue;
-                cu = 0.25 * (L.p[i][j][0] + L.p[i + 1][j][0]
-                             + L.p[i][j + 1][0] + L.p[i + 1][j + 1][0]);
-                cv = 0.25 * (L.p[i][j][1] + L.p[i + 1][j][1]
-                             + L.p[i][j + 1][1] + L.p[i + 1][j + 1][1]);
+                /* the cell's PROJECTIVE center is the intersection of
+                 * the quad's diagonals (the corner centroid is biased
+                 * under strong perspective, enough to miss the dot) */
+                {
+                    const double *a = L.p[i][j], *b2 = L.p[i + 1][j + 1];
+                    const double *c2 = L.p[i + 1][j], *e = L.p[i][j + 1];
+                    double dx1 = b2[0] - a[0], dy1 = b2[1] - a[1];
+                    double dx2 = e[0] - c2[0], dy2 = e[1] - c2[1];
+                    double den = dx1 * dy2 - dy1 * dx2, t2;
+                    if (fabs(den) < 1e-9)
+                        continue;
+                    t2 = ((c2[0] - a[0]) * dy2 - (c2[1] - a[1]) * dx2)
+                         / den;
+                    cu = a[0] + t2 * dx1;
+                    cv = a[1] + t2 * dy1;
+                }
                 for (k = 0; k < 4; k++) {
                     const double *q =
                         L.p[i + (k & 1)][j + (k >> 1)];
-                    bs[k] = bilin(img, w, h, cu + 0.32 * (q[0] - cu),
+                    bs[k] = bilin(im, iw, ih, cu + 0.32 * (q[0] - cu),
                                   cv + 0.32 * (q[1] - cv));
                 }
                 b = med4(bs[0], bs[1], bs[2], bs[3]);
-                dot = sample3(img, w, h, cu, cv);
+                dot = sample3(im, iw, ih, cu, cv);
                 if (b < 0.0 || dot < 0.0)
                     continue;
                 base[i][j] = b;
-                bases[nb++] = b;
+                bases[nb] = b;
+                dots[nb] = fabs(dot - b);
+                ci_[nb] = i;
+                cj_[nb] = j;
+                nb++;
                 if (b < bmin)
                     bmin = b;
                 if (b > bmax)
                     bmax = b;
-                bit[i][j] = (fabs(dot - b) > 0.30 * 200.0) ? 1 : 0;
             }
         RDBG("reader: cells %d, base range %.0f..%.0f\n", nb, bmin, bmax);
-        if (nb < 16 || bmax - bmin < 60.0)
-            return MV_ERR;
+        if (nb < 16 || bmax - bmin < 40.0)
+            continue;
+        /* per-cell normalization by LOCAL contrast (neighbor cells are
+         * the opposite color, so |base - neighbor base| measures the
+         * local black-white range under shading/vignetting), then a
+         * 1-D 2-means split classifies dotted vs plain cells */
+        {
+            static double nrm[GRIDN * GRIDN];
+            double m0, m1;
+            int it;
+            for (k = 0; k < nb; k++) {
+                int i2 = ci_[k], j2 = cj_[k], nn = 0;
+                double lc = 0.0;
+                static const int d4[4][2] = { {1,0},{-1,0},{0,1},{0,-1} };
+                int q;
+                for (q = 0; q < 4; q++) {
+                    int a2 = i2 + d4[q][0], b2 = j2 + d4[q][1];
+                    if (a2 < 0 || b2 < 0 || a2 >= GRIDN || b2 >= GRIDN)
+                        continue;
+                    if (bit[a2][b2] >= -1 && base[a2][b2] > 0.0
+                        && (L.have[a2][b2] || 1)) {
+                        double df = fabs(base[i2][j2] - base[a2][b2]);
+                        if (df > 5.0) {
+                            lc += df;
+                            nn++;
+                        }
+                    }
+                }
+                lc = nn ? lc / nn : 0.5 * (bmax - bmin);
+                if (lc < 12.0)
+                    lc = 12.0;
+                nrm[k] = dots[k] / lc;
+            }
+            /* 2-means on nrm */
+            m0 = 0.05;
+            m1 = 0.6;
+            for (it = 0; it < 12; it++) {
+                double s0 = 0, s1 = 0;
+                int n0 = 0, n1 = 0;
+                for (k = 0; k < nb; k++) {
+                    if (fabs(nrm[k] - m0) < fabs(nrm[k] - m1)) {
+                        s0 += nrm[k];
+                        n0++;
+                    } else {
+                        s1 += nrm[k];
+                        n1++;
+                    }
+                }
+                if (n0)
+                    m0 = s0 / n0;
+                if (n1)
+                    m1 = s1 / n1;
+            }
+            RDBG("reader: dotness clusters %.2f / %.2f\n", m0, m1);
+            if (m1 - m0 < 0.12)
+                continue; /* modes not separable */
+            thr = 0.5 * (m0 + m1);
+            for (k = 0; k < nb; k++)
+                bit[ci_[k]][cj_[k]] = (nrm[k] > thr) ? 1 : 0;
+        }
+        /* --- checkerboard-coherence pruning: keep only the largest
+         * connected region whose cells alternate black/white with real
+         * contrast; grown-in clutter (fabric, background) fails the
+         * alternation test and is dropped before voting --- */
+        {
+            static signed char cls[GRIDN][GRIDN];
+            static int comp[GRIDN][GRIDN];
+            static int qx[GRIDN * GRIDN], qy[GRIDN * GRIDN];
+            static const int d4[4][2] = { {1,0},{-1,0},{0,1},{0,-1} };
+            int ncomp = 0, bestc = -1, bestn = 0, kept = 0;
+            int i2, j2, q;
+            memset(cls, -1, sizeof(cls));
+            memset(comp, 0, sizeof(comp));
+            for (k = 0; k < nb; k++) {
+                double nm = 0.0;
+                int nn = 0;
+                i2 = ci_[k];
+                j2 = cj_[k];
+                for (q = 0; q < 4; q++) {
+                    int a2 = i2 + d4[q][0], b2 = j2 + d4[q][1];
+                    if (a2 >= 0 && b2 >= 0 && a2 < GRIDN && b2 < GRIDN
+                        && bit[a2][b2] >= 0) {
+                        nm += base[a2][b2];
+                        nn++;
+                    }
+                }
+                if (nn >= 2 && fabs(base[i2][j2] - nm / nn) > 15.0)
+                    cls[i2][j2] = base[i2][j2] > nm / nn;
+            }
+            for (j2 = 0; j2 < GRIDN; j2++)
+                for (i2 = 0; i2 < GRIDN; i2++) {
+                    int qh2 = 0, qt2 = 0, sz = 0;
+                    if (cls[i2][j2] < 0 || comp[i2][j2])
+                        continue;
+                    ncomp++;
+                    comp[i2][j2] = ncomp;
+                    qx[qt2] = i2;
+                    qy[qt2] = j2;
+                    qt2++;
+                    while (qh2 < qt2) {
+                        int cx2 = qx[qh2], cy2 = qy[qh2];
+                        qh2++;
+                        sz++;
+                        for (q = 0; q < 4; q++) {
+                            int a2 = cx2 + d4[q][0], b2 = cy2 + d4[q][1];
+                            if (a2 < 0 || b2 < 0 || a2 >= GRIDN
+                                || b2 >= GRIDN)
+                                continue;
+                            if (cls[a2][b2] < 0 || comp[a2][b2])
+                                continue;
+                            if (cls[a2][b2] == cls[cx2][cy2])
+                                continue; /* must alternate */
+                            comp[a2][b2] = ncomp;
+                            qx[qt2] = a2;
+                            qy[qt2] = b2;
+                            qt2++;
+                        }
+                    }
+                    if (sz > bestn) {
+                        bestn = sz;
+                        bestc = ncomp;
+                    }
+                }
+            for (j2 = 0; j2 < GRIDN; j2++)
+                for (i2 = 0; i2 < GRIDN; i2++)
+                    if (bit[i2][j2] >= 0
+                        && (cls[i2][j2] < 0 || comp[i2][j2] != bestc))
+                        bit[i2][j2] = -1;
+                    else if (bit[i2][j2] >= 0)
+                        kept++;
+            RDBG("reader: coherence kept %d cells (largest of %d comps)\n",
+                 kept, ncomp);
+            if (kept < 20)
+                continue;
+            if (getenv("MV_READER_DEBUG")) {
+                int i2, j2, jmin = GRIDN, jmax = 0, imin = GRIDN, imax = 0;
+                for (k = 0; k < nb; k++) {
+                    if (ci_[k] < imin) imin = ci_[k];
+                    if (ci_[k] > imax) imax = ci_[k];
+                    if (cj_[k] < jmin) jmin = cj_[k];
+                    if (cj_[k] > jmax) jmax = cj_[k];
+                }
+                fprintf(stderr, "reader: bit matrix (lattice %d..%d x %d..%d):\n",
+                        imin, imax, jmin, jmax);
+                for (j2 = jmin; j2 <= jmax; j2++) {
+                    fputs("  ", stderr);
+                    for (i2 = imin; i2 <= imax; i2++)
+                        fputc(bit[i2][j2] < 0 ? '.' : '0' + bit[i2][j2],
+                              stderr);
+                    fputc('\n', stderr);
+                }
+            }
+        }
+        if (getenv("MV_READER_DEBUG")) {
+            double s[GRIDN * GRIDN];
+            int a2, b2;
+            memcpy(s, dots, (size_t)nb * sizeof(double));
+            for (a2 = 1; a2 < nb; a2++)
+                for (b2 = a2; b2 > 0 && s[b2] < s[b2 - 1]; b2--) {
+                    double t2 = s[b2];
+                    s[b2] = s[b2 - 1];
+                    s[b2 - 1] = t2;
+                }
+            RDBG("reader: |dot-base| quartiles %.0f/%.0f/%.0f/%.0f/%.0f,"
+                 " thr %.0f\n", s[0], s[nb / 4], s[nb / 2],
+                 s[3 * nb / 4], s[nb - 1], thr);
+        }
         /* refs for counter decoding */
         {
             double mid = 0.5 * (bmin + bmax), sb = 0, sw = 0;
@@ -397,8 +644,9 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
     /* --- window votes for (rot m, offsets u,v) --- */
     {
         int votes_m[4] = { 0, 0, 0, 0 };
-        int best_m = -1, best_u = 0, best_v = 0, best_n = 0;
+        int best_n = 0;
         int vu[256], vv[256], vm[256], vc[256], nv = 0, k;
+        best_m = -1;
         for (j = 0; j + MV_PAT_WIN - 1 < GRIDN - 1; j++)
             for (i = 0; i + MV_PAT_WIN - 1 < GRIDN - 1; i++) {
                 unsigned code = 0;
@@ -446,8 +694,16 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
              votes_m[0], votes_m[1], votes_m[2], votes_m[3],
              best_m, best_u, best_v, best_n, nv);
         if (best_m < 0 || best_n < 3)
-            return MV_ERR;
+            continue;
         res->rot = best_m;
+        decoded = 1;
+    }
+    } /* escalation loop */
+    free(up);
+    up = NULL;
+    if (!decoded)
+        return MV_ERR;
+    {
 
         /* --- corners: map each lattice corner via its 4 squares --- */
         for (j = 1; j < GRIDN - 1; j++)
@@ -479,8 +735,8 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
                     continue;
                 if (res->n < MV_READ_MAXC) {
                     res->id[res->n] = pj_min * MV_PAT_CORNER_COLS + pi_min;
-                    res->uv[2 * res->n] = L.p[i][j][0];
-                    res->uv[2 * res->n + 1] = L.p[i][j][1];
+                    res->uv[2 * res->n] = L.p[i][j][0] / scale;
+                    res->uv[2 * res->n + 1] = L.p[i][j][1] / scale;
                     res->n++;
                 }
             }

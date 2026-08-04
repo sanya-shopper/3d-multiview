@@ -35,7 +35,7 @@
 \title{\textsc{multiview}: A Portable C99 System for Fixed-Camera\\
 Scene Analysis and 3D Model Extraction\\[4pt]
 \large A self-contained overview of the system and its mathematics}
-\author{Project documentation --- v0.5.0}
+\author{Project documentation --- v0.6.0}
 \date{August 4, 2026}
 
 \begin{document}
@@ -2067,6 +2067,49 @@ $34\%$ change false-alarm rate --- the doc's own texture-desert warning
 by validity gating; $1.39\%$ residual false alarms sit on occlusion
 fringes. This experiment closes roadmap items 5 and 6 at the sim tier:
 the first model of a scene produced from \emph{pixels} end to end.
+
+\paragraph{First real data (iPhone footage of the display app).} Two
+statically mounted iPhones filmed \code{tools/pattern.html} on a
+MacBook in a living room (HEVC video, frames extracted by
+\code{tools/extract\_frames.swift}, read by \code{tools/calibreal.c}).
+Results of the reader's first encounter with real photons, after a
+debugging session that added four robustness layers now permanent in
+\code{src/reader.c} (detection-threshold and 2$\times$-scale
+escalation; local-contrast 2-means bit classification;
+checkerboard-coherence pruning of grown-in clutter; projective cell
+centers by diagonal intersection):
+
+\begin{itemize}
+  \item the near-frontal view decodes \textbf{38/42 frames at
+        162/162 corners} with zero misidentifications, despite the
+        pattern occupying only $\sim$300\,px of a 1080-px frame
+        (browser not fullscreen --- half the intended scale);
+  \item the display counter is tracked across frames
+        ($\approx$29.4 counts per 0.5\,s frame spacing $=$
+        \textbf{58.8\,Hz refresh, measured through the camera}) ---
+        the temporal layer of \autoref{sec:tempcalib} working on real
+        hardware;
+  \item measured per-corner temporal noise over the static sequence:
+        $\sigma_u = 0.28$\,px, $\sigma_v = 0.21$\,px --- inside the
+        $0.25$--$0.35$\,px band the simulations assumed
+        (\autoref{tab:patresults}): the noise model survives contact
+        with reality;
+  \item Zhang calibration from these frames is \emph{degenerate},
+        exactly as \autoref{sec:printed} predicts: every frame shows
+        the same pose (nothing moved), and 38 copies of one homography
+        determine nothing --- the pose-diversity requirement
+        demonstrated on real data;
+  \item the second, steeply oblique view ($\gtrsim$55$^\circ$)
+        recovers corners, lattice, and coherence but not the identity
+        dots --- beyond the obliquity gate of \autoref{sec:rotating},
+        \emph{as designed}: geometry degrades gracefully, identity
+        fails loudly.
+\end{itemize}
+
+The reshoot protocol that follows from these measurements: pattern
+fullscreen (doubles the scale), display \emph{moved} through
+10--15 paused tilted poses within the obliquity gate, cameras
+AF/AE-locked.
 
 \paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
 disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the

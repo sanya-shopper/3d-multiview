@@ -37,4 +37,22 @@ int mv_graycode_decode(int *coord, unsigned char *valid,
                        const unsigned char *const *inv_frames,
                        int nbits, int npix, int min_contrast);
 
+/* Structured light, cross-camera: when a PROJECTOR casts the stripe
+ * sequence onto the scene, every scene point wears its projector
+ * coordinate as a label, and two cameras that decoded the sequence can
+ * be matched pixel-to-pixel with no feature detector: pixels seeing
+ * the same (column, row) code correspond.  For each code seen by both
+ * cameras, uv1/uv2 receive the centroid of the pixels carrying it (a
+ * code labels a small patch, its centroid is the stable point).
+ * colc/rowc/valid are the per-pixel decode results of the two cameras
+ * (as from mv_graycode_decode on each axis); wN, hN their image sizes;
+ * cw, ch the projector extents.  Returns the number of matches
+ * written (at most maxm). */
+int mv_graycode_match(double *uv1, double *uv2, int maxm,
+                      const int *colc1, const int *rowc1,
+                      const unsigned char *valid1, int w1, int h1,
+                      const int *colc2, const int *rowc2,
+                      const unsigned char *valid2, int w2, int h2,
+                      int cw, int ch);
+
 #endif /* MV_GRAYCODE_H */

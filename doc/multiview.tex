@@ -1805,6 +1805,64 @@ estimated}: no ego-motion SfM, scale and drift anchored by the fixed
 backbone. The system becomes self-tracking in the useful sense --- the
 fixed cameras are the ground truth that mobile sensors borrow.
 
+\subsection{Projected structured light (built, awaiting hardware)}
+\label{sec:slight}
+
+The dense-stereo results carry a standing caveat: SAD matching needs
+texture, and the texture gate's honest answer on a blank wall is ``no
+depth here'' (the texture-desert failure measured in
+\autoref{sec:results}). Real rooms are mostly blank wall, bare
+floor, and blank ceiling. A projector solves this by \emph{painting} structure: it casts
+the Gray-code stripe sequence of \autoref{sec:display} onto the
+scene, so every lit surface point wears its projector coordinate as a
+temporal label. That is the primary role --- marking and measuring
+structure-free walls, floors, and (aim it up: in an enclosed space
+the most reliably empty surface of all) ceilings. Two useful corollaries come free.
+First, cross-camera matching needs no feature detector at all: pixels
+in two cameras that decoded the same (column, row) label correspond
+(\code{mv\_graycode\_match}), which yields tens of thousands of
+correspondences on surfaces that offer none naturally. Second, those
+correspondences give the cameras' \emph{relative pose} through the
+essential matrix (\code{mv\_fundamental\_8point\_robust} $\to$
+\code{mv\_essential\_pose}) without both cameras needing to see the
+calibration display --- an extrinsics bridge for camera pairs at
+awkward angles. The projector itself needs no calibration for any of
+this: it is only a label dispenser; all geometry lives in the
+cameras. Scale is the one quantity the labels cannot supply --- one
+tape-measured baseline, or the display in view of either camera,
+anchors it.
+
+The whole path is implemented and validated in simulation ---
+display app mode M5 (46 slots of $\sim$$0.5$\,s: white and black
+marker slots, then 11 column and 11 row Gray bits, each with its
+inverse; cycle $\approx23.5$\,s), the algorithm round trip
+(\code{test\_structured\_light}: 13k+ matches, relative pose within
+$0.33^\circ$ of truth in rotation and baseline direction), and the
+\emph{tool-level} integration (\code{demo/slightsim.c} fabricates a
+two-camera capture as PGM files, frame timing included, and
+\code{tools/slreal.c} recovers the pose to the fourth digit and
+triangulates 62k points from it). Two lessons from getting there are
+worth keeping. A sim-fidelity trap: painting the projected codes onto
+finite-resolution scene textures with nearest sampling aliased a
+moir\'e between the texture grid and the stripe pitch, biasing the
+recovered baseline by $10^\circ$ --- a real projector has no
+intermediate raster, so the sim must supersample to avoid inventing
+one. And an estimator lesson: dense code matching has a fat tail of
+boundary-pixel mismatches, so the 8-point runs with two rounds of
+median-residual trimming (now a library function, useful wherever
+correspondences come cheap and dirty).
+
+\emph{Runbook for the hardware session} (also atop
+\code{tools/slreal.c}): (1) projector shows \code{pattern.html},
+key 5, room darkened; (2) both cameras fixed, views overlapping on
+the lit surfaces, record $\geq60$\,s ($\geq2$ cycles); (3)
+intrinsics per camera from a separate mode-1/mode-4 pattern film if
+not already known; (4) extract frames at $0.1$\,s; (5) write the
+two spec files (intrinsics line, \code{interval 0.1}, frame paths);
+(6) \code{./slreal <baseline\_m> camA.spec camB.spec out}. Outputs:
+relative pose printout and \code{out.ply}. If cycle detection fails,
+the room was too bright or the capture too short.
+
 \subsection{Range-finder fusion (optional, kept open)}
 \label{sec:range}
 
@@ -3241,6 +3299,20 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         multiplexing of both tiers in one session (alternate
         counter-parity blocks) so near and far cameras share a single
         capture.
+  \item \textbf{[done at sim tier] Projected structured light} ---
+        \autoref{sec:slight}: display-app mode M5, cross-camera code
+        matching (\code{mv\_graycode\_match}), robust 8-point +
+        essential pose (\code{mv\_essential\_pose}), the
+        \code{slreal} tool, and the \code{demo\_slight} integration
+        sim that fabricates a full two-camera capture and recovers the
+        ground-truth pose to the fourth digit. \emph{Pitch}: rooms are
+        mostly blank wall, and blank wall is where our dense stereo
+        honestly reports nothing; a \$60 projector paints structure
+        onto exactly those surfaces, and doubles as an extrinsics
+        bridge for camera pairs that cannot both see the display.
+        \emph{Unlocks}: dense room geometry on textureless surfaces;
+        awaiting only the projector hardware --- the runbook in
+        \autoref{sec:slight} is written for solo operation.
   \item \textbf{Levenberg--Marquardt refinement} (later: bundle
         adjustment \cite{Triggs2000}). Joint nonlinear minimization of
         reprojection error over intrinsics, poses, and distortion.

@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "mv/core.h"
 #include "mv/graycode.h"
 
@@ -71,4 +72,61 @@ int mv_graycode_decode(int *coord, unsigned char *valid,
         }
     }
     return nvalid;
+}
+
+int mv_graycode_match(double *uv1, double *uv2, int maxm,
+                      const int *colc1, const int *rowc1,
+                      const unsigned char *valid1, int w1, int h1,
+                      const int *colc2, const int *rowc2,
+                      const unsigned char *valid2, int w2, int h2,
+                      int cw, int ch)
+{
+    /* codes are binned into BLOCK x BLOCK projector-pixel patches; a
+     * camera pixel spans a few projector pixels anyway, and the two
+     * cameras' centroids of one patch correspond to sub-pixel level */
+    enum { BLOCK = 2 };
+    int bw = (cw + BLOCK - 1) / BLOCK, bh = (ch + BLOCK - 1) / BLOCK;
+    double *acc; /* per bin: su1 sv1 n1 su2 sv2 n2 */
+    int i, x, y, nm = 0;
+
+    acc = (double *)calloc((size_t)bw * bh * 6, sizeof(double));
+    if (!acc)
+        return 0;
+    for (y = 0; y < h1; y++)
+        for (x = 0; x < w1; x++) {
+            int p = y * w1 + x, b;
+            if (!valid1[p])
+                continue;
+            if (colc1[p] < 0 || colc1[p] >= cw || rowc1[p] < 0
+                || rowc1[p] >= ch)
+                continue;
+            b = (rowc1[p] / BLOCK) * bw + colc1[p] / BLOCK;
+            acc[6 * b + 0] += x;
+            acc[6 * b + 1] += y;
+            acc[6 * b + 2] += 1.0;
+        }
+    for (y = 0; y < h2; y++)
+        for (x = 0; x < w2; x++) {
+            int p = y * w2 + x, b;
+            if (!valid2[p])
+                continue;
+            if (colc2[p] < 0 || colc2[p] >= cw || rowc2[p] < 0
+                || rowc2[p] >= ch)
+                continue;
+            b = (rowc2[p] / BLOCK) * bw + colc2[p] / BLOCK;
+            acc[6 * b + 3] += x;
+            acc[6 * b + 4] += y;
+            acc[6 * b + 5] += 1.0;
+        }
+    for (i = 0; i < bw * bh && nm < maxm; i++) {
+        if (acc[6 * i + 2] < 1.0 || acc[6 * i + 5] < 1.0)
+            continue;
+        uv1[2 * nm] = acc[6 * i + 0] / acc[6 * i + 2];
+        uv1[2 * nm + 1] = acc[6 * i + 1] / acc[6 * i + 2];
+        uv2[2 * nm] = acc[6 * i + 3] / acc[6 * i + 5];
+        uv2[2 * nm + 1] = acc[6 * i + 4] / acc[6 * i + 5];
+        nm++;
+    }
+    free(acc);
+    return nm;
 }

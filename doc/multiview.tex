@@ -35,7 +35,7 @@
 Scene Analysis and 3D Model Extraction\\[4pt]
 \large A self-contained overview of the system and its mathematics}
 \author{Project documentation --- v0.4.0}
-\date{August 2, 2026}
+\date{August 4, 2026}
 
 \begin{document}
 \maketitle
@@ -347,7 +347,10 @@ targets are \emph{planes with known metric structure}: a printed
 checkerboard page (\autoref{sec:printed}) and a controlled computer display
 (\autoref{sec:display}). The mathematics is the same for both: several views
 of a known plane determine the intrinsics, the distortion, and each view's
-pose, by Zhang's method \cite{Zhang2000,SturmMaybank1999}.
+pose, by Zhang's method \cite{Zhang2000,SturmMaybank1999} --- the
+plane-based approach that displaced earlier calibration against machined
+3D targets \cite{Tsai1987}, paper and displays being the targets anyone
+can make.
 
 \subsection{The homography of a plane}
 \label{sec:homography}
@@ -846,15 +849,16 @@ session is a scripted sequence of modes.
 
 \begin{table}[ht]
 \centering
-\footnotesize
+\scriptsize
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{l l l l l}
 \toprule
 Mode & Screen shows & Plate & Calibrates & Rationale \\
 \midrule
-M0 & flat gray ladder (0--100\%) & any & radiometric transfer, flat field & \autoref{sec:radiometry} \\
-M1 & Gray-code stripe sweep $+$ inverses & parked & dense correspondences $\to$ $\K$, pose & \autoref{sec:display} \\
-M2 & composite layout (\autoref{fig:layout}) & $\omega$ const. & $\K,\R,\tv,k$; orbit; $\phi,T$ & \autoref{sec:rotating}, \autoref{sec:tempcalib} \\
-M3 & full-screen toggle at $T_d$ & parked & $\tau$ (banding), $t_e$ & \autoref{ex:banding} \\
+M0 & flat gray ladder (0--100\%) & any & radiometric transfer, flat field & \S\ref{sec:radiometry} \\
+M1 & Gray-code stripe sweep $+$ inverses & parked & dense correspondences $\to$ $\K$, pose & \S\ref{sec:display} \\
+M2 & composite layout (\autoref{fig:layout}) & $\omega$ const. & $\K,\R,\tv,k$; orbit; $\phi,T$ & \S\ref{sec:rotating}, \S\ref{sec:tempcalib} \\
+M3 & full-screen toggle at $T_d$ & parked & $\tau$ (banding), $t_e$ & Ex.~\ref{ex:banding} \\
 \bottomrule
 \end{tabular}
 \caption{Display-app operating modes.}
@@ -1243,9 +1247,9 @@ raycasting the field, synthetic depth/normal maps from any viewpoint
 \underbrace{(D,W)\ \text{grid}}_{\text{state}}
 \;\rightarrow\;
 \begin{cases}
-\text{marching cubes} \rightarrow \text{mesh (PLY)}\\
-\text{point queries} \rightarrow \text{foreground/change}\\
-\text{raycast} \rightarrow \text{depth, normals}
+\text{march.\ cubes} \rightarrow \text{mesh}\\
+\text{queries} \rightarrow \text{foreground}\\
+\text{raycast} \rightarrow \text{depth}
 \end{cases}
 \]
 Fusion is \emph{incremental and order-insensitive} --- the update
@@ -1815,7 +1819,7 @@ being implementation-limited. The reconstructed cloud is written to
 \code{out\_cloud.ply}.
 
 \paragraph{Calibration (\code{demo/calibrate.c}).} A camera with
-ground-truth $f_x{=}800$, $f_y{=}805$, $(c_x,c_y){=}(322,238)$, zero skew
+ground-truth $f_x=800$, $f_y=805$, $c_x=322$, $c_y=238$, zero skew
 and zero distortion photographs the letter-page target
 (\autoref{sec:printed}; $7\times9$ corners, 24\,mm squares) in six poses
 with tilts up to $35^\circ$ at 0.45--0.65\,m; corners carry
@@ -2060,7 +2064,8 @@ $\sigma=0.3$\,px the estimator sits comfortably in its linear regime.
 \paragraph{C. Calibration: is $-7$\,px a typical draw?} The single
 reported focal error (\autoref{tab:calibresults}) is one noise
 realization. Across ten seeds at $\sigma=0.3$\,px the $f_x$ errors are
-$\{-4.0,-1.0,+3.5,+1.5,-2.5,+3.4,-7.0,+0.7,+1.2,+3.4\}$: mean
+$-4.0$, $-1.0$, $+3.5$, $+1.5$, $-2.5$, $+3.4$, $-7.0$, $+0.7$, $+1.2$,
+$+3.4$: mean
 $-0.08$\,px (\emph{unbiased}), sample standard deviation $3.5$\,px. The
 demo's $-6.95$\,px is a $2\sigma$ draw --- unlucky, not anomalous. At
 $\sigma=0.15$\,px the mean $|f_x|$ error is $1.41$\,px, exactly half the
@@ -2428,7 +2433,7 @@ ships the bytes.''
 \begin{table}[ht]
 \centering
 \scriptsize
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{2.5pt}
 \newcommand{\cm}{$\checkmark$}
 \begin{tabular}{l l c c c c c c l}
 \toprule
@@ -2527,6 +2532,7 @@ experiments --- inside its own fence.
 
 \begin{figure}[ht]
 \centering
+\resizebox{0.97\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\footnotesize,
   box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
@@ -2582,7 +2588,7 @@ experiments --- inside its own fence.
   \draw[arr] (onnx.north) -- node[lbl, right]
     {CSV: boxes, landmarks, embeddings} (onnx |- core.south);
   \draw[net] (onnx.east) -- node[lbl, below=4mm] {TCP (data only)} (agpl.west);
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{Deployment architecture. Solid boxes are hardware boundaries;
 the dashed red box is the license/process boundary --- all learned
 components live behind it, exchanging only data (frames one way,
@@ -2616,6 +2622,7 @@ swap plus recalibration, never a data migration.
 
 \begin{figure}[ht]
 \centering
+\resizebox{0.97\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\scriptsize,
   mach/.style={draw, thick, rounded corners=3pt, align=left,
@@ -2684,7 +2691,7 @@ swap plus recalibration, never a data migration.
     {reports (read-only)} ($(laptop.north)+(-0.5,0)$);
   \draw[arr] ($(laptop.north)+(0.7,0)$) -- node[lbl, right]
     {enrollment photos} ($(host.south)+(0.7,0)$);
-\end{tikzpicture}
+\end{tikzpicture}}
 \caption{Machine-centric deployment view: per-machine software and
 persistent data, and all inter-machine flows. Scene and identity data
 rest only on the metric host; the inference box is compute-only;
@@ -2696,7 +2703,7 @@ sensors and fixtures are stateless.}
 \section{Roadmap}
 \label{sec:roadmap}
 
-In dependency order: (1) \emph{[done]} saddle-point corner detection
+\sloppy In dependency order: (1) \emph{[done]} saddle-point corner detection
 with sub-pixel refinement (\code{mv/reader.h}, validated in
 \autoref{tab:patresults}); (2) \emph{[partially done]} the calibration
 subsystem to the contract of \autoref{sec:calibspec}: pattern generator,
@@ -3111,7 +3118,7 @@ components add \emph{in quadrature}.
 \begin{example}[RMS vs mean vs max]
 \label{ex:rmsbasic}
 Errors $\{1,2,2,5\}$: mean $=2.5$; RMS
-$=\sqrt{(1+4+4+25)/4}=\sqrt{8.5}\approx2.92$; max $=5$. RMS always lies
+$=\sqrt{(1+4+4+25)/4}$ $=\sqrt{8.5}\approx2.92$; max $=5$. RMS always lies
 between mean and max, weighting large errors more than the mean does
 (squaring makes the $5$ contribute $25/34$ of the total). This document
 reports RMS as the headline and max separately when tails matter
@@ -3217,8 +3224,8 @@ read the section, open the module, run the validator.
 
 \begin{table}[ht]
 \centering
-\footnotesize
-\setlength{\tabcolsep}{4pt}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
 \begin{tabular}{l l l}
 \toprule
 Paper & Implementation & Validated by \\

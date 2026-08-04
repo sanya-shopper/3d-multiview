@@ -156,6 +156,61 @@ void mv_pattern_ctr_cell_px(int c, double xy[2])
     xy[1] = MV_PAT_CTR_Y0 + MV_PAT_CTR_CELL / 2.0;
 }
 
+/* ---- coarse tier (spec v2) ---------------------------------------- */
+
+int mv_pattern2_mark(int col, int row)
+{
+    return (row == 0 && (col == 0 || col == 1)) || (row == 1 && col == 0);
+}
+
+void mv_pattern2_render(unsigned char *img, unsigned counter)
+{
+    int r, c, j;
+    memset(img, 255, (size_t)MV_PAT_W * MV_PAT_H);
+    for (r = 0; r < MV_PAT2_GRID_ROWS; r++)
+        for (c = 0; c < MV_PAT2_GRID_COLS; c++) {
+            int x0 = MV_PAT2_GRID_X0 + MV_PAT2_CELL * c;
+            int y0 = MV_PAT2_GRID_Y0 + MV_PAT2_CELL * r;
+            int black = ((r + c) % 2 == 0);
+            if (black)
+                fill(img, x0, y0, MV_PAT2_CELL, MV_PAT2_CELL, 0);
+            if (mv_pattern2_mark(c, r)) {
+                int d0 = (MV_PAT2_CELL - MV_PAT2_MARK) / 2;
+                fill(img, x0 + d0, y0 + d0, MV_PAT2_MARK, MV_PAT2_MARK,
+                     black ? 255 : 0);
+            }
+        }
+    {
+        unsigned g = gray_encode(counter & ((1u << MV_PAT2_CTR_BITS) - 1u));
+        unsigned parity = 0, bits[MV_PAT2_CTR_CELLS];
+        for (j = 0; j < MV_PAT2_CTR_BITS; j++)
+            parity ^= (g >> j) & 1u;
+        bits[0] = 1;
+        bits[1] = 0;
+        for (j = 0; j < MV_PAT2_CTR_BITS; j++)
+            bits[2 + j] = (g >> (MV_PAT2_CTR_BITS - 1 - j)) & 1u;
+        bits[10] = parity;
+        bits[11] = !parity;
+        /* bits render as ISOLATED squares in white gutters: adjacent
+         * solid cells of opposite color would create saddle-like
+         * responses that pollute the corner lattice; isolated
+         * rectangles make only L-corners, which the detector's
+         * threshold rejects */
+        for (c = 0; c < MV_PAT2_CTR_CELLS; c++)
+            if (bits[c])
+                fill(img,
+                     MV_PAT2_CTR_X0 + MV_PAT2_CTR_CELL * c
+                         + (MV_PAT2_CTR_CELL - MV_PAT2_MARK) / 2,
+                     MV_PAT2_CTR_Y0, MV_PAT2_MARK, MV_PAT2_CTR_H, 0);
+    }
+}
+
+void mv_pattern2_corner_px(int i, int j, double xy[2])
+{
+    xy[0] = MV_PAT2_GRID_X0 + MV_PAT2_CELL * (i + 1);
+    xy[1] = MV_PAT2_GRID_Y0 + MV_PAT2_CELL * (j + 1);
+}
+
 static int hamming(unsigned a, unsigned b)
 {
     unsigned x = a ^ b;

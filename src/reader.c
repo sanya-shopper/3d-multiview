@@ -92,9 +92,18 @@ static int detect_saddles(struct cand *cd, const unsigned char *img,
             if (r0 < relthr * rmax || r0 < 6.0)
                 continue;
             for (j = -2; j <= 2 && peak; j++)
-                for (i = -2; i <= 2 && peak; i++)
-                    if ((i || j) && R[(y + j) * w + (x + i)] > r0)
+                for (i = -2; i <= 2 && peak; i++) {
+                    float rn;
+                    if (!i && !j)
+                        continue;
+                    rn = R[(y + j) * w + (x + i)];
+                    /* ties (exact plateaus on clean synthetic input)
+                     * break to the scan-earlier pixel, else a plateau
+                     * emits one candidate per pixel */
+                    if (rn > r0 || (rn == r0 && (j < 0 || (j == 0
+                                                           && i < 0))))
                         peak = 0;
+                }
             if (!peak)
                 continue;
             den = R[y * w + x - 1] - 2.0 * r0 + R[y * w + x + 1];
@@ -807,4 +816,316 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
         }
     }
     return MV_OK;
+}
+
+/* ================= coarse tier (spec v2) ============================= */
+
+/* Map an observed lattice cell (a,b) within a di x dj bounding box to
+ * pattern corner (i 0..4, j 0..1) under rot clockwise quarter-turns.
+ * Landscape observations (di=5) pair with rot 0/2, portrait (di=2)
+ * with rot 1/3. */
+static void coarse_map(int rot, int a, int b, int *i, int *j)
+{
+    switch (rot) {
+    case 0:  *i = a;     *j = b;     break;
+    case 1:  *i = b;     *j = 1 - a; break;
+    case 2:  *i = 4 - a; *j = 1 - b; break;
+    default: *i = 4 - b; *j = a;     break;
+    }
+}
+
+/* Validate one (lattice, rot) hypothesis on the working image: fit the
+ * homography, require the 6x3 checker phase to match exactly, require
+ * the observed orientation-mark set to equal the spec's asymmetric L,
+ * then decode the counter strip.  Fills res (uv in working-image
+ * coordinates) on success. */
+static int coarse_validate(mv_read_result *res, const unsigned char *img,
+                           int w, int h, struct lattice *L,
+                           int imin, int jmin, int di, int dj, int rot)
+{
+    double obj[2 * 10], uvs[2 * 10], H[9];
+    int ids[10];
+    int n = 0, a, b, k;
+
+    for (b = 0; b < dj; b++)
+        for (a = 0; a < di; a++) {
+            int pi, pj;
+            double xy[2];
+            if (!L->have[imin + a][jmin + b])
+                continue;
+            coarse_map(rot, a, b, &pi, &pj);
+            if (pi < 0 || pi > 4 || pj < 0 || pj > 1)
+                return MV_ERR;
+            mv_pattern2_corner_px(pi, pj, xy);
+            obj[2 * n] = xy[0];
+            obj[2 * n + 1] = xy[1];
+            uvs[2 * n] = L->p[imin + a][jmin + b][0];
+            uvs[2 * n + 1] = L->p[imin + a][jmin + b][1];
+            ids[n] = pj * MV_PAT2_CORNER_COLS + pi;
+            n++;
+        }
+    if (n < 6)
+        return MV_ERR;
+    if (mv_homography_dlt(H, obj, uvs, n) != MV_OK)
+        return MV_ERR;
+
+    {
+        double base[MV_PAT2_GRID_ROWS][MV_PAT2_GRID_COLS];
+        double cen[MV_PAT2_GRID_ROWS][MV_PAT2_GRID_COLS];
+        double mb = 0.0, mw = 0.0, mid;
+        int nb = 0, nw = 0, r, c;
+        static const double off[4][2] = {
+            { -0.30, -0.30 }, { 0.30, -0.30 },
+            { -0.30, 0.30 }, { 0.30, 0.30 }
+        };
+        for (r = 0; r < MV_PAT2_GRID_ROWS; r++)
+            for (c = 0; c < MV_PAT2_GRID_COLS; c++) {
+                double cx = MV_PAT2_GRID_X0 + (c + 0.5) * MV_PAT2_CELL;
+                double cy = MV_PAT2_GRID_Y0 + (r + 0.5) * MV_PAT2_CELL;
+                double s = 0.0;
+                for (k = 0; k < 4; k++) {
+                    double X = cx + off[k][0] * MV_PAT2_CELL;
+                    double Y = cy + off[k][1] * MV_PAT2_CELL;
+                    double W = H[6] * X + H[7] * Y + H[8], u, v, g;
+                    if (fabs(W) < 1e-12)
+                        return MV_ERR;
+                    u = (H[0] * X + H[1] * Y + H[2]) / W;
+                    v = (H[3] * X + H[4] * Y + H[5]) / W;
+                    g = sample3(img, w, h, u, v);
+                    if (g < 0.0)
+                        return MV_ERR;
+                    s += g;
+                }
+                base[r][c] = s / 4.0;
+                {
+                    double W = H[6] * cx + H[7] * cy + H[8], u, v, g;
+                    if (fabs(W) < 1e-12)
+                        return MV_ERR;
+                    u = (H[0] * cx + H[1] * cy + H[2]) / W;
+                    v = (H[3] * cx + H[4] * cy + H[5]) / W;
+                    g = sample3(img, w, h, u, v);
+                    if (g < 0.0)
+                        return MV_ERR;
+                    cen[r][c] = g;
+                }
+                if ((r + c) % 2 == 0) {
+                    mb += base[r][c];
+                    nb++;
+                } else {
+                    mw += base[r][c];
+                    nw++;
+                }
+            }
+        mb /= nb;
+        mw /= nw;
+        if (mw - mb < 25.0)
+            return MV_ERR;
+        mid = 0.5 * (mb + mw);
+        for (r = 0; r < MV_PAT2_GRID_ROWS; r++)
+            for (c = 0; c < MV_PAT2_GRID_COLS; c++) {
+                int expblack = ((r + c) % 2 == 0);
+                int marked;
+                if ((base[r][c] < mid) != expblack)
+                    return MV_ERR;
+                marked = fabs(cen[r][c] - base[r][c]) > 0.5 * (mw - mb);
+                if (marked != mv_pattern2_mark(c, r))
+                    return MV_ERR;
+            }
+
+        /* counter strip: [1,0] + 8 Gray + parity + ~parity */
+        res->counter_valid = 0;
+        {
+            unsigned bits[MV_PAT2_CTR_CELLS], g2 = 0, parity = 0;
+            double conf = 1.0, halfrange = 0.5 * (mw - mb);
+            int okc = 1;
+            for (c = 0; c < MV_PAT2_CTR_CELLS && okc; c++) {
+                double X = MV_PAT2_CTR_X0 + (c + 0.5) * MV_PAT2_CTR_CELL;
+                double Y = MV_PAT2_CTR_Y0 + 0.5 * MV_PAT2_CTR_H;
+                double W = H[6] * X + H[7] * Y + H[8], u, v, s, m;
+                if (fabs(W) < 1e-12) {
+                    okc = 0;
+                    break;
+                }
+                u = (H[0] * X + H[1] * Y + H[2]) / W;
+                v = (H[3] * X + H[4] * Y + H[5]) / W;
+                s = sample3(img, w, h, u, v);
+                if (s < 0.0) {
+                    okc = 0;
+                    break;
+                }
+                bits[c] = (s < mid) ? 1u : 0u;
+                m = fabs(s - mid) / (halfrange > 1.0 ? halfrange : 1.0);
+                if (m > 1.0)
+                    m = 1.0;
+                if (m < conf)
+                    conf = m;
+            }
+            if (okc && bits[0] == 1u && bits[1] == 0u) {
+                for (c = 0; c < MV_PAT2_CTR_BITS; c++) {
+                    g2 = (g2 << 1) | bits[2 + c];
+                    parity ^= bits[2 + c];
+                }
+                if (bits[10] == parity && bits[11] == (parity ^ 1u)) {
+                    unsigned bv = g2;
+                    bv ^= bv >> 1;
+                    bv ^= bv >> 2;
+                    bv ^= bv >> 4;
+                    res->counter = bv;
+                    res->counter_valid = 1;
+                    res->counter_conf = conf;
+                }
+            }
+        }
+    }
+
+    res->n = n;
+    for (k = 0; k < n; k++) {
+        res->id[k] = ids[k];
+        res->uv[2 * k] = uvs[2 * k];
+        res->uv[2 * k + 1] = uvs[2 * k + 1];
+    }
+    memcpy(res->H, H, sizeof(H));
+    res->rot = rot;
+    return MV_OK;
+}
+
+static int coarse_try(mv_read_result *res, const unsigned char *img,
+                      int w, int h, double relthr)
+{
+    static struct cand cd[MAXCAND];
+    static char tried[MAXCAND];
+    static struct lattice L;
+    int n, attempt;
+
+    n = detect_saddles(cd, img, w, h, relthr);
+    RDBG("coarse: %d saddle candidates (thr %.2f)\n", n, relthr);
+    if (n < 8)
+        return MV_ERR;
+    memset(tried, 0, sizeof(tried));
+    for (attempt = 0; attempt < 24; attempt++) {
+        int seed = -1, k, count, i, j, di, dj, rot;
+        int imin = GRIDN, imax = -1, jmin = GRIDN, jmax = -1;
+        for (k = 0; k < n; k++)
+            if (!tried[k] && (seed < 0 || cd[k].resp > cd[seed].resp))
+                seed = k;
+        if (seed < 0)
+            break;
+        tried[seed] = 1;
+        count = grow_from_seed(&L, cd, n, seed);
+        if (count < 8 || count > 40)
+            continue;
+        for (j = 0; j < GRIDN; j++)
+            for (i = 0; i < GRIDN; i++)
+                if (L.have[i][j]) {
+                    if (i < imin)
+                        imin = i;
+                    if (i > imax)
+                        imax = i;
+                    if (j < jmin)
+                        jmin = j;
+                    if (j > jmax)
+                        jmax = j;
+                }
+        di = imax - imin + 1;
+        dj = jmax - jmin + 1;
+        RDBG("coarse: seed %d grew %d corners, bbox %dx%d\n", seed,
+             count, di, dj);
+        if (di > 14 || dj > 14)
+            continue;
+        /* the grown lattice may include stray captures (strip gutters,
+         * mark corners, foreshortened neighbors); do not demand a clean
+         * bounding box -- enumerate candidate 5x2 / 2x5 windows inside
+         * it and let the exact validator (checker phase + mark L +
+         * counter) decide */
+        {
+            int wi, wj, ww, wh, shape;
+            for (shape = 0; shape < 2; shape++) {
+                ww = shape ? 2 : 5;
+                wh = shape ? 5 : 2;
+                if (di < ww || dj < wh)
+                    continue;
+                for (wj = jmin; wj + wh - 1 <= jmax; wj++)
+                    for (wi = imin; wi + ww - 1 <= imax; wi++) {
+                        int a, b, present = 0;
+                        for (b = 0; b < wh; b++)
+                            for (a = 0; a < ww; a++)
+                                present += L.have[wi + a][wj + b];
+                        if (present < 8)
+                            continue;
+                        for (rot = 0; rot < 4; rot++) {
+                            if ((rot % 2 == 0) != (ww == 5))
+                                continue;
+                            if (coarse_validate(res, img, w, h, &L, wi,
+                                                wj, ww, wh, rot)
+                                == MV_OK) {
+                                RDBG("coarse: validated rot %d, %d "
+                                     "corners, counter %svalid\n", rot,
+                                     res->n,
+                                     res->counter_valid ? "" : "in");
+                                return MV_OK;
+                            }
+                        }
+                    }
+            }
+        }
+    }
+    return MV_ERR;
+}
+
+int mv_read_coarse(mv_read_result *res, const unsigned char *img,
+                   int w, int h)
+{
+    static const int SC[3] = { 1, 2, 4 };
+    static const double THR[2] = { 0.55, 0.30 };
+    int si, ti, i;
+
+    memset(res, 0, sizeof(*res));
+    for (si = 0; si < 3; si++) {
+        int s = SC[si], ws = w / s, hs = h / s;
+        unsigned char *ds;
+        if (ws < 32 || hs < 32)
+            continue;
+        if (s == 1)
+            ds = (unsigned char *)img;
+        else {
+            int x, y, a, b;
+            ds = (unsigned char *)malloc((size_t)ws * hs);
+            if (!ds)
+                continue;
+            for (y = 0; y < hs; y++)
+                for (x = 0; x < ws; x++) {
+                    int acc = 0;
+                    for (b = 0; b < s; b++)
+                        for (a = 0; a < s; a++)
+                            acc += img[(y * s + b) * w + x * s + a];
+                    ds[y * ws + x] = (unsigned char)(acc / (s * s));
+                }
+        }
+        for (ti = 0; ti < 2; ti++) {
+            if (coarse_try(res, ds, ws, hs, THR[ti]) == MV_OK) {
+                if (s != 1) {
+                    static double obj[2 * 10];
+                    for (i = 0; i < res->n; i++) {
+                        double xy[2];
+                        res->uv[2 * i] = res->uv[2 * i] * s
+                                         + (s - 1) * 0.5;
+                        res->uv[2 * i + 1] = res->uv[2 * i + 1] * s
+                                             + (s - 1) * 0.5;
+                        mv_pattern2_corner_px(res->id[i]
+                                              % MV_PAT2_CORNER_COLS,
+                                              res->id[i]
+                                              / MV_PAT2_CORNER_COLS, xy);
+                        obj[2 * i] = xy[0];
+                        obj[2 * i + 1] = xy[1];
+                    }
+                    mv_homography_dlt(res->H, obj, res->uv, res->n);
+                    free(ds);
+                }
+                return MV_OK;
+            }
+        }
+        if (s != 1)
+            free(ds);
+    }
+    return MV_ERR;
 }

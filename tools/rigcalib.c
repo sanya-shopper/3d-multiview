@@ -31,8 +31,29 @@ typedef struct {
     double K[9], kr[2];
     unsigned counter[MAXOBS];
     mv_camera pose[MAXOBS]; /* display-plane -> camera */
+    int tier[MAXOBS];       /* 1 = fine pattern, 2 = coarse */
+    int seq[MAXOBS];        /* frame order, for coarse wrap gating */
     int nobs;
 } cam_t;
+
+/* counter distance between observation i of camera a and j of camera b.
+ * Fine counters compare directly; when either side is coarse (8-bit,
+ * wraps every 256 refreshes ~ 4.3 s) compare mod 256 and gate by frame
+ * order so a wrap cannot alias two distant moments into one. */
+static long obs_dk(const cam_t *a, int i, const cam_t *b, int j)
+{
+    long dk;
+    if (a->tier[i] == 1 && b->tier[j] == 1) {
+        dk = (long)a->counter[i] - (long)b->counter[j];
+    } else {
+        long sd = a->seq[i] - b->seq[j];
+        if (sd < -8 || sd > 8)
+            return 1000;
+        dk = ((long)(a->counter[i] & 255u) - (long)(b->counter[j] & 255u)
+              + 384) % 256 - 128;
+    }
+    return dk < 0 ? -dk : dk;
+}
 
 static int undistort_uv(double *out, const double *in, int n,
                         const double K[9], const double kr[2])
@@ -89,19 +110,29 @@ static int load_camera(cam_t *c, const char *spec, double pitch)
             *nl = 0;
         if (!line[0])
             continue;
+        int tier = 1;
         nread++;
         if (mv_pgm_read(line, &img, &w, &h) != MV_OK)
             continue;
         if (mv_read_pattern(&rr, img, w, h) != MV_OK || rr.n < 100
             || !rr.counter_valid) {
-            free(img);
-            continue;
+            if (mv_read_coarse(&rr, img, w, h) != MV_OK || rr.n < 8
+                || !rr.counter_valid) {
+                free(img);
+                continue;
+            }
+            tier = 2;
         }
         free(img);
         for (i = 0; i < rr.n; i++) {
             double xy[2];
-            mv_pattern_corner_px(rr.id[i] % MV_PAT_CORNER_COLS,
-                                 rr.id[i] / MV_PAT_CORNER_COLS, xy);
+            if (tier == 1)
+                mv_pattern_corner_px(rr.id[i] % MV_PAT_CORNER_COLS,
+                                     rr.id[i] / MV_PAT_CORNER_COLS, xy);
+            else
+                mv_pattern2_corner_px(rr.id[i] % MV_PAT2_CORNER_COLS,
+                                      rr.id[i] / MV_PAT2_CORNER_COLS,
+                                      xy);
             obj[2 * i] = xy[0] * pitch;
             obj[2 * i + 1] = xy[1] * pitch;
         }
@@ -111,6 +142,8 @@ static int load_camera(cam_t *c, const char *spec, double pitch)
             != MV_OK)
             continue;
         c->counter[c->nobs] = rr.counter;
+        c->tier[c->nobs] = tier;
+        c->seq[c->nobs] = nread;
         c->nobs++;
     }
     fclose(fp);
@@ -183,10 +216,7 @@ int main(int argc, char **argv)
             int bestj = -1;
             long bestdk = MAXDK + 1;
             for (j = 0; j < cams[c].nobs; j++) {
-                long dk = (long)cams[0].counter[i]
-                          - (long)cams[c].counter[j];
-                if (dk < 0)
-                    dk = -dk;
+                long dk = obs_dk(&cams[0], i, &cams[c], j);
                 if (dk < bestdk) {
                     bestdk = dk;
                     bestj = j;
@@ -234,10 +264,7 @@ int main(int argc, char **argv)
                 int bestj = -1;
                 long bestdk = MAXDK + 1;
                 for (j = 0; j < cams[c].nobs; j++) {
-                    long dk = (long)cams[0].counter[i]
-                              - (long)cams[c].counter[j];
-                    if (dk < 0)
-                        dk = -dk;
+                    long dk = obs_dk(&cams[0], i, &cams[c], j);
                     if (dk < bestdk) {
                         bestdk = dk;
                         bestj = j;

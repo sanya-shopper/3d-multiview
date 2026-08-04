@@ -1040,6 +1040,51 @@ monitor (\autoref{sec:epipolar}). Roadmap items 1--2
 (\autoref{sec:roadmap}) are precisely the implementation of this
 subsection.
 
+\subsection{The coarse tier (pattern spec v2)}
+\label{sec:coarsetier}
+
+The fine layout above assumes the camera can resolve a 24\,px identity
+dot; the round-four field experiment (\autoref{sec:results}) measured
+where that assumption dies --- about $0.6$\,m for a 720p webcam ---
+and deployment cameras watch rooms, not desktops. The coarse tier is
+the same display speaking more slowly: a $6\times3$ checkerboard of
+$270$\,px cells (10 inner corners), an asymmetric L of three $90$\,px
+orientation marks whose cell set maps to a disjoint set under every
+non-identity rotation, and a 12-cell counter strip ([1,0] sync, 8 Gray
+bits, parity, inverted parity) rendered as \emph{isolated} $90$\,px
+squares. Every feature is $\sim$$3.4\times$ the fine tier's, so
+\eqref{eq:patrange} stretches by the same factor: $\sim$$2$\,m for the
+webcam, $\sim$$3.7$\,m for a phone. The price is density (10
+correspondences per frame instead of 162) and counter width (8 bits
+wraps every $256$ refreshes $\approx4.3$\,s; consumers disambiguate by
+capture-order proximity, as \code{tools/rigcalib.c} does, or by
+rig-rigidity consistency). Generator: \code{mv\_pattern2\_render};
+reader: \code{mv\_read\_coarse} (escalates over $2\times$/$4\times$
+downsampling for close views); display app: mode M4.
+
+Two implementation lessons, both found by the sim harness before any
+field time was spent. First, \emph{gutter saddles}: two dark squares
+separated by a thin light gap form a genuine saddle point between them
+--- black left and right, white above and below --- indistinguishable
+locally from a checkerboard corner; a counter strip of adjacent solid
+cells decorates the image with a full row of them. Isolating the
+squares only moves the saddles into the gutters; the working cure is
+geometric placement (the strip sits $1.5$ lattice steps below the
+bottom corner row, so integer-step lattice growth cannot reach it)
+\emph{plus} tolerance in the reader. Second, \emph{keystone defeats
+layout spacing}: under a $20^\circ$ tilt the projective foreshortening
+moves the strip from $1.5$ to $\sim$$1.35$ image-steps --- back inside
+the capture gate --- so no static layout margin survives all poses.
+The reader therefore does not demand a clean $5\times2$ bounding box:
+it grows generously, enumerates candidate $5\times2$ windows inside
+the grown lattice, and lets the exact validator (all 18 cell colors,
+all 18 mark states, sync and double parity) decide. The validation
+round-trip test (\code{test\_pattern\_coarse}) runs at exactly the
+geometry that defeated the fine tier in the field --- a 720p camera
+with the pattern $160$\,px wide --- plus a $180^\circ$-rolled,
+$20^\circ$-tilted, noisy view, and demands all ten corners, correct
+ids, sub-pixel RMS, and an exact counter.
+
 %----------------------------------------------------------------------
 \section{Two-view epipolar geometry}
 \label{sec:epipolar}
@@ -2262,11 +2307,11 @@ Z_{\max} \approx \frac{f\,W_{\mathrm{pat}}}{320\ \mathrm{px}}
 $\approx$ 19 cells at the empirically safe $\sim$$17$\,px/cell): about
 $1.1$\,m for the phones ($f\approx1600$\,px) and only $\sim$$0.6$\,m
 for a 720p webcam. Reading the same display across a whole room needs
-either longer focal lengths, more pixels, or a coarser signal --- a
-range-tiered pattern (a temporally multiplexed coarse layer with
-$4\times$ cells, giving $4\times$ the range from $1/16$ the corner
-density) is the designed follow-on in the roadmap
-(\autoref{sec:roadmap}).
+either longer focal lengths, more pixels, or a coarser signal. The
+coarser signal now exists: the same session's negative result drove
+the coarse tier of \autoref{sec:coarsetier}, which decodes in
+simulation at exactly this geometry (pattern $160$\,px wide on a 720p
+sensor).
 
 \paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
 disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the
@@ -3066,21 +3111,25 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         clock-modeled rig), and the M0 radiometric path that the
         lighting/diurnal scenario (\autoref{sec:lightscen}) needs on
         real hardware.
-  \item \textbf{Range-tiered pattern (spec v2)} --- a temporally
-        multiplexed coarse layer for room-scale reading: on a known
-        counter parity the display shows a $4\times$-cell version of
-        the pattern (320\,px cells, 96\,px marks, its own short
-        counter), quadrupling the usable range of \eqref{eq:patrange}
-        at $1/16$ the corner density; cameras use whichever tier they
-        can decode, and the shared refresh clock stitches the tiers
-        together. \emph{Pitch}: round four measured the need directly
-        --- three fixed cameras watching a room could find the saddle
-        lattice but not one identity dot; this is the cheapest path to
-        pattern-based calibration at deployment geometry, and it is a
-        display-app + reader change only (no new mathematics).
+  \item \textbf{[done] Range-tiered pattern (spec v2)} --- the
+        coarse layer for room-scale reading, implemented as display
+        mode M4 (\autoref{sec:coarsetier}): $270$\,px cells, $90$\,px
+        marks, isolated-square 8-bit counter --- $\sim$$3.4\times$ the
+        range of \eqref{eq:patrange} at $10$ corners per frame instead
+        of $162$. Generator \code{mv\_pattern2\_render}
+        (\code{mv/pattern.h}), reader \code{mv\_read\_coarse}
+        (\code{mv/reader.h}), consumed by \code{tools/calibreal.c}
+        and \code{tools/rigcalib.c} as an automatic fallback;
+        validated by \code{test\_pattern\_coarse} at the exact
+        field-failure geometry. \emph{Pitch}: round four measured the
+        need directly --- three fixed cameras watching a room could
+        find the saddle lattice but not one identity dot.
         \emph{Unlocks}: rig calibration at room scale with commodity
         webcams --- the actual deployment scenario of
-        \autoref{sec:overview}.
+        \autoref{sec:overview}. Remaining refinement: temporal
+        multiplexing of both tiers in one session (alternate
+        counter-parity blocks) so near and far cameras share a single
+        capture.
   \item \textbf{Levenberg--Marquardt refinement} (later: bundle
         adjustment \cite{Triggs2000}). Joint nonlinear minimization of
         reprojection error over intrinsics, poses, and distortion.

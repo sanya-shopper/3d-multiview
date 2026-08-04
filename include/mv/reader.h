@@ -37,4 +37,16 @@ typedef struct {
 int mv_read_pattern(mv_read_result *res, const unsigned char *img,
                     int w, int h);
 
+/* Coarse-tier reader (pattern spec v2, mv/pattern.h): same result
+ * struct, different conventions -- id = 5*j + i over the 5x2 coarse
+ * corner lattice, counter is 8-bit and wraps every 256 refreshes
+ * (~4.3 s), H maps coarse pattern px -> image.  Orientation comes
+ * from the checker phase plus the asymmetric mark L (validated
+ * exactly: all 18 cell colors and all 18 mark states must match).
+ * Internally escalates over 2x and 4x downsampling for close views.
+ * Callers that accept both tiers should try mv_read_pattern first
+ * (162 corners beat 10) and fall back to this. */
+int mv_read_coarse(mv_read_result *res, const unsigned char *img,
+                   int w, int h);
+
 #endif /* MV_READER_H */

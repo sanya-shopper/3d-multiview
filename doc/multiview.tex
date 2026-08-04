@@ -2133,6 +2133,41 @@ fullscreen (doubles the scale), display \emph{moved} through
 10--15 paused tilted poses within the obliquity gate, cameras
 AF/AE-locked.
 
+\paragraph{Round two: the first real calibration.} The lid-hinge
+protocol of \autoref{sec:tempcalib}'s sibling note (tilt the lid,
+swivel the base) delivered. From a 54-second hand-off-free video:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lr}
+\toprule
+frames decoded blind & $67/68$ (162 corners each) \\
+$f_x$, $f_y$ & $1687.2$, $1683.8$ px \ (ratio $0.998$: square pixels) \\
+$c_x$ & $543.8$ px \ (image center: $540$) \\
+$c_y$ & $1043.8$ px \\
+$k_1$, $k_2$ & $-0.024$, $+0.218$ \\
+reprojection RMS & $0.351$ px \\
+camera--screen distance & $0.93$--$1.09$ m, stepping with lid poses \\
+\bottomrule
+\end{tabular}
+\caption{First real-camera calibration (iPhone, 1080$\times$1920
+HEVC video; \code{tools/calibreal.c}). The reprojection RMS matches
+the independently measured $0.28/0.21$\,px detector noise --- the
+estimator runs at the real noise floor.}
+\label{tab:realcalib}
+\end{table}
+
+Two further lessons from the same round, both caught by the built-in
+diagnostics. A first attempt on a longer video returned degenerate
+intrinsics with \emph{constant} per-view distances --- the glue tool
+was truncating to the first 64 decodable frames, all from a static
+lead-in (fixed); the rerun, sampled evenly across the timeline, was
+\emph{still} constant-distance: that session genuinely contained no
+display motion, and no estimator can conjure pose diversity that
+physics did not provide. The constant-distance printout is the
+practical degeneracy alarm: motion shows up as stepping distances
+(\autoref{tab:realcalib}) or it did not happen.
+
 \paragraph{Tracking a moving object (\code{demo/track\_robot.c}).} A
 disk-shaped vacuum robot (radius $0.17$\,m, height $0.09$\,m) wanders the
 monitored volume for 20\,s at $0.3$\,m/s with random turns, on a floor

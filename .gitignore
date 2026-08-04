@@ -38,3 +38,7 @@ rigcalib
 annotate
 slreal
 demo_slight
+test_refine
+test_optimal
+test_feat
+test_session

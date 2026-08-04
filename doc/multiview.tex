@@ -2285,6 +2285,40 @@ consistent with focus breathing, the effective-focal shift of an
 autofocus lens with subject distance (\autoref{sec:hardware}); a
 per-session calibration, which the pattern makes cheap, sidesteps it.
 
+\paragraph{The first real point cloud.} The round-three footage
+yielded more than intrinsics. Every decoded frame carries a metric
+camera pose (\code{mv\_calib\_plane\_pose} on 162 known screen
+points), so one handheld video is a \emph{many-camera rig on a time
+budget}: frame pairs with accidental baselines of $3$--$9$\,cm are
+calibrated stereo pairs. \code{tools/scenecloud.c} chains the
+library's real-data path end to end --- blind read $\to$ pose $\to$
+undistort $\to$ Fusiello rectification $\to$ SAD stereo $\to$ texture
+and speckle gates $\to$ metric back-projection --- and adds one new
+idea, \emph{cross-pair confirmation}: a stereo false match is random
+along its viewing ray, so it is not reproduced by an independent
+pair; points are kept only if a second pair placed structure within
+their $10$\,mm voxel neighborhood ($108$k $\to$ $82$k points; the
+first attempt without this filter was buried in ray-streak
+artifacts). \autoref{fig:scenecloud} shows the result: the laptop
+displaying the pattern, its keyboard deck, the table and legs, and
+the curtains behind --- the system's first 3D model built from real
+imagery, in the metric frame of the display it calibrated itself
+against.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\textwidth]{figs/scene_cloud.png}
+\caption{Three splat renders (orbit views) of the 82{,}000-point
+metric cloud extracted from a single handheld phone video of the
+pattern laptop (\code{tools/scenecloud.c}). Gray values are carried
+from the source frames. Left to right: $-40^\circ$, frontal, and
+$+40^\circ$ orbits around the cloud center. Visible structure: the
+laptop with the pattern on screen, keyboard deck, table with legs,
+and curtains at left. Residual speckle is honest: these are raw
+confirmed stereo points, no smoothing, no mesh.}
+\label{fig:scenecloud}
+\end{figure}
+
 \paragraph{Round four: the resolution floor, measured in the field.}
 An ambitious capture --- three fixed cameras (two 720p laptop webcams,
 one phone) watching the pattern laptop being carried around a room at
@@ -3094,11 +3128,17 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         \emph{Unlocks}: the image-tier calibration chain that every
         entry below assumes.
   \item \textbf{[partially done] Calibration subsystem completion} ---
-        built so far: pattern generator, synthetic renderer, and blind
-        reader (\code{mv/pattern.h}, \code{mv/render.h},
-        \code{mv/reader.h}; each header carries its setup-and-run
-        notes, all exercised by \code{demo/patternsim.c}). Remaining:
-        the display app (modes M0--M3), the record-emitting wrapper of
+        built so far: pattern generator (both tiers), synthetic
+        renderer, blind readers (\code{mv/pattern.h},
+        \code{mv/render.h}, \code{mv/reader.h}), the display app
+        itself (\code{tools/pattern.html}, modes M0--M4, vsync
+        counter, Retina-aware 1:1 pixels), the robust video estimator
+        (\autoref{sec:calibrobust}), the single-frame localizer
+        \code{mv\_calib\_plane\_pose}, and the rig-extrinsics tool
+        \code{tools/rigcalib.c} (counter-matched simultaneous views
+        $\to$ chordal-mean relative poses). All field-proven except
+        rigcalib, which awaits a capture with two cameras inside the
+        range law. Remaining: the record-emitting wrapper of
         \autoref{tab:records} (the reader does not yet check the
         version block or sample the phase patches), and the joint
         orbit $+$ clock fits.
@@ -3158,10 +3198,15 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         multi-plane scene renderer (\code{mv/render.h}); run notes atop
         \code{demo/roomsim.c} (\code{make demo\_room}). Validated in
         \autoref{tab:roomresults}/\autoref{fig:room}: the pipeline of
-        \autoref{sec:overview} runs on pixels end to end. Remaining:
-        real camera frames. \emph{Unlocks}: dense change detection and
+        \autoref{sec:overview} runs on pixels end to end --- and now
+        on \emph{real} frames too: \code{tools/scenecloud.c} ran the
+        same path on handheld phone video to produce the 82k-point
+        cloud of \autoref{fig:scenecloud}. Remaining at real tier:
+        multi-camera (fixed-rig) depth rather than accidental
+        baselines. \emph{Unlocks}: dense change detection and
         moving-object silhouettes; with items 6 and 9, the room model
-        --- now demonstrated on rendered imagery.
+        --- demonstrated on rendered imagery and, as a point cloud, on
+        real imagery.
   \item \textbf{[done at sim tier] Temporal statistics and the
         background model} --- median-depth background, TSDF fusion, and
         change detection implemented in \code{demo/roomsim.c}

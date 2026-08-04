@@ -49,10 +49,17 @@ test_mv: tests/test_mv.o libmv.a
 check: test_mv
 	./test_mv
 
-demo: demo_synthetic demo_calibrate demo_track
+demo: demo_synthetic demo_calibrate demo_track demo_diagnose \
+      demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf
 	./demo_synthetic
 	./demo_calibrate
 	./demo_track
+	./demo_diagnose
+	./demo_insects
+	./demo_lightlog
+	./demo_people
+	./demo_patternsim
+	./demo_tsdf
 
 doc: doc/multiview.pdf
 

@@ -35,8 +35,10 @@ int mv_marray_bit(int col, int row);
 
 /* Look up a 4x4 window code (row-major, MSB = top-left bit). On success
  * returns MV_OK and sets the window's pattern position (col,row of its
- * top-left square) and rot = number of clockwise 90-degree rotations the
- * observed window is rotated relative to the pattern. MV_ERR if absent. */
+ * top-left square) and rot = number of clockwise 90-degree rotations
+ * that must be APPLIED TO THE OBSERVED window to reproduce the pattern
+ * window (the reader applies the same rot to lattice coordinates).
+ * MV_ERR if absent. */
 int mv_marray_lookup(unsigned code, int *col, int *row, int *rot);
 
 /* Render the full spec-v1 frame for display-frame counter value.

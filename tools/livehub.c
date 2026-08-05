@@ -6,8 +6,8 @@
  *
  * DEPLOYMENT RUNBOOK (live test, three MacBooks):
  *  1. Pattern MacBook: copy tools/pattern.html over, open in a browser,
- *     press f (fullscreen) then 6 (mux: serves near AND far cameras).
- *     Inhibit sleep (macOS: caffeinate -dimsu).
+ *     click once -- it goes fullscreen in mux mode (near + far) by
+ *     itself; no keys needed.  Inhibit sleep (macOS: caffeinate -dimsu).
  *  2. Hub (this machine): make livehub && ./livehub 9900 0.1133 rec/
  *     (port, display pixel pitch in mm, optional record directory).
  *  3. Each camera MacBook: copy the stream_cam binary over
@@ -101,6 +101,8 @@ typedef struct {
     int last_tier;
     unsigned last_counter;
     double last_dist;
+    double t_ctr;      /* when the last VALID counter decoded (0 =
+                        * never): drives the spoken guidance */
     int stall_said;    /* spoken-stall latch: announce each stall and
                         * each recovery once, not every status tick */
 } cam_t;
@@ -312,6 +314,7 @@ static cam_t *cam_slot(unsigned camid, int ci)
             cams[stale].nanch = cams[stale].anhead = 0;
             cams[stale].last_tier = 0;
             cams[stale].stall_said = 0;
+            cams[stale].t_ctr = 0.0;
             return &cams[stale];
         }
     }
@@ -391,10 +394,16 @@ static void try_calibrate(cam_t *c)
 }
 
 /* accumulate pairwise relative poses; report chordal mean */
+/* pairing progress state, file-scope so the spoken guidance can see
+ * which pairs are still unsolved (all guarded by mbx like the cams) */
+static unsigned char pair_said[MAXCAMS][MAXCAMS];
+static unsigned char pair_done[MAXCAMS][MAXCAMS];
+static int npair_best[MAXCAMS][MAXCAMS];
+static int npair_ann[MAXCAMS][MAXCAMS];
+static double last_pose_say;
+
 static void try_extrinsics(void)
 {
-    static unsigned char pair_said[MAXCAMS][MAXCAMS];
-    static int npair_best[MAXCAMS][MAXCAMS];
     int a, b;
     for (a = 0; a < MAXCAMS; a++)
         for (b = a + 1; b < MAXCAMS; b++) {
@@ -484,10 +493,29 @@ static void try_extrinsics(void)
                  * this the operator knows the rig is solved */
                 if (!pair_said[a][b]) {
                     pair_said[a][b] = 1;
+                    npair_ann[a][b] = npair;
+                    last_pose_say = now_mono();
                     say("cameras %u and %u paired, baseline %.2f "
-                        "meters", A->camid, B->camid,
+                        "meters. change the angle and hold again",
+                        A->camid, B->camid,
                         sqrt(tm[0] * tm[0] + tm[1] * tm[1]
                              + tm[2] * tm[2]));
+                }
+                /* dwell throughput feedback: a held pose typically
+                 * banks a burst of matched pairs; once this pose has
+                 * contributed, tell the operator to move on rather
+                 * than leave them holding a solved angle */
+                else if (!pair_done[a][b]
+                         && npair - npair_ann[a][b] >= 4
+                         && now_mono() - last_pose_say > 15.0) {
+                    npair_ann[a][b] = npair;
+                    last_pose_say = now_mono();
+                    say("got this angle, next one please");
+                }
+                if (!pair_done[a][b] && npair >= MAXPAIR) {
+                    pair_done[a][b] = 1;
+                    say("cameras %u and %u have enough pairs, "
+                        "pairing done", A->camid, B->camid);
                 }
             }
         }
@@ -518,8 +546,10 @@ static void process_cam(cam_t *c, const unsigned char *img, int w, int h)
     c->reads_ok++;
     c->last_tier = tier;
     c->last_counter = rr.counter_valid ? rr.counter : 0;
-    if (rr.counter_valid)
+    if (rr.counter_valid) {
         c->valid_ctr++;
+        c->t_ctr = now_mono();
+    }
     {
         /* counter lock is the prerequisite for pairing (anchors need
          * the shared clock), and its absence is invisible without a
@@ -704,6 +734,67 @@ static void *decoder_main(void *arg)
     return NULL;
 }
 
+/* Spoken guidance: name the state the rig is WAITING in and the
+ * operator action that unblocks it, every ~30 s while it persists --
+ * the operator is eyes-free and otherwise just stands there guessing.
+ * Called from status() with mbx held. */
+static void guidance(void)
+{
+    static double last_say;
+    double now = now_mono();
+    int i, a, b;
+    int used = 0, ncal = 0, uncal = -1, noclk = -1, only = -1;
+    int unpaired = 0;
+
+    if (now - last_say < 30.0)
+        return;
+    for (i = 0; i < MAXCAMS; i++) {
+        cam_t *c = &cams[i];
+        if (!c->used || c->frames_rx == 0)
+            continue;
+        used++;
+        only = i;
+        if (!c->calibrated) {
+            if (uncal < 0)
+                uncal = i;
+        }
+        else {
+            ncal++;
+            /* "reading the clock" = a valid counter in the last 20 s */
+            if ((c->t_ctr == 0.0 || now - c->t_ctr > 20.0)
+                && noclk < 0)
+                noclk = i;
+        }
+    }
+    for (a = 0; a < MAXCAMS; a++)
+        for (b = a + 1; b < MAXCAMS; b++)
+            if (cams[a].used && cams[b].used && cams[a].calibrated
+                && cams[b].calibrated) {
+                if (!pair_said[a][b])
+                    unpaired = 1;
+            }
+
+    if (used == 0)
+        return;
+    if (uncal >= 0)
+        say("camera %u still calibrating. show it the pattern at "
+            "different tilts", cams[uncal].camid);
+    else if (used == 1 && ncal == 1)
+        say("camera %u calibrated. waiting for a second camera",
+            cams[only].camid);
+    else if (ncal >= 2 && noclk >= 0)
+        say("calibration done. waiting for time alignment. camera %u "
+            "is not reading the clock. face the pattern toward it, "
+            "closer", cams[noclk].camid);
+    else if (ncal >= 2 && unpaired)
+        say("calibration done, clocks reading. waiting for time "
+            "alignment. hold the pattern still where both cameras "
+            "see it");
+    else
+        return; /* nothing pending: stay quiet, keep the timer */
+    last_say = now;
+}
+
 static void status(void)
 {
     int i;
@@ -738,6 +829,7 @@ static void status(void)
         }
         hlog("\n");
     }
+    guidance();
 }
 
 int main(int argc, char **argv)

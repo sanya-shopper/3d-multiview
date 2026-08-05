@@ -1,0 +1,15 @@
+# Used automatically by BuildKit when building with -f deploy/Dockerfile.
+# Keeps the image context small and the in-container build pristine.
+.git
+.claude
+refs
+doc/*.pdf
+doc/*.aux
+doc/*.log
+doc/*.bbl
+doc/*.blg
+doc/*.out
+doc/*.toc
+*.o
+*.a
+out_*.ply

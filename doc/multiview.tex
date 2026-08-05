@@ -3105,6 +3105,29 @@ Ultralytics row exists because its tooling is convenient for
 experiments --- inside its own fence.
 
 \subsection{Deployment architecture: hardware boundaries and communication}
+
+\paragraph{Live rig v1 (built).} The streaming skeleton of this
+architecture now exists and has been soak-tested in loopback:
+\code{tools/stream\_cam.swift} (macOS capture) and
+\code{tools/stream\_cam\_v4l2.c} (Linux capture, same wire format)
+send grayscale frames over TCP to \code{tools/livehub.c}, which
+drains the network on one thread while a single decoder thread (the
+reader is non-reentrant) always works on each camera's freshest
+frame, running the full estimator chain \emph{live}: blind decode
+(both tiers) $\to$ robust Zhang $\to$ LM refinement $\to$
+counter-matched extrinsics, with session records and decoded frames
+persisted for the offline full-precision pass.
+\code{tools/replaycam.c} replays recorded frames over the identical
+protocol (the loopback tester), and \code{tools/nettest.c} is a
+deterministic protocol-torture client. The first soak runs paid for
+themselves immediately: TCP backpressure from multi-second decodes
+throttled live senders (fixed by the thread split), block-buffered
+logs vanished on kill (fixed), glibc's feature-test macros broke the
+Linux build invisibly to macOS (fixed, found by the \code{deploy/}
+container audit), and the fuzzer's review yielded a quadratic-resync
+CPU DoS, slot-exhaustion lockout, and unchecked-allocation crashes,
+all fixed and re-fuzzed. Live loopback calibrations match the
+offline pass within $0.6\%$.
 \label{sec:deployarch}
 
 \begin{figure}[ht]

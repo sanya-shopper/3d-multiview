@@ -119,16 +119,54 @@ static cam_t *cam_slot(unsigned camid)
             return &cams[i];
     for (i = 0; i < MAXCAMS; i++)
         if (!cams[i].used) {
+            double (*o)[2 * MV_READ_MAXC] =
+                malloc((size_t)MAXV * sizeof(*o));
+            double (*m)[2 * MV_READ_MAXC] =
+                malloc((size_t)MAXV * sizeof(*m));
+            if (!o || !m) { /* do not burn the slot on failure */
+                free(o);
+                free(m);
+                return NULL;
+            }
             memset(&cams[i], 0, sizeof(cams[i]));
             cams[i].used = 1;
             cams[i].camid = camid;
-            cams[i].objs = malloc((size_t)MAXV
-                                  * sizeof(*cams[i].objs));
-            cams[i].imgs = malloc((size_t)MAXV
-                                  * sizeof(*cams[i].imgs));
+            cams[i].objs = o;
+            cams[i].imgs = m;
             printf("[hub] camera %u joined\n", camid);
-            return (cams[i].objs && cams[i].imgs) ? &cams[i] : NULL;
+            return &cams[i];
         }
+    /* table full: reclaim a slot that went quiet (a camera restarted
+     * under a new camid must not lock the rig out -- found by nettest
+     * slot-exhaustion scenario), else log the refusal visibly */
+    {
+        int stale = -1;
+        double tnow = now_mono();
+        for (i = 0; i < MAXCAMS; i++)
+            if (tnow - cams[i].t_latest > 60.0
+                && (stale < 0
+                    || cams[i].t_latest < cams[stale].t_latest))
+                stale = i;
+        if (stale >= 0) {
+            printf("[hub] camera %u replaces quiet camera %u\n",
+                   camid, cams[stale].camid);
+            free(cams[stale].latest);
+            free(cams[stale].work);
+            cams[stale].latest = NULL;
+            cams[stale].work = NULL;
+            cams[stale].camid = camid;
+            cams[stale].w = cams[stale].h = 0;
+            cams[stale].fresh = 0;
+            cams[stale].frames_rx = cams[stale].decodes = 0;
+            cams[stale].reads_ok = cams[stale].valid_ctr = 0;
+            cams[stale].nviews = cams[stale].last_calib_n = 0;
+            cams[stale].calibrated = 0;
+            cams[stale].nanch = 0;
+            cams[stale].last_tier = 0;
+            return &cams[stale];
+        }
+    }
+    printf("[hub] camera %u refused: %d slots busy\n", camid, MAXCAMS);
     return NULL;
 }
 
@@ -447,6 +485,7 @@ static void status(void)
         if (c->last_tier)
             printf(" | last: tier %d ctr %u dist %.2f m", c->last_tier,
                    c->last_counter, c->last_dist);
+        printf(" | frame age %.1f s", now_mono() - c->t_latest);
         printf("\n");
     }
 }
@@ -518,8 +557,11 @@ int main(int argc, char **argv)
         tv.tv_sec = 0;
         tv.tv_usec = 100000;
         n = select(maxfd + 1, &rd, NULL, NULL, &tv);
-        if (n < 0 && errno != EINTR)
-            break;
+        if (n < 0 && errno != EINTR) {
+            fprintf(stderr, "[hub] select failed: %s\n",
+                    strerror(errno));
+            return 1;
+        }
 
         if (n > 0 && FD_ISSET(lsock, &rd)) {
             int s = accept(lsock, NULL, NULL);
@@ -546,8 +588,17 @@ int main(int argc, char **argv)
             if (cn->sock < 0 || !FD_ISSET(cn->sock, &rd))
                 continue;
             if (cn->len + 65536 > cn->cap) {
+                unsigned char *nb = realloc(cn->buf, cn->cap * 2);
+                if (!nb) { /* drop the connection, not the hub */
+                    printf("[hub] out of buffer memory; dropping "
+                           "connection\n");
+                    close(cn->sock);
+                    cn->sock = -1;
+                    cn->len = 0;
+                    continue;
+                }
                 cn->cap *= 2;
-                cn->buf = realloc(cn->buf, cn->cap);
+                cn->buf = nb;
             }
             k = recv(cn->sock, cn->buf + cn->len, 65536, 0);
             if (k <= 0) {
@@ -565,15 +616,30 @@ int main(int argc, char **argv)
                 if (cn->len < 32)
                     break;
                 if (memcmp(cn->buf, "MVFR", 4) != 0) {
-                    /* resync: drop one byte */
-                    memmove(cn->buf, cn->buf + 1, --cn->len);
+                    /* resync: jump to the next candidate 'M' in ONE
+                     * move -- per-byte moves are quadratic and WiFi
+                     * corruption plus a deep backlog turns that into
+                     * a CPU DoS (found by nettest) */
+                    unsigned char *m = memchr(cn->buf + 1, 'M',
+                                              cn->len - 1);
+                    size_t skip = m ? (size_t)(m - cn->buf) : cn->len;
+                    memmove(cn->buf, cn->buf + skip, cn->len - skip);
+                    cn->len -= skip;
                     continue;
                 }
                 camid = get32(cn->buf + 4);
                 w = get32(cn->buf + 8);
                 h = get32(cn->buf + 12);
-                if (w < 64 || h < 64 || w > 4096 || h > 4096) {
-                    memmove(cn->buf, cn->buf + 1, --cn->len);
+                if (w < 64 || h < 64 || w > 4096 || h > 4096
+                    || (double)w * h > 4.5e6) {
+                    /* dims out of range (the pixel cap also bounds
+                     * attacker-chosen decode and buffer cost); resync
+                     * one byte in, then jump to the next 'M' */
+                    unsigned char *m = memchr(cn->buf + 1, 'M',
+                                              cn->len - 1);
+                    size_t skip = m ? (size_t)(m - cn->buf) : cn->len;
+                    memmove(cn->buf, cn->buf + skip, cn->len - skip);
+                    cn->len -= skip;
                     continue;
                 }
                 need = 32 + (size_t)w * h;
@@ -584,12 +650,15 @@ int main(int argc, char **argv)
                     pthread_mutex_lock(&mbx);
                     if (!c->latest || c->w != (int)w
                         || c->h != (int)h) {
-                        free(c->latest);
-                        free(c->work);
-                        c->work = NULL;
-                        c->latest = malloc((size_t)w * h);
-                        c->w = (int)w;
-                        c->h = (int)h;
+                        unsigned char *nb = malloc((size_t)w * h);
+                        if (nb) {
+                            free(c->latest);
+                            free(c->work);
+                            c->work = NULL;
+                            c->latest = nb;
+                            c->w = (int)w;
+                            c->h = (int)h;
+                        }
                     }
                     if (c->latest) {
                         memcpy(c->latest, cn->buf + 32,

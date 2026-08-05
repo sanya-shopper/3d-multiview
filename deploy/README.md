@@ -63,3 +63,15 @@ Once a runtime is installed (`brew install colima docker` or
 `brew install podman`, or Docker Desktop), re-run `sh deploy/validate.sh`
 and update this status block plus `LINUX-ISSUES.md` with measured
 output.
+
+
+## Status update (measured)
+
+GitHub CI (.github/workflows/ci.yml) now runs `build-linux.sh` on
+ubuntu-24.04 and macos-14 on every push -- the Ubuntu code paths are
+exercised for real, continuously. First run: all stages green on both
+platforms, including the first true Linux compile of stream_cam_v4l2
+(promoted from XFAIL to required). The container kit remains useful
+for local pre-push validation once a docker/podman runtime exists;
+LINUX-ISSUES.md's predictions were confirmed by the fixes landing
+before CI existed, and CI now guards against regression.

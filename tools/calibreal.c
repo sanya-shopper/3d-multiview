@@ -123,11 +123,18 @@ int main(int argc, char **argv)
     printf("\nper-view camera-to-screen-center distance "
            "(at pitch %.4f mm):\n  ", pitch * 1000.0);
     for (i = 0; i < nviews; i++) {
-        double c[3] = { 0, 0, 0 }, Xc2;
+        /* true Euclidean camera-to-screen-center distance ||R c + t||
+         * -- what a tape measure reads. (Using only the Z component
+         * would report optical-axis depth, short by cos(off-axis
+         * angle) for any view not aimed dead-center.) */
+        double c[3], Xc, Yc, Zc;
         c[0] = MV_PAT_W / 2.0 * pitch;
         c[1] = MV_PAT_H / 2.0 * pitch;
-        Xc2 = est[i].R[6] * c[0] + est[i].R[7] * c[1] + est[i].t[2];
-        printf("%.2f ", Xc2);
+        c[2] = 0.0;
+        Xc = est[i].R[0] * c[0] + est[i].R[1] * c[1] + est[i].t[0];
+        Yc = est[i].R[3] * c[0] + est[i].R[4] * c[1] + est[i].t[1];
+        Zc = est[i].R[6] * c[0] + est[i].R[7] * c[1] + est[i].t[2];
+        printf("%.2f ", sqrt(Xc * Xc + Yc * Yc + Zc * Zc));
     }
     printf("m\n");
     return 0;

@@ -258,10 +258,50 @@ static void test_pipeline(void)
     }
 }
 
+static void test_halfturn(void)
+{
+    /* a photo camera rotated ~180 deg about a tilted axis from the rig
+     * frame: exercises R_rodrigues's theta~pi branch inside the resect
+     * polish (which previously collapsed the rotation to zero) */
+    mv_camera gt, est;
+    static double X3[3 * 40], uv[2 * 40];
+    int i, n = 40, m;
+    double ca = cos(3.0), sa = sin(3.0); /* ~172 deg */
+    double Rz[9] = { ca, -sa, 0, sa, ca, 0, 0, 0, 1 }, Rx[9], cb, sb;
+    cb = cos(0.2); sb = sin(0.2);
+    Rx[0]=1;Rx[1]=0;Rx[2]=0;Rx[3]=0;Rx[4]=cb;Rx[5]=-sb;Rx[6]=0;Rx[7]=sb;Rx[8]=cb;
+    mv_cam_set_K(&gt, 700.0, 705.0, 320.0, 240.0);
+    memset(gt.k, 0, sizeof(gt.k));
+    mv_mat_mul(gt.R, Rz, Rx, 3, 3, 3);
+    {
+        double C[3] = { 0.1, 0.05, -0.6 };
+        int j;
+        for (j = 0; j < 3; j++)
+            gt.t[j] = -(gt.R[j*3+0]*C[0] + gt.R[j*3+1]*C[1] + gt.R[j*3+2]*C[2]);
+    }
+    for (i = 0; i < n; i++) {
+        cloud_point(X3 + 3 * i, i);
+        mv_cam_project(uv + 2 * i, &gt, X3 + 3 * i);
+    }
+    m = n;
+    CHECK(mv_resect_robust(&est, X3, uv, &m) == MV_OK,
+          "halfturn: resect succeeds near 180 deg");
+    {
+        double Rt[9], D[9], tr, ang;
+        mv_mat_transpose(Rt, gt.R, 3, 3);
+        mv_mat_mul(D, est.R, Rt, 3, 3, 3);
+        tr = (D[0]+D[4]+D[8]-1.0)/2.0;
+        if (tr>1.0) tr=1.0; if (tr<-1.0) tr=-1.0;
+        ang = acos(tr) * 180.0 / 3.14159265358979324;
+        CHECK(ang < 0.5, "halfturn: rotation recovered (pi branch works)");
+    }
+}
+
 int main(void)
 {
     test_resection();
     test_pipeline();
+    test_halfturn();
     if (failures) {
         printf("\n%d FAILURE(S)\n", failures);
         return 1;

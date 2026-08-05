@@ -31,11 +31,13 @@ int mv_triangulate(double X[3], const mv_camera *const *cams,
     }
     ret = mv_nullvec(x4, A, 2 * nviews, 4);
     free(A);
-    if (ret != MV_OK || fabs(x4[3]) < 1e-14)
-        return MV_ERR;
+    if (ret != MV_OK || !(fabs(x4[3]) >= 1e-14))
+        return MV_ERR; /* the >= form also rejects a NaN homogeneous w */
     X[0] = x4[0] / x4[3];
     X[1] = x4[1] / x4[3];
     X[2] = x4[2] / x4[3];
+    if (!(isfinite(X[0]) && isfinite(X[1]) && isfinite(X[2])))
+        return MV_ERR;
     return MV_OK;
 }
 

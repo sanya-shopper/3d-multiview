@@ -74,7 +74,9 @@ int mv_cam_project(double uv[2], const mv_camera *c, const double X[3])
     for (i = 0; i < 3; i++)
         Xc[i] = c->R[i * 3 + 0] * X[0] + c->R[i * 3 + 1] * X[1]
               + c->R[i * 3 + 2] * X[2] + c->t[i];
-    if (Xc[2] <= 1e-12)
+    /* reject non-finite depth explicitly: NaN <= 1e-12 is false, so a
+     * NaN pose/point would otherwise pass and emit NaN pixels */
+    if (!(Xc[2] > 1e-12))
         return MV_ERR;
     xn = Xc[0] / Xc[2];
     yn = Xc[1] / Xc[2];

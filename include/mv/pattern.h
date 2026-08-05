@@ -118,4 +118,34 @@ void mv_pattern2_render(unsigned char *img, unsigned counter);
 /* Display-pixel coordinates of coarse inner corner (i 0..4, j 0..1). */
 void mv_pattern2_corner_px(int i, int j, double xy[2]);
 
+/* ---- Temporal multiplexing of the two tiers -----------------------
+ *
+ * One display serves near AND far cameras in a single capture session
+ * by alternating the tiers in blocks of the display counter k: fine on
+ * even blocks (((k / MV_PAT_MUX_BLOCK) & 1) == 0), coarse on odd.
+ *
+ * Counter consistency: both tiers encode the SAME display counter k --
+ * a fine read returns k in full (MV_PAT_CTR_BITS bits), a coarse read
+ * returns k mod 256 -- so decoded counters from either tier land on
+ * one shared timeline. Consumers reconcile mixed-tier pairs exactly as
+ * tools/rigcalib.c already does: wrap-aware mod-256 comparison, gated
+ * by capture order so a wrap cannot alias distant moments.
+ *
+ * Block-length tradeoff: a camera sampling at interval T sees each
+ * tier for only ~half the time (MV_PAT_MUX_BLOCK refreshes ~ 1.1 s at
+ * 60 Hz per block); a frame whose exposure falls within ~1 exposure of
+ * a block boundary may capture a mixed image and simply fails to
+ * decode -- a ~2/MV_PAT_MUX_BLOCK duty loss, not an error mode. */
+
+#define MV_PAT_MUX_BLOCK 64   /* refreshes per tier block (~1.1 s at 60 Hz) */
+
+/* Tier scheduled at display counter value: 1 = fine, 2 = coarse. */
+int mv_pattern_mux_tier(unsigned counter);
+
+/* Render the scheduled tier's frame for this counter into img
+ * (MV_PAT_W * MV_PAT_H bytes): mv_pattern_render on fine blocks,
+ * mv_pattern2_render on coarse (that renderer uses only the low
+ * 8 bits of the counter). */
+void mv_pattern_mux_render(unsigned char *img, unsigned counter);
+
 #endif /* MV_PATTERN_H */

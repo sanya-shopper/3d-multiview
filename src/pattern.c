@@ -156,6 +156,18 @@ void mv_pattern_ctr_cell_px(int c, double xy[2])
     xy[1] = MV_PAT_CTR_Y0 + MV_PAT_CTR_CELL / 2.0;
 }
 
+void mv_pattern_patch_px(int i, double xy[2])
+{
+    xy[0] = PATCH_XY[i][0] + MV_PAT_PATCH / 2.0;
+    xy[1] = PATCH_XY[i][1] + MV_PAT_PATCH / 2.0;
+}
+
+void mv_pattern_version_cell_px(int c, double xy[2])
+{
+    xy[0] = MV_PAT_VER_X0 + MV_PAT_VER_CELL * c + MV_PAT_VER_CELL / 2.0;
+    xy[1] = MV_PAT_VER_Y0 + MV_PAT_VER_CELL / 2.0;
+}
+
 /* ---- coarse tier (spec v2) ---------------------------------------- */
 
 int mv_pattern2_mark(int col, int row)

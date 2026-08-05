@@ -43,3 +43,5 @@ test_optimal
 test_feat
 test_session
 test_photo
+test_bundle
+test_mux

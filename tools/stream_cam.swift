@@ -69,7 +69,13 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var seq: UInt64 = 0
     var lastSent = 0.0
     let minGap: Double
-    init(minGap: Double) { self.minGap = minGap }
+    let camid: UInt32
+    let sock: Int32
+    init(minGap: Double, camid: UInt32, sock: Int32) {
+        self.minGap = minGap
+        self.camid = camid
+        self.sock = sock
+    }
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
@@ -104,13 +110,13 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             msg.append(UInt8((v >> 16) & 255))
             msg.append(UInt8((v >> 24) & 255))
         }
-        le32(camid); le32(UInt32(w)); le32(UInt32(h))
+        le32(self.camid); le32(UInt32(w)); le32(UInt32(h))
         var s = seq
         for _ in 0..<8 { msg.append(UInt8(s & 255)); s >>= 8 }
         var t = now.bitPattern
         for _ in 0..<8 { msg.append(UInt8(t & 255)); t >>= 8 }
         msg.append(contentsOf: gray)
-        if !sendAll(sock, msg) {
+        if !sendAll(self.sock, msg) {
             print("hub connection lost")
             exit(1)
         }
@@ -130,7 +136,7 @@ session.addInput(input)
 let out = AVCaptureVideoDataOutput()
 out.videoSettings =
     [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-let grabber = Grabber(minGap: 1.0 / fps)
+let grabber = Grabber(minGap: 1.0 / fps, camid: camid, sock: sock)
 out.setSampleBufferDelegate(grabber,
                             queue: DispatchQueue(label: "grab"))
 session.addOutput(out)

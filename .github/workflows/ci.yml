@@ -8,6 +8,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'   # weekly full-valgrind sweep, Mondays 04:00 UTC
 
 jobs:
   ubuntu:
@@ -84,3 +87,47 @@ jobs:
         with:
           name: coverage-html
           path: covhtml/
+
+  ubuntu-valgrind:
+    # memcheck catches uninitialized reads the sanitizers cannot; its
+    # 20-50x slowdown limits the per-push run to the quick suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: install valgrind
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
+      - name: build (plain -O1 -g)
+        env:
+          CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g
+        run: make test_session test_optimal test_feat test_mux test_photo nettest
+      - name: valgrind quick suites
+        run: |
+          for t in test_session test_optimal test_feat test_mux test_photo; do
+            echo "=== valgrind $t ==="
+            valgrind --error-exitcode=1 --leak-check=full \
+                     --errors-for-leak-kinds=definite ./$t || exit 1
+          done
+          valgrind --error-exitcode=1 --leak-check=full \
+                   --errors-for-leak-kinds=definite ./nettest --selftest
+
+  ubuntu-valgrind-full:
+    # the heavy suites (LM, bundle, renders) weekly or on demand
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: install valgrind
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
+      - name: build (plain -O1 -g)
+        env:
+          CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g
+        run: make test_mv test_refine test_bundle
+      - name: valgrind heavy suites
+        run: |
+          for t in test_mv test_refine test_bundle; do
+            echo "=== valgrind $t ==="
+            valgrind --error-exitcode=1 --leak-check=full \
+                     --errors-for-leak-kinds=definite ./$t || exit 1
+          done

@@ -1,30 +1,25 @@
-multiview live -- command lines (paste into Terminal)
-=====================================================
-Open Terminal on each Mac: Cmd-Space, type "terminal", Return.
+multiview live -- command lines
+===============================
+Open Terminal on each Mac (Cmd-Space, "terminal", Return). Paste, Return.
 
-HUB MacBook  (ONE command: runs the hub AND camera 1)
------------------------------------------------------
-  cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./mvhub
+HUB MacBook  (one binary: hub + camera 1)
+    cd ~/Desktop/multiview-live && ./mvhub
+  A preview window opens (camera 1). The Terminal shows the HUB IP in a
+  box, then [cal]/[ext] progress. Close the window to finish; the whole
+  session lands in  rec/.
 
-  - a preview WINDOW opens showing camera 1 (aim it at the pattern)
-  - the Terminal shows the HUB IP in a box, plus [cal]/[ext] progress
-  - close the window (or Ctrl-C the Terminal) to finish
-  Everything is collected in  ~/Desktop/multiview-live/rec/
+SECOND camera MacBook  (HUBIP = the number from that box)
+    cd ~/Desktop/multiview-live && ./stream_cam HUBIP 9900 2 5
+  A preview window opens; a green LIVE bar = frames flowing.
 
-SECOND camera MacBook  (put the hub IP where HUBIP is)
-------------------------------------------------------
-  cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./stream_cam HUBIP 9900 2 5
+PATTERN MacBook
+    open ~/Desktop/multiview-live/pattern.html
+  Click the page once (fullscreen, calibration mode).
 
-  - a preview WINDOW opens; a green "LIVE" bar = frames are flowing
-  - the hub's own window turns "camera 2 CONNECTED, frames flowing"
+Give the pattern motion where all cameras can see it (turntable / tilt).
+Everything collects in rec/: frames, records.txt, camlog_<id>.txt,
+hub.log, summary.txt. Pitch 0.1133 is fine (only scales distances).
 
-PATTERN MacBook  (nothing to unblock)
--------------------------------------
-  open ~/Desktop/multiview-live/pattern.html
-  ...click the page once (fullscreen, calibration mode).
-
-That's it. Give the pattern motion where all cameras can see it
-(turntable / tilt); watch the hub Terminal fill with [cal] then [ext].
-
-After the run, the whole session is in rec/  (decoded frames,
-records.txt, camlog_<id>.txt from each camera, hub.log, summary.txt).
+If macOS ever says a binary "can't be verified" (files copied via
+AirDrop carry a flag), clear it once on that Mac:
+    xattr -dr com.apple.quarantine ~/Desktop/multiview-live

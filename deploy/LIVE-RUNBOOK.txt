@@ -1,65 +1,30 @@
-multiview live test kit  (binaries: Apple Silicon)
-==================================================
-Machines: HUB+CAM1 = MacBook 1, CAM2 = MacBook 2, PATTERN = MacBook 3.
-All on the same network. Hub IP:  ipconfig getifaddr en0
+multiview live test kit  (Apple Silicon)
+========================================
+Nothing to type or memorize. Three MacBooks, three double-clicks.
 
-PATTERN MacBook:  open pattern.html in a browser, press f then 6.
-                  Keep awake:  caffeinate -dimsu   (in Terminal)
+  HUB MacBook (also camera 1):  double-click  1-start-hub.command
+      It prints a HUB IP.  Leave this window open; it shows [cal] and
+      [ext] progress. Ctrl-C in it when you're done.
 
-HUB (MacBook 1),  terminal A:   ./livehub 9900 0.1133 rec
-                  terminal B:   ./stream_cam 127.0.0.1 9900 1 5
-                  (grant camera permission when prompted)
+  SECOND camera MacBook:        double-click  2-start-camera.command
+      It asks once for the HUB IP (read it off the hub window), then runs.
 
-CAM2 (MacBook 2):               ./stream_cam <hub-ip> 9900 2 5
+  PATTERN MacBook:              double-click  3-show-pattern.command
+      A page opens; click it once -> fullscreen, already in calibration
+      (mux) mode. Nothing else to press.
 
-Calibration capture -- ONE spot, not a tour of the cameras:
-Put the pattern (the MacBook, or a phone showing pattern.html) in the
-region ALL cameras can see -- the shared overlap volume -- in mode 6
-(press 6; the coarse tier reads out to 2-4 m, so you need not go near
-any camera). Tilt it ~25 deg off facing any one camera.
+Then just give the pattern MOTION where all cameras can see it (shared
+overlap): a $15 motorized turntable is ideal (tilt it ~25 deg, walk
+away ~2 min), or prop it at a few tilts, or slowly hand-rotate ~60 s.
+That is the only manual step, and it is unavoidable: each camera needs
+the pattern at several angles (pose diversity) -- a flat screen cannot
+fake that in software. All cameras calibrate at once; the shared
+display counter yields the camera-to-camera geometry for free.
 
-Then just give it MOTION in that one spot -- every camera calibrates
-at once from the same movement, and the shared display counter gives
-the extrinsics for free. Easiest first:
-  - a $15-25 motorized turntable / phone spinner: set it down, walk
-    away ~2 min (this is the rotating-fixture the paper designed; the
-    tilt avoids the single-axis degeneracy);
-  - or prop it at 4-5 different tilts, ~15 s each;
-  - or slowly hand-tilt/rotate it through the overlap for ~60 s.
+First double-click may hit macOS Gatekeeper: right-click the .command
+-> Open -> Open (once per file). The scripts clear the flag for the
+binaries themselves.
 
-Why motion is required (and cannot be faked in software): each camera
-needs the pattern at several angles/distances -- the pose-diversity
-requirement of plane calibration. A flat display animating itself is
-still one physical viewpoint.
-
-Watch the hub print [cal] lines as each camera calibrates and [ext]
-lines once counter-matched simultaneous pairs accumulate.
-
-Ctrl-C the hub when done. Everything decoded is recorded under rec/
-(frames + records.txt) for the offline full-precision pass.
-
-Pitch note: NO ruler needed. The pitch (mm per display pixel) only
-scales the REPORTED DISTANCES -- the intrinsics and geometry do not
-depend on it, so for the test you can leave 0.1133 as-is. If you want
-true metric distances, press i on the pattern page and read the pitch
-for your Mac model off the table (it is just 25.4 / display-ppi):
-  0.1134  MacBook Air 13.6"/15" (M2 2022+)   <- 0.1133 default is this
-  0.1119  MacBook Air 13.3" (M1/Intel), MBP 13.3"
-  0.1000  MacBook Pro 14"/16" (2021+)
-  0.1124  MacBook Pro 15.4" Retina (2013-2019)
-Alternatively, tape-measure one camera-to-camera distance once and
-scale afterward.
-macOS may block copied binaries:  xattr -d com.apple.quarantine <file>
-
-Firewall / network notes
-------------------------
-Only the HUB accepts incoming connections; stream_cam is outgoing-only.
-- macOS Firewall (usually off): if on, click Allow when livehub first
-  listens; if "Block all incoming connections" is checked, UNCHECK it
-  (unsigned CLI tools get blocked silently).
-- macOS 15+: allow Terminal under Privacy & Security > Local Network
-  on both machines if the connection stalls.
-- Guest/hotel WiFi often isolates clients (peer-to-peer blocked); use
-  a home network or a phone hotspot.
-Preflight from MacBook 2 (hub running):  nc -vz <hub-ip> 9900
-"succeeded" = all clear.
+Distances note: NO ruler. The 0.1133 built-in is exactly a MacBook Air
+13.6"/15"; other Macs are one glance at the pattern page's info (press
+i). Pitch only scales reported distances -- intrinsics never need it.

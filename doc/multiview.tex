@@ -1794,6 +1794,34 @@ metric scale --- the classic scale ambiguity of pure SfM does not arise.
 Dense multiview stereo over the registered set (e.g.\ patch-based methods
 \cite{FurukawaPonce2010}) is a further optional stage.
 
+The registration core of this recipe is now \emph{built and
+sim-validated} (\code{mv/photo.h}): normalized DLT resection with RQ
+decomposition (\code{mv\_resect\_dlt},
+\code{mv\_cam\_from\_projection}), RANSAC-seeded and
+median-trimmed (\code{mv\_resect\_robust}), a full-LM geometric
+polish, and the end-to-end \code{mv\_photo\_register}: the
+calibrated pair triangulates a descriptor-carrying anchor bank, the
+photo matches into it, and resection recovers the photo's own K and
+pose --- \emph{unknown camera included}. Following standard
+casual-photo practice \cite{Snavely2006}, the principal point is
+pinned at the image center (it is nearly unobservable from one
+resection over a shallow scene, trading against lateral pose --- a
+failure measured, not assumed, in development: the free-pp solution
+put it $105$\,px off). Sim results at a $10\%$ magnification
+mismatch and $15^\circ$ roll: focal recovered within $2.6\%$,
+orientation $0.25^\circ$, position $0.11$\,m from 210 resection
+inliers over 330 anchors — the position term is the measured cost of
+single-scale descriptor matching under magnification mismatch, and
+bundle adjustment over the registered set is the designated
+tightening stage. A practical capture note: a dedicated phone capture
+app could attach each photo's own lens intrinsics and a
+gravity-vector attitude prior (both exposed by modern phone APIs),
+turning unknown-camera resection into known-K resection with an
+orientation prior --- fewer correspondences needed and a sanity gate
+on the vision solution; indoor compass yaw is too coarse to replace
+the vision pose, so the pipeline above remains the foundation either
+way.
+
 The dynamic limit of this idea is the \emph{tracked mobile camera}: a
 drone or handheld camera moving through the volume is, to the fixed rig,
 a rigid mover like any other (\autoref{sec:movers}) --- so the rig can
@@ -3385,7 +3413,13 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         scene-rearrangement events --- demonstrated --- and the
         subtraction front end for the \autoref{sec:scenarios}
         trackers.
-  \item \textbf{Photo-collection registration}
+  \item \textbf{[done at sim tier] Photo-collection registration}
+        --- \autoref{sec:photos}: \code{mv/photo.h} resects casual
+        unknown-camera photos into the rig frame from a triangulated
+        anchor bank (RANSAC $+$ trim $+$ full-LM polish, principal
+        point pinned per casual-photo convention); sim: focal within
+        $2.6\%$, orientation $0.25^\circ$, position $0.11$\,m.
+        Formerly:
         (\autoref{sec:photos}). Resection of auxiliary photos against
         triangulated structure; $N$-view DLT already accepts the extra
         views. \emph{Pitch}: coverage where the rig cannot see

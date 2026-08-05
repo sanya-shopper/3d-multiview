@@ -10,11 +10,12 @@
 
 /* ---- record emission ---------------------------------------------- */
 
-void mv_session_ver(FILE *f, int spec_version, const char *cam_id)
+void mv_session_ver(FILE *f, int spec_version, double pitch_mm,
+                    const char *cam_id)
 {
     fprintf(f, "VER spec=%d w=%d h=%d pitch_mm=%g Td_ms=%g",
             spec_version, MV_PAT_W, MV_PAT_H,
-            MV_SESSION_PITCH_MM, MV_SESSION_TD_MS);
+            pitch_mm, MV_SESSION_TD_MS);
     if (cam_id)
         fprintf(f, " cam=%s", cam_id);
     fputc('\n', f);

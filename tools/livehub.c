@@ -704,7 +704,10 @@ int main(int argc, char **argv)
         if (reclog) {
             fprintf(reclog, "# multiview records | host %s | started %s\n",
                     host, started);
-            mv_session_ver(reclog, MV_PAT_SPEC_VERSION, "hub");
+            /* the ACTUAL pitch in use, not the reference constant: a
+             * replay reconstructs metric scale from this field */
+            mv_session_ver(reclog, MV_PAT_SPEC_VERSION, pitch * 1000.0,
+                           "hub");
         }
     }
     signal(SIGPIPE, SIG_IGN);

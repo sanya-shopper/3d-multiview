@@ -27,9 +27,16 @@
  *    wrapper (mv_session_read) carries no driver frame index, so CTR/
  *    CRN/PHS are keyed by capture timestamp t instead, and FRM (which
  *    carries both) provides the k <-> t binding for consumers.
- *  - VER: w/h/pitch_mm/Td_ms are the spec-v1 reference display
- *    constants below; cam= is appended only when a camera id is given
- *    (the doc's VER is rig-global).
+ *  - VER: w/h/Td_ms are the spec-v1 reference display constants
+ *    below; pitch_mm is the ACTUAL pixel pitch of the display used
+ *    (callers pass MV_SESSION_PITCH_MM when it is the reference
+ *    display) -- a replay reconstructs metric scale from this field,
+ *    so recording the constant while calibrating with a different
+ *    physical pitch would scale every replayed length by their ratio
+ *    (shipped bug: the live hub ran a 0.1133 mm laptop panel but
+ *    stamped 0.2745, a 2.4x metric error for any consumer);
+ *    cam= is appended only when a camera id is given (the doc's VER
+ *    is rig-global).
  *  - CTR validity is encoded by presence, per the doc's "emitted when
  *    strip decodes": mv_session_read emits no CTR line when the
  *    counter failed to decode.
@@ -39,8 +46,11 @@
 #define MV_SESSION_PITCH_MM 0.2745 /* spec-v1 reference display */
 #define MV_SESSION_TD_MS 16.667
 
-/* Session-start VER record; cam_id may be NULL for a rig-global one. */
-void mv_session_ver(FILE *f, int spec_version, const char *cam_id);
+/* Session-start VER record. pitch_mm = the physical pixel pitch of
+ * the display actually showing the pattern (MV_SESSION_PITCH_MM for
+ * the reference display); cam_id may be NULL for a rig-global one. */
+void mv_session_ver(FILE *f, int spec_version, double pitch_mm,
+                    const char *cam_id);
 
 /* Frame-arrival FRM record (t_mono = CLOCK_MONOTONIC seconds). */
 void mv_session_frm(FILE *f, const char *cam_id, double t_mono,

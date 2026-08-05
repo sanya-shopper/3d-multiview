@@ -255,6 +255,16 @@ function dl(){
     if (document.documentElement.requestFullscreen)
       document.documentElement.requestFullscreen().catch(function(){});
     st.style.display = 'none';
+    document.body.style.cursor = 'none'; /* keep the pointer off the
+                                            pattern cells */
+  });
+  /* any later click re-asserts fullscreen (first request can be
+     denied, or fullscreen dropped by a stray Esc) -- the operator
+     rule is simply "click the pattern": no keys needed */
+  addEventListener('click', function(){
+    if (!document.fullscreenElement
+        && document.documentElement.requestFullscreen)
+      document.documentElement.requestFullscreen().catch(function(){});
   });
 })();
 addEventListener('keydown',e=>{

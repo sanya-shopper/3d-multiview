@@ -135,3 +135,55 @@ jobs:
             valgrind --error-exitcode=1 --leak-check=full \
                      --errors-for-leak-kinds=definite ./$t || exit 1
           done
+
+  static-analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: install analyzers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq cppcheck clang-tools
+      - name: cppcheck
+        run: |
+          cppcheck --std=c99 --enable=warning,performance,portability \
+            --inline-suppr --error-exitcode=1 -q \
+            -Iinclude src tools 2>cppcheck.txt || { cat cppcheck.txt; exit 1; }
+          echo "cppcheck clean"
+      - name: clang scan-build (library + tools)
+        run: |
+          scan-build -o scanout --status-bugs \
+            make CC=clang libmv.a calibreal rigcalib scenecloud slreal \
+                 annotate replaycam livehub nettest genframes || \
+            { echo "scan-build found issues"; exit 1; }
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: build fuzzers (clang libFuzzer)
+        run: make CC=clang fuzz_reader fuzz_pgm
+      - name: fuzz the pattern reader
+        run: ./fuzz_reader -max_total_time=120 -print_final_stats=1
+      - name: fuzz the PGM parser
+        run: ./fuzz_pgm -max_total_time=90 -print_final_stats=1
+
+  multi-compiler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+        opt: [-O0, -O2, -O3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: build+test ${{ matrix.cc }} ${{ matrix.opt }}
+        env:
+          CFLAGS: -std=c99 -pedantic -Wall -Wextra -Werror ${{ matrix.opt }} -g
+        run: |
+          make CC=${{ matrix.cc }} libmv.a test_mv test_refine test_optimal \
+               test_feat test_session test_photo test_bundle test_mux
+          for t in test_mv test_refine test_optimal test_feat test_session \
+                   test_photo test_bundle test_mux; do ./$t >/dev/null || exit 1; done
+          echo "${{ matrix.cc }} ${{ matrix.opt }}: all suites pass"

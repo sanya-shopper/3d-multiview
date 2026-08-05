@@ -118,6 +118,23 @@ check: test_mv test_refine test_optimal test_feat test_session test_photo test_b
 checkbib:
 	python3 tests/check_bib.py
 
+# libFuzzer targets (clang, Linux CI has the runtime; macOS Xcode may not)
+FUZZ_SRC = $(filter-out src/%.o,$(SRC))
+fuzz_reader: fuzz/fuzz_reader.c $(SRC)
+	clang -std=c99 -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude \
+	  fuzz/fuzz_reader.c $(SRC) -lm -o $@
+fuzz_pgm: fuzz/fuzz_pgm.c $(SRC)
+	clang -std=c99 -g -O1 -fsanitize=fuzzer,address,undefined -Iinclude \
+	  fuzz/fuzz_pgm.c $(SRC) -lm -o $@
+
+# portable (no-libFuzzer-runtime) standalone drivers for local use
+drv_reader: fuzz/standalone.c fuzz/fuzz_reader.c $(SRC)
+	$(CC) -std=c99 -O1 -g -fsanitize=address,undefined -Iinclude \
+	  fuzz/standalone.c fuzz/fuzz_reader.c $(SRC) -lm -o $@
+drv_pgm: fuzz/standalone.c fuzz/fuzz_pgm.c $(SRC)
+	$(CC) -std=c99 -O1 -g -fsanitize=address,undefined -Iinclude \
+	  fuzz/standalone.c fuzz/fuzz_pgm.c $(SRC) -lm -o $@
+
 demo: demo_synthetic demo_calibrate demo_track demo_diagnose \
       demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf
 	./demo_synthetic

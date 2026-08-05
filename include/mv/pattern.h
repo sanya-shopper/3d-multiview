@@ -36,6 +36,12 @@
 #define MV_PAT_CTR_BITS 20    /* Gray-coded counter bits */
 #define MV_PAT_CTR_CELLS 24   /* [1,0] marker + 20 bits + parity + ~parity */
 
+#define MV_PAT_PATCH 96       /* phase patch size */
+#define MV_PAT_VER_X0 32      /* version block: 10 cells of 48 px */
+#define MV_PAT_VER_Y0 32
+#define MV_PAT_VER_CELL 48
+#define MV_PAT_VER_CELLS 10   /* [1,0] marker + 8 Gray-coded version bits */
+
 /* M-array bit of grid square (col 0..18, row 0..9). */
 int mv_marray_bit(int col, int row);
 
@@ -56,6 +62,16 @@ void mv_pattern_corner_px(int i, int j, double xy[2]);
 
 /* Display-pixel center of counter cell c (0..23). */
 void mv_pattern_ctr_cell_px(int c, double xy[2]);
+
+/* Display-pixel center of phase patch i (0..4). Patches are
+ * MV_PAT_PATCH-px squares; patches 0..3 show counter bit 0, patch 4
+ * counter bit 1; a set bit renders black. */
+void mv_pattern_patch_px(int i, double xy[2]);
+
+/* Display-pixel center of version-block cell c (0..9): [1,0] marker
+ * followed by 8 Gray-coded bits of MV_PAT_SPEC_VERSION, MSB first;
+ * a set bit renders black. */
+void mv_pattern_version_cell_px(int c, double xy[2]);
 
 /* Verify the shipped M-array properties exhaustively; MV_OK if valid. */
 int mv_pattern_selftest(void);

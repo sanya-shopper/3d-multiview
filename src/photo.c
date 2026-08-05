@@ -340,7 +340,9 @@ static void resect_polish_m(mv_camera *cam, const double *X3,
     for (a = 0; a < 10; a++)
         if (freem[a])
             map[nf++] = a;
-    if (!nf || n < 6)
+    /* nf is in [1,10] by construction; state it so the -O2 fortify
+     * range analysis can bound the fixed A[100]/g[10] copies below */
+    if (nf < 1 || nf > 10 || n < 6)
         return;
     r0 = (double *)malloc((size_t)2 * n * sizeof(double));
     r1 = (double *)malloc((size_t)2 * n * sizeof(double));
@@ -359,7 +361,7 @@ static void resect_polish_m(mv_camera *cam, const double *X3,
     for (i = 0; i < 2 * n; i++)
         cost += r0[i] * r0[i];
     for (it = 0; it < 100; it++) {
-        double A[100], g[10], qn[10], cn;
+        double A[100] = { 0 }, g[10] = { 0 }, qn[10], cn;
         int b, c;
         for (a = 0; a < nf; a++) {
             double step = 1e-6 * (1.0 + fabs(q[map[a]]));

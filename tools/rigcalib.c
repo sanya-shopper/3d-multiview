@@ -210,7 +210,7 @@ int main(int argc, char **argv)
         double Rsum[9] = { 0 }, Racc[9], U[9], S[3], V[9], Vt[9];
         double R[9], t[3], tacc[3][256], tmean[3] = { 0, 0, 0 };
         double angdev[256], tdev[256];
-        int npair = 0, i, j, k;
+        int npair = 0, i, j, k, n2 = 0;
 
         for (i = 0; i < cams[0].nobs && npair < 256; i++) {
             int bestj = -1;
@@ -274,7 +274,6 @@ int main(int argc, char **argv)
         }
         /* recompute rotations for deviation stats */
         {
-            int n2 = 0;
             for (i = 0; i < cams[0].nobs && n2 < npair; i++) {
                 int bestj = -1;
                 long bestdk = MAXDK + 1;
@@ -303,7 +302,9 @@ int main(int argc, char **argv)
                 n2++;
             }
         }
-        qsort(angdev, (size_t)npair, sizeof(double), cmp_dbl);
+        /* n2 == npair by construction (identical matching); index by
+         * n2 so the analyzer sees only written entries reach qsort */
+        qsort(angdev, (size_t)n2, sizeof(double), cmp_dbl);
         qsort(tdev, (size_t)npair, sizeof(double), cmp_dbl);
         {
             double ax, ay, az, ang, tr;
@@ -323,8 +324,8 @@ int main(int argc, char **argv)
             printf("  relative rotation %.1f deg about axis "
                    "(%+.2f %+.2f %+.2f)\n", ang, ax, ay, az);
             printf("  consistency: median |dR| %.2f deg, median |dt| "
-                   "%.1f mm over %d pairs\n", angdev[npair / 2],
-                   1000.0 * tdev[npair / 2], npair);
+                   "%.1f mm over %d pairs\n", angdev[(n2 > 0 ? n2 : 1) / 2],
+                   1000.0 * tdev[npair / 2], n2 > 0 ? n2 : npair);
             printf("  R = [%+.4f %+.4f %+.4f; %+.4f %+.4f %+.4f; "
                    "%+.4f %+.4f %+.4f]\n", Racc[0], Racc[1], Racc[2],
                    Racc[3], Racc[4], Racc[5], Racc[6], Racc[7], Racc[8]);

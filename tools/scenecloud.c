@@ -425,11 +425,15 @@ int main(int argc, char **argv)
                     rgb[0] = rgb[1] = rgb[2] = rectL[y * w + x];
                     if (mv_cloud_push(&cloud, pw, rgb) == MV_OK) {
                         if (ntag == captag) {
-                            captag = captag ? 2 * captag : 65536;
-                            tag = (unsigned char *)realloc(tag,
-                                                           (size_t)captag);
+                            int ncap = captag ? 2 * captag : 65536;
+                            unsigned char *nt = (unsigned char *)
+                                realloc(tag, (size_t)ncap);
+                            if (nt) { /* keep old tag on failure, no leak */
+                                tag = nt;
+                                captag = ncap;
+                            }
                         }
-                        if (tag)
+                        if (tag && ntag < captag)
                             tag[ntag++] = (unsigned char)npairs;
                     }
                 }

@@ -15,13 +15,13 @@ import AppKit
 import CoreGraphics
 import Foundation
 
+// Every argument optional with deployment defaults:
+//   secondlaptop [hub-ip] [port] [camid] [fps]   (172.20.10.2 9900 2 5)
 let a = CommandLine.arguments
-guard a.count == 4 || a.count == 5, let port = UInt16(a[2]),
-      let camid = UInt32(a[3]) else {
-    print("usage: stream_cam <hub-host> <port> <camid> [fps]")
-    exit(1)
-}
-let fps = a.count == 5 ? (Double(a[4]) ?? 5.0) : 5.0
+let host = a.count > 1 ? a[1] : "172.20.10.2"
+let port = a.count > 2 ? (UInt16(a[2]) ?? 9900) : 9900
+let camid = a.count > 3 ? (UInt32(a[3]) ?? 2) : 2
+let fps = a.count > 4 ? (Double(a[4]) ?? 5.0) : 5.0
 
 // ---- TCP client (BSD sockets) ----
 var sock: Int32 = -1
@@ -72,12 +72,37 @@ func sendLog(_ s: Int32, _ camid: UInt32, _ text: String) {
     _ = sendAll(s, msg)
 }
 
-sock = connectHub(a[1], port)
+// retry for ~15 s so the second laptop can be started before OR after
+// the hub without failing
+for _ in 0..<150 {
+    sock = connectHub(host, port)
+    if sock >= 0 { break }
+    usleep(100_000)
+}
 guard sock >= 0 else {
-    print("cannot connect to \(a[1]):\(port)")
+    print("cannot reach hub at \(host):\(port) -- check the IP, same Wi-Fi, hub running")
     exit(1)
 }
-print("connected to \(a[1]):\(port) as camera \(camid), \(fps) fps")
+print("connected to \(host):\(port) as camera \(camid), \(fps) fps")
+
+// read hub ACKs (MVAK | rx | decoded) so the sender knows the hub is
+// really receiving, not just that TCP accepted the bytes
+func readAcks(_ g: Grabber) {
+    var buf = [UInt8](repeating: 0, count: 4096)
+    let n = buf.withUnsafeMutableBytes { recv(sock, $0.baseAddress, 4096, MSG_DONTWAIT) }
+    if n < 12 { return }
+    var i = 0
+    while i + 12 <= n {
+        if buf[i] == 0x4D && buf[i+1] == 0x56 && buf[i+2] == 0x41 && buf[i+3] == 0x4B {
+            func u32(_ o: Int) -> UInt32 {
+                UInt32(buf[i+o]) | (UInt32(buf[i+o+1])<<8)
+                | (UInt32(buf[i+o+2])<<16) | (UInt32(buf[i+o+3])<<24) }
+            g.hubRx = u32(4); g.hubDecoded = u32(8)
+            g.lastAck = ProcessInfo.processInfo.systemUptime
+            i += 12
+        } else { i += 1 }
+    }
+}
 
 // ---- capture ----
 final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -85,6 +110,10 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var lastSent = 0.0
     var status = "starting"
     var dims = "?"
+    var hubRx: UInt32 = 0        // frames the hub says it received
+    var hubDecoded: UInt32 = 0
+    var lastAck = 0.0           // uptime of last ACK from the hub
+    var sendOK = true
     let minGap: Double
     let camid: UInt32
     let sock: Int32
@@ -134,10 +163,12 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         for _ in 0..<8 { msg.append(UInt8(t & 255)); t >>= 8 }
         msg.append(contentsOf: gray)
         if !sendAll(self.sock, msg) {
+            sendOK = false
             status = "HUB CONNECTION LOST"
             print("hub connection lost")
             exit(1)
         }
+        sendOK = true
         seq += 1
         dims = "\(w)x\(h)"
         status = "streaming to hub"
@@ -176,7 +207,7 @@ app.setActivationPolicy(.regular)
 let win = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 720, height: 460),
                    styleMask: [.titled, .closable, .resizable, .miniaturizable],
                    backing: .buffered, defer: false)
-win.title = "multiview camera \(camid)  ->  \(a[1]):\(port)"
+win.title = "multiview camera \(camid)  ->  \(host):\(port)"
 let preview = AVCaptureVideoPreviewLayer(session: session)
 preview.videoGravity = .resizeAspect
 let root = NSView(frame: win.contentRect(forFrameRect: win.frame))
@@ -197,17 +228,26 @@ win.contentView = root
 win.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 
-// refresh the banner: green once frames are flowing, amber while waiting
+// banner: GREEN = hub is acknowledging our frames; AMBER = waiting for
+// the camera / first frames; RED = sending but the hub isn't confirming
 Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-    if grabber.seq > 0 {
-        banner.textColor = .green
+    readAcks(grabber)
+    let nowU = ProcessInfo.processInfo.systemUptime
+    let ackAge = grabber.lastAck > 0 ? nowU - grabber.lastAck : 999
+    if grabber.seq == 0 {
+        banner.textColor = .systemYellow
+        banner.stringValue = "waiting for camera… (grant camera permission if prompted)"
+    } else if !grabber.sendOK || ackAge > 4 {
+        banner.textColor = .systemRed
         banner.stringValue =
-            "● LIVE  camera \(camid)  \(grabber.dims)  ·  sent "
-            + "\(grabber.seq) frames  ·  aim so the pattern is fully in view"
+            "⚠ HUB NOT CONFIRMING  camera \(camid)  ·  sent \(grabber.seq)"
+            + "  ·  check the hub is running and on this Wi-Fi"
     } else {
-        banner.textColor = .yellow
+        banner.textColor = .systemGreen
         banner.stringValue =
-            "waiting for frames… (grant camera permission if prompted)"
+            "● LIVE  camera \(camid)  \(grabber.dims)  ·  sent \(grabber.seq)"
+            + "  ·  hub got \(grabber.hubRx), decoded \(grabber.hubDecoded)"
+            + "  ·  aim so the pattern fills the view"
     }
 }
 app.run()

@@ -1,17 +1,30 @@
-multiview live test kit  (Apple Silicon)  --  see COMMANDS.txt
-==============================================================
-Three Macs, one command each, run from Terminal.
+multiview live -- command lines (paste into Terminal)
+=====================================================
+Binaries are named by which laptop runs them. Every setting has a
+built-in default; you normally type NO arguments.
 
-  HUB     :  cd ~/Desktop/multiview-live && ./mvhub
-             (hub + camera 1; preview window + hub IP in the Terminal)
-  CAMERA 2:  cd ~/Desktop/multiview-live && ./stream_cam HUBIP 9900 2 5
-  PATTERN :  open ~/Desktop/multiview-live/pattern.html   (click once)
+HUB laptop  (runs the hub + camera 1, one binary)
+    cd ~/Desktop/multiview-live && ./hublaptop
+  A preview window opens (camera 1). The Terminal shows the HUB IP in a
+  box, then per-camera progress. Close the window to finish.
 
-Give the pattern motion where all cameras can see it (turntable / tilt);
-each camera needs several angles -- a flat screen can't fake that. The
-hub Terminal fills with [cal] then [ext]. The full session (frames,
-records.txt, camlog_<id>.txt, hub.log, summary.txt) collects in  rec/.
+SECOND camera laptop  (defaults to the hub IP already in use)
+    cd ~/Desktop/multiview-live && ./secondlaptop
+  If the hub IP differs, pass it:  ./secondlaptop 172.20.10.2
+  Preview window: GREEN "LIVE, hub got N" = confirmed; AMBER = waiting
+  for the camera; RED = sending but the hub isn't confirming.
 
-No ruler for distances; 0.1133 is a MacBook Air 13.6"/15" and only
-scales reported distances. If a binary "can't be verified" after
-AirDrop:  xattr -dr com.apple.quarantine ~/Desktop/multiview-live
+PATTERN laptop
+    open ~/Desktop/multiview-live/pattern.html    (click the page once)
+
+Give the pattern motion where both cameras see it (turntable / tilt).
+Watch the hub Terminal for [cal] then [ext]. Each run's full logs land
+in a fresh, dated folder:  logs/<hostname>-<date-time>/  (frames,
+records.txt, camlog_<id>.txt, hub.log, summary.txt).
+
+Defaults: hub port 9900, pitch 0.1133, camid 2 for the second laptop,
+5 fps. Override positionally only if needed:
+  ./hublaptop   [port] [pitch] [logs_dir] [fps]
+  ./secondlaptop [hub-ip] [port] [camid] [fps]
+If macOS says a binary "can't be verified" (AirDrop flag), once:
+  xattr -dr com.apple.quarantine ~/Desktop/multiview-live

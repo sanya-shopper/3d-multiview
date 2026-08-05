@@ -46,7 +46,7 @@ test_photo
 test_bundle
 test_mux
 replaycam
-livehub
+hubengine
 stream_cam
 nettest
 stream_cam_v4l2
@@ -56,3 +56,5 @@ fuzz_reader
 fuzz_pgm
 drv_reader
 drv_pgm
+hublaptop
+secondlaptop

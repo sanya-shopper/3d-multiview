@@ -7,6 +7,12 @@
  *
  * Build: make replaycam */
 
+/* glibc hides POSIX declarations (clock_gettime, getaddrinfo,
+ * struct timespec) under -std=c99 -pedantic without this; Darwin
+ * exposes them unconditionally -- found by deploy/ static audit */
+#define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE 1
+
 #include <math.h>
 #include <netdb.h>
 #include <signal.h>

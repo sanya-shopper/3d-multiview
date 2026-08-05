@@ -4,6 +4,7 @@
 
 #include "mv/core.h"
 #include "mv/mat.h"
+#include "mv/rot.h"
 #include "mv/bundle.h"
 
 /* Joint Levenberg-Marquardt bundle adjustment [Triggs2000].
@@ -41,83 +42,12 @@ enum { NC = 10 }; /* camera slots: r[3], t[3], fx, fy, cx, cy */
  * there (next term is theta^4/120 < 1e-17). */
 #define THETA_SERIES 1e-4
 
-static void rod_to_mat(double R[9], const double r[3])
-{
-    double th2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
-    double th = sqrt(th2);
-    double a, b; /* a = sin(th)/th, b = (1-cos(th))/th^2 */
-    if (th < THETA_SERIES) {
-        a = 1.0 - th2 / 6.0;
-        b = 0.5 - th2 / 24.0;
-    } else {
-        a = sin(th) / th;
-        b = (1.0 - cos(th)) / th2;
-    }
-    R[0] = 1.0 - b * (r[1] * r[1] + r[2] * r[2]);
-    R[1] = b * r[0] * r[1] - a * r[2];
-    R[2] = b * r[0] * r[2] + a * r[1];
-    R[3] = b * r[0] * r[1] + a * r[2];
-    R[4] = 1.0 - b * (r[0] * r[0] + r[2] * r[2]);
-    R[5] = b * r[1] * r[2] - a * r[0];
-    R[6] = b * r[0] * r[2] - a * r[1];
-    R[7] = b * r[1] * r[2] + a * r[0];
-    R[8] = 1.0 - b * (r[0] * r[0] + r[1] * r[1]);
-}
 
 /* r = log(R) for orthonormal R.  Three regimes: generic (axis from the
  * antisymmetric part), theta ~ 0 (r = w exact to O(theta^3)), theta ~ pi
  * (antisymmetric part vanishes; axis from the diagonal of R, sign from
  * the residual antisymmetric part; at exactly pi the sign is a genuine
  * ambiguity and either choice is the same rotation). */
-static void mat_to_rod(double r[3], const double R[9])
-{
-    double w[3]; /* = sin(theta) * axis */
-    double c = 0.5 * (R[0] + R[4] + R[8] - 1.0);
-    double s, th;
-    w[0] = 0.5 * (R[7] - R[5]);
-    w[1] = 0.5 * (R[2] - R[6]);
-    w[2] = 0.5 * (R[3] - R[1]);
-    if (c > 1.0)
-        c = 1.0;
-    if (c < -1.0)
-        c = -1.0;
-    s = mv_norm(w, 3);
-    th = atan2(s, c);
-    if (s > 1e-6) { /* generic: sin(theta) well away from 0 */
-        double f = th / s;
-        r[0] = f * w[0];
-        r[1] = f * w[1];
-        r[2] = f * w[2];
-    } else if (c > 0.0) { /* theta ~ 0 */
-        r[0] = w[0];
-        r[1] = w[1];
-        r[2] = w[2];
-    } else { /* theta ~ pi: R ~ 2 a a^T - I, so a_i^2 = (R_ii + 1)/2 */
-        double a[3], na;
-        int imax = 0, j;
-        if (R[4] > R[0])
-            imax = 1;
-        if (R[8] > R[imax * 3 + imax])
-            imax = 2;
-        a[imax] = sqrt(0.5 * (R[imax * 3 + imax] + 1.0));
-        for (j = 0; j < 3; j++)
-            if (j != imax) /* symmetrized off-diagonal: R_ij = 2 a_i a_j */
-                a[j] = 0.25 * (R[imax * 3 + j] + R[j * 3 + imax]) / a[imax];
-        na = mv_norm(a, 3);
-        if (na > 0.0) {
-            for (j = 0; j < 3; j++)
-                a[j] /= na;
-        } else { /* unreachable for orthonormal input; keep r finite */
-            a[0] = 1.0;
-            a[1] = a[2] = 0.0;
-        }
-        if (a[0] * w[0] + a[1] * w[1] + a[2] * w[2] < 0.0)
-            for (j = 0; j < 3; j++)
-                a[j] = -a[j];
-        for (j = 0; j < 3; j++)
-            r[j] = th * a[j];
-    }
-}
 
 /* ---- small Cholesky (as src/refine.c, size run-time n) ------------ */
 
@@ -188,7 +118,7 @@ static void cam_apply(mv_camera *w, const mv_camera *base, const double *pc,
 {
     *w = *base;
     if (!(flags & MV_BUNDLE_FIX_POSE)) {
-        rod_to_mat(w->R, pc);
+        mv_rot_exp(w->R, pc);
         w->t[0] = pc[3];
         w->t[1] = pc[4];
         w->t[2] = pc[5];
@@ -342,7 +272,7 @@ int mv_bundle_adjust(mv_camera *cams, const unsigned *camflags, int ncam,
     /* initial parameter vector from the cameras and points as given */
     for (i = 0; i < ncam; i++) {
         double *pc = p + NC * i;
-        mat_to_rod(pc, cams[i].R);
+        mv_rot_log(pc, cams[i].R);
         pc[3] = cams[i].t[0];
         pc[4] = cams[i].t[1];
         pc[5] = cams[i].t[2];

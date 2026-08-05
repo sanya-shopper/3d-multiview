@@ -23,6 +23,10 @@ void mv_skew3(double M[9], const double v[3]);
 void mv_cross3(double c[3], const double a[3], const double b[3]);
 double mv_dot(const double *a, const double *b, int n);
 double mv_norm(const double *a, int n);
+
+/* qsort comparator for ascending doubles (the one every median/percentile
+ * helper needs; was copied six ways). */
+int mv_cmp_double(const void *a, const void *b);
 /* Scale a to unit norm; MV_ERR if the norm is ~0. */
 int mv_normalize(double *a, int n);
 

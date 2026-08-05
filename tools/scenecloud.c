@@ -41,9 +41,11 @@ static int pose_from_read(mv_camera *cam, const double K[9],
 {
     double obj[2 * MV_READ_MAXC], H[9], Kinv[9];
     double r1[3], r2[3], r3[3], t[3], l1 = 0, l2 = 0, lam;
-    double A[9], S[3], V[9], U[9], Vt[9];
+    double A[9];
     int i, j;
 
+    if (rr->n < 4) /* homography needs >= 4 points; also leaves obj set */
+        return MV_ERR;
     for (i = 0; i < rr->n; i++) {
         double xy[2];
         mv_pattern_corner_px(rr->id[i] % MV_PAT_CORNER_COLS,
@@ -81,11 +83,9 @@ static int pose_from_read(mv_camera *cam, const double K[9],
         A[3 * i + 1] = r2[i];
         A[3 * i + 2] = r3[i];
     }
-    memcpy(U, A, sizeof(U));
-    if (mv_svd(U, S, V, 3, 3) != MV_OK)
+    /* nearest proper rotation to [r1 r2 r3] (det-safe -- mv/rot.h) */
+    if (mv_rot_project(cam->R, A) != MV_OK)
         return MV_ERR;
-    mv_mat_transpose(Vt, V, 3, 3);
-    mv_mat_mul(cam->R, U, Vt, 3, 3, 3);
     memcpy(cam->K, K, 9 * sizeof(double));
     for (j = 0; j < 3; j++)
         cam->t[j] = t[j];
@@ -190,11 +190,6 @@ static void speckle_gate(float *disp, int w, int h)
     free(cp);
 }
 
-static int cmp_dbl(const void *a, const void *b)
-{
-    double d = *(const double *)a - *(const double *)b;
-    return d < 0 ? -1 : d > 0 ? 1 : 0;
-}
 
 /* invalidate disparities where the matching window is textureless */
 static void texture_gate(float *disp, const unsigned char *img, int w,
@@ -546,7 +541,7 @@ int main(int argc, char **argv)
                 break;
             for (p = 0; p < cloud.n; p++)
                 ax[p] = cloud.xyz[3 * p + j];
-            qsort(ax, (size_t)cloud.n, sizeof(double), cmp_dbl);
+            qsort(ax, (size_t)cloud.n, sizeof(double), mv_cmp_double);
             lo[j] = ax[(int)(0.03 * (cloud.n - 1))];
             hi[j] = ax[(int)(0.97 * (cloud.n - 1))];
         }

@@ -152,11 +152,6 @@ static int load_camera(cam_t *c, const char *spec, double pitch)
     return c->nobs >= 3 ? MV_OK : MV_ERR;
 }
 
-static int cmp_dbl(const void *a, const void *b)
-{
-    double d = *(const double *)a - *(const double *)b;
-    return d < 0 ? -1 : d > 0 ? 1 : 0;
-}
 
 /* relative transform of pair (a_obs, b_obs): x_a = R x_b + t */
 static void rel_pose(double R[9], double t[3], const mv_camera *a,
@@ -200,14 +195,14 @@ int main(int argc, char **argv)
                 steps[ns++] = (double)(cams[c].counter[i]
                                        - cams[c].counter[i - 1]);
         if (ns) {
-            qsort(steps, (size_t)ns, sizeof(double), cmp_dbl);
+            qsort(steps, (size_t)ns, sizeof(double), mv_cmp_double);
             printf("camera %d: median counter step %.0f refreshes "
                    "between samples\n", c, steps[ns / 2]);
         }
     }
 
     for (c = 1; c < ncam; c++) {
-        double Rsum[9] = { 0 }, Racc[9], U[9], S[3], V[9], Vt[9];
+        double Rsum[9] = { 0 }, Racc[9];
         double R[9], t[3], tacc[3][256], tmean[3] = { 0, 0, 0 };
         double angdev[256] = { 0 }, tdev[256] = { 0 };
         int npair = 0, i, j, k, n2 = 0;
@@ -237,32 +232,16 @@ int main(int argc, char **argv)
             printf("  too few simultaneous views -- cannot solve\n");
             continue;
         }
-        /* chordal mean rotation: project the summed matrix to SO(3).
-         * U*Vt is the nearest ORTHOGONAL matrix -- a rotation only when
-         * its determinant is +1; if det(Rsum) < 0 (inconsistent pairs)
-         * the bare product is a reflection, so flip the last column of
-         * U, exactly as the pose solver in src/calib.c guards. */
-        memcpy(U, Rsum, sizeof(Rsum));
-        if (mv_svd(U, S, V, 3, 3) != MV_OK)
+        /* chordal mean rotation: nearest proper rotation to the summed
+         * matrix (det-safe, so an inconsistent pair set cannot yield a
+         * reflection -- mv/rot.h) */
+        if (mv_rot_project(Racc, Rsum) != MV_OK)
             continue;
-        mv_mat_transpose(Vt, V, 3, 3);
-        mv_mat_mul(Racc, U, Vt, 3, 3, 3);
-        {
-            double det = Racc[0] * (Racc[4] * Racc[8] - Racc[5] * Racc[7])
-                       - Racc[1] * (Racc[3] * Racc[8] - Racc[5] * Racc[6])
-                       + Racc[2] * (Racc[3] * Racc[7] - Racc[4] * Racc[6]);
-            if (det < 0.0) {
-                int r;
-                for (r = 0; r < 3; r++)
-                    U[r * 3 + 2] = -U[r * 3 + 2];
-                mv_mat_mul(Racc, U, Vt, 3, 3, 3);
-            }
-        }
         /* median-trimmed translation: per-axis median */
         for (k = 0; k < 3; k++) {
             double col[256];
             memcpy(col, tacc[k], (size_t)npair * sizeof(double));
-            qsort(col, (size_t)npair, sizeof(double), cmp_dbl);
+            qsort(col, (size_t)npair, sizeof(double), mv_cmp_double);
             tmean[k] = col[npair / 2];
         }
         /* per-pair deviations from the mean */
@@ -304,8 +283,8 @@ int main(int argc, char **argv)
         }
         /* n2 == npair by construction (identical matching); index by
          * n2 so the analyzer sees only written entries reach qsort */
-        qsort(angdev, (size_t)n2, sizeof(double), cmp_dbl);
-        qsort(tdev, (size_t)npair, sizeof(double), cmp_dbl);
+        qsort(angdev, (size_t)n2, sizeof(double), mv_cmp_double);
+        qsort(tdev, (size_t)npair, sizeof(double), mv_cmp_double);
         {
             double ax, ay, az, ang, tr;
             tr = (Racc[0] + Racc[4] + Racc[8] - 1.0) / 2.0;

@@ -228,11 +228,6 @@ int mv_essential_pose(double R[9], double t[3], const double E[9],
     return MV_OK;
 }
 
-static int fcmp_dbl(const void *a, const void *b)
-{
-    double d = *(const double *)a - *(const double *)b;
-    return d < 0 ? -1 : d > 0 ? 1 : 0;
-}
 
 int mv_fundamental_8point_robust(double F[9], double *uv1, double *uv2,
                                  int *n)
@@ -249,7 +244,7 @@ int mv_fundamental_8point_robust(double F[9], double *uv1, double *uv2,
             resid[i] = mv_sym_epipolar_dist(F, uv1 + 2 * i, uv2 + 2 * i);
             resid[*n + i] = resid[i];
         }
-        qsort(resid + *n, (size_t)*n, sizeof(double), fcmp_dbl);
+        qsort(resid + *n, (size_t)*n, sizeof(double), mv_cmp_double);
         medr = resid[*n + *n / 2];
         m = 0;
         for (i = 0; i < *n; i++)

@@ -78,6 +78,70 @@ static void test_svd(void)
     CHECK(orth < 1e-10, "svd: U columns orthonormal");
 }
 
+static void test_rot(void)
+{
+    /* the canonical rotation kernels, tested at the degenerate cases
+     * that broke the old copies: theta ~ 0, theta ~ pi, reflection */
+    static const double vecs[7][3] = {
+        { 0.0, 0.0, 0.0 },            /* identity */
+        { 1e-11, -2e-11, 5e-12 },     /* theta ~ 0 */
+        { 0.3, -0.7, 0.2 },           /* generic */
+        { 2.221441, 0.0, 0.0 },       /* generic about x */
+        { 1.3, 1.3, 1.3 },            /* tilted, |r| ~ 2.25 */
+        { 0.0, 3.14159265358979324, 0.0 }, /* exactly pi about y */
+        { 1.81379936423422, 1.81379936423422,
+          1.81379936423422 }          /* exactly pi, tilted axis */
+    };
+    int t, i;
+    for (t = 0; t < 7; t++) {
+        double R[9], r2[9], rv[3], e = 0.0, orth = 0.0, th;
+        int a, b;
+        mv_rot_exp(R, vecs[t]);
+        /* R is a proper rotation: R^T R = I, det = +1 */
+        for (a = 0; a < 3; a++)
+            for (b = 0; b < 3; b++) {
+                double d = 0.0;
+                int k;
+                for (k = 0; k < 3; k++)
+                    d += R[k * 3 + a] * R[k * 3 + b];
+                orth += fabs(d - (a == b ? 1.0 : 0.0));
+            }
+        CHECK(orth < 1e-12, "rot: exp gives an orthonormal matrix");
+        /* exp(log(R)) == R. The log map is singular at theta = pi (a
+         * tiny change in R there is a large change in the axis-angle),
+         * so within ~1e-3 of pi the achievable roundtrip is ~1e-4 --
+         * an honest, conditioning-aware tolerance, not 1e-9. Exactly pi
+         * and everything below pi round-trip to the noise floor. */
+        th = sqrt(vecs[t][0] * vecs[t][0] + vecs[t][1] * vecs[t][1]
+                  + vecs[t][2] * vecs[t][2]);
+        mv_rot_log(rv, R);
+        mv_rot_exp(r2, rv);
+        for (i = 0; i < 9; i++)
+            e += fabs(r2[i] - R[i]);
+        CHECK(e < (th > MV_PI - 1e-3 && th < MV_PI - 1e-9 ? 1e-3 : 1e-8),
+              "rot: exp(log(R)) == R (incl. theta = pi)");
+    }
+    /* mv_rot_project: a rotation is its own projection; a reflection is
+     * mapped to a proper rotation (det +1), never returned as-is */
+    {
+        double R[9], P[9], det;
+        double refl[9] = { -1, 0, 0, 0, 1, 0, 0, 0, 1 }; /* det = -1 */
+        mv_rot_exp(R, vecs[2]);
+        CHECK(mv_rot_project(P, R) == MV_OK, "rot: project succeeds");
+        {
+            double d = 0.0;
+            for (i = 0; i < 9; i++)
+                d += fabs(P[i] - R[i]);
+            CHECK(d < 1e-12, "rot: project fixes a rotation");
+        }
+        mv_rot_project(P, refl);
+        det = P[0] * (P[4] * P[8] - P[5] * P[7])
+            - P[1] * (P[3] * P[8] - P[5] * P[6])
+            + P[2] * (P[3] * P[7] - P[4] * P[6]);
+        CHECK(det > 0.999, "rot: project of a reflection is a rotation");
+    }
+}
+
 static void test_camera(void)
 {
     mv_camera c1, c2;
@@ -984,6 +1048,7 @@ static void test_warp_scene(void)
 int main(void)
 {
     test_inv3();
+    test_rot();
     test_svd();
     test_camera();
     test_epipolar();

@@ -4,6 +4,7 @@
 
 #include "mv/core.h"
 #include "mv/mat.h"
+#include "mv/rot.h"
 #include "mv/cam.h"
 #include "mv/feat.h"
 #include "mv/triangulate.h"
@@ -197,74 +198,13 @@ int mv_cam_from_projection(mv_camera *cam, const double P[12])
     return MV_OK;
 }
 
-static int rcmp_dbl(const void *a, const void *b)
-{
-    double d = *(const double *)a - *(const double *)b;
-    return d < 0 ? -1 : d > 0 ? 1 : 0;
-}
 
 /* geometric polish: Gauss-Newton with LM damping over {fx, fy, cx,
  * cy, Rodrigues r, t} minimizing true reprojection error -- the DLT
  * minimizes an algebraic surrogate whose bias shows up mostly as a
  * correlated focal/depth shift (the gold-standard two-step of
  * Hartley-Zisserman: linear init, geometric refine) */
-static void rodrigues_R(double R[9], const double r[3])
-{
-    double th = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
-    double kx, ky, kz, c, sn, v;
-    if (th < 1e-12) {
-        memset(R, 0, 9 * sizeof(double));
-        R[0] = R[4] = R[8] = 1.0;
-        R[1] = -r[2]; R[2] = r[1];
-        R[3] = r[2];  R[5] = -r[0];
-        R[6] = -r[1]; R[7] = r[0];
-        return;
-    }
-    kx = r[0] / th; ky = r[1] / th; kz = r[2] / th;
-    c = cos(th); sn = sin(th); v = 1.0 - c;
-    R[0] = c + kx * kx * v;      R[1] = kx * ky * v - kz * sn;
-    R[2] = kx * kz * v + ky * sn;
-    R[3] = ky * kx * v + kz * sn; R[4] = c + ky * ky * v;
-    R[5] = ky * kz * v - kx * sn;
-    R[6] = kz * kx * v - ky * sn; R[7] = kz * ky * v + kx * sn;
-    R[8] = c + kz * kz * v;
-}
 
-static void R_rodrigues(double r[3], const double R[9])
-{
-    double c = (R[0] + R[4] + R[8] - 1.0) / 2.0, th, s;
-    if (c > 1.0) c = 1.0;
-    if (c < -1.0) c = -1.0;
-    th = acos(c);
-    s = sin(th);
-    if (fabs(s) < 1e-9) {
-        /* theta ~ 0: no rotation. theta ~ pi: sin -> 0 but the rotation
-         * is a real half-turn -- recover the axis from the diagonal
-         * (R = 2 a a^T - I there), sign from the off-diagonal, rather
-         * than collapsing it to zero. */
-        if (c > 0.0) {
-            r[0] = r[1] = r[2] = 0.0;
-        } else {
-            double ax = sqrt((R[0] + 1.0) > 0.0 ? (R[0] + 1.0) / 2.0 : 0),
-                   ay = sqrt((R[4] + 1.0) > 0.0 ? (R[4] + 1.0) / 2.0 : 0),
-                   az = sqrt((R[8] + 1.0) > 0.0 ? (R[8] + 1.0) / 2.0 : 0);
-            double PI = 3.14159265358979323846;
-            if (R[1] + R[3] < 0.0) ay = -ay;
-            if (R[2] + R[6] < 0.0) az = -az;
-            /* pin the largest-magnitude axis positive for a stable sign */
-            if (ax >= ay && ax >= az) {
-                if (R[1] + R[3] < 0.0 && ay > 0.0) ay = -ay;
-            }
-            r[0] = PI * ax;
-            r[1] = PI * ay;
-            r[2] = PI * az;
-        }
-        return;
-    }
-    r[0] = th * (R[7] - R[5]) / (2.0 * s);
-    r[1] = th * (R[2] - R[6]) / (2.0 * s);
-    r[2] = th * (R[3] - R[1]) / (2.0 * s);
-}
 
 static void resect_residuals(const double q[10], const double *X3,
                              const double *uv, int n, double *r)
@@ -272,7 +212,7 @@ static void resect_residuals(const double q[10], const double *X3,
     mv_camera c;
     int i;
     mv_cam_set_K(&c, q[0], q[1], q[2], q[3]);
-    rodrigues_R(c.R, q + 4);
+    mv_rot_exp(c.R, q + 4);
     c.t[0] = q[7]; c.t[1] = q[8]; c.t[2] = q[9];
     memset(c.k, 0, sizeof(c.k));
     for (i = 0; i < n; i++) {
@@ -355,7 +295,7 @@ static void resect_polish_m(mv_camera *cam, const double *X3,
     }
     q[0] = cam->K[0]; q[1] = cam->K[4];
     q[2] = cam->K[2]; q[3] = cam->K[5];
-    R_rodrigues(q + 4, cam->R);
+    mv_rot_log(q + 4, cam->R);
     q[7] = cam->t[0]; q[8] = cam->t[1]; q[9] = cam->t[2];
     resect_residuals(q, X3, uv, n, r0);
     for (i = 0; i < 2 * n; i++)
@@ -418,7 +358,7 @@ static void resect_polish_m(mv_camera *cam, const double *X3,
     free(r1);
     free(J);
     mv_cam_set_K(cam, q[0], q[1], q[2], q[3]);
-    rodrigues_R(cam->R, q + 4);
+    mv_rot_exp(cam->R, q + 4);
     cam->t[0] = q[7]; cam->t[1] = q[8]; cam->t[2] = q[9];
     memset(cam->k, 0, sizeof(cam->k));
 }
@@ -525,7 +465,7 @@ int mv_resect_robust(mv_camera *cam, double *X3, double *uv, int *n)
             }
             resid[*n + i] = resid[i];
         }
-        qsort(resid + *n, (size_t)*n, sizeof(double), rcmp_dbl);
+        qsort(resid + *n, (size_t)*n, sizeof(double), mv_cmp_double);
         medr = resid[*n + *n / 2];
         m = 0;
         for (i = 0; i < *n; i++)

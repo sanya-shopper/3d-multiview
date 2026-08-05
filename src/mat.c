@@ -190,3 +190,9 @@ int mv_nullvec(double *x, const double *A, int m, int n)
     free(V);
     return ret;
 }
+
+int mv_cmp_double(const void *a, const void *b)
+{
+    double d = *(const double *)a - *(const double *)b;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}

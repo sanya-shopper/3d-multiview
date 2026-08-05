@@ -6,6 +6,7 @@
 #include "mv/core.h"
 #include "mv/mat.h"
 #include "mv/cam.h"
+#include "mv/rot.h"
 #include "mv/target.h"
 #include "mv/graycode.h"
 #include "mv/calib.h"

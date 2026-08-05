@@ -291,7 +291,10 @@ static void test_halfturn(void)
         mv_mat_transpose(Rt, gt.R, 3, 3);
         mv_mat_mul(D, est.R, Rt, 3, 3, 3);
         tr = (D[0]+D[4]+D[8]-1.0)/2.0;
-        if (tr>1.0) tr=1.0; if (tr<-1.0) tr=-1.0;
+        if (tr > 1.0)
+            tr = 1.0;
+        if (tr < -1.0)
+            tr = -1.0;
         ang = acos(tr) * 180.0 / 3.14159265358979324;
         CHECK(ang < 0.5, "halfturn: rotation recovered (pi branch works)");
     }

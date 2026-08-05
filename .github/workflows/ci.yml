@@ -171,9 +171,9 @@ jobs:
       - name: build fuzzers (clang libFuzzer)
         run: make CC=clang fuzz_reader fuzz_pgm
       - name: fuzz the pattern reader
-        run: ./fuzz_reader -max_total_time=120 -print_final_stats=1
+        run: ./fuzz_reader -max_total_time=120 -rss_limit_mb=2048 -print_final_stats=1
       - name: fuzz the PGM parser
-        run: ./fuzz_pgm -max_total_time=90 -print_final_stats=1
+        run: ./fuzz_pgm -max_total_time=90 -rss_limit_mb=2048 -print_final_stats=1
 
   multi-compiler:
     runs-on: ubuntu-24.04

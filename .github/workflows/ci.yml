@@ -1,0 +1,29 @@
+# CI: keep the Ubuntu code paths from rotting. The ubuntu job is the
+# deployment truth (the target platform); the macos job guards the
+# development platform. Both drive deploy/build-linux.sh, which builds
+# the library, every deployable tool, and runs all eight test binaries
+# (the LaTeX/bibliography checks need a TeX toolchain and stay local).
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: build and test (Linux)
+        run: sh deploy/build-linux.sh
+      - name: nettest selftest
+        run: ./nettest --selftest
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: build and test (macOS)
+        run: sh deploy/build-linux.sh
+      - name: nettest selftest
+        run: ./nettest --selftest

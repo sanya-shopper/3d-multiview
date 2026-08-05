@@ -11,7 +11,7 @@
 #   2. each C tool target, individually  (calibreal scenecloud rigcalib
 #                                         annotate slreal replaycam
 #                                         livehub nettest)
-#   3. stream_cam_v4l2                   (known stub: hits
+#   3. stream_cam_v4l2                   (real V4L2 code now: must
 #                                         '#error work item under
 #                                         construction' on __linux__;
 #                                         reported as XFAIL, not FAIL)
@@ -81,8 +81,8 @@ for t in calibreal scenecloud rigcalib annotate slreal replaycam \
     stage "tool $t" make "$t"
 done
 
-# Stage 3: the V4L2 streamer is a declared stub on __linux__.
-stage_xfail "tool stream_cam_v4l2" make stream_cam_v4l2
+# Stage 3: the V4L2 streamer is real code now -- a required build.
+stage "tool stream_cam_v4l2" make stream_cam_v4l2
 
 # Stage 4: build test binaries.
 for t in test_mv test_refine test_optimal test_feat test_session \

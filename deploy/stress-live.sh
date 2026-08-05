@@ -3,7 +3,7 @@
 # through it and (optionally) demand a live calibration. Reusable
 # locally and in CI, plain or under sanitizers.
 #   sh deploy/stress-live.sh [require_cal 0|1]  (default 1)
-# Expects ./livehub ./replaycam ./nettest ./genframes already built.
+# Expects ./hubengine ./replaycam ./nettest ./genframes already built.
 # The replay uses camid 1 DELIBERATELY: nettest's baseline scenario
 # occupies that slot, so this also proves a real camera can reuse its
 # slot immediately after the fuzz battery.
@@ -14,7 +14,7 @@ HLOG=/tmp/mv_stress_hub.log
 NLOG=/tmp/mv_stress_nettest.log
 
 ./genframes "$FDIR" 60 || exit 1
-./livehub $PORT 0.1133 > "$HLOG" 2>&1 &
+./hubengine $PORT 0.1133 > "$HLOG" 2>&1 &
 HUB=$!
 sleep 2
 

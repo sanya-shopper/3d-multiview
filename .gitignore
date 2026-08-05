@@ -58,3 +58,11 @@ drv_reader
 drv_pgm
 hublaptop
 secondlaptop
+test_reader_speed
+test_clock_sync
+test_hub_solve
+hubengine
+mvhub
+stream_cam
+rec/
+logs/

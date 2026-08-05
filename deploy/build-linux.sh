@@ -10,12 +10,12 @@
 #   1. make libmv.a                      (core library)
 #   2. each C tool target, individually  (calibreal scenecloud rigcalib
 #                                         annotate slreal replaycam
-#                                         livehub nettest)
+#                                         hubengine nettest)
 #   3. stream_cam_v4l2                   (real V4L2 code now: must
 #                                         '#error work item under
 #                                         construction' on __linux__;
 #                                         reported as XFAIL, not FAIL)
-#   4. build the C test binaries         (test_mv .. test_mux)
+#   4. build the C test binaries         (test_mv .. test_hub_solve)
 #   5. run each test binary
 #
 # The python bib check (tests/check_bib.py) is deliberately skipped:
@@ -77,7 +77,7 @@ stage "libmv.a" make libmv.a
 
 # Stage 2: C tools, one target at a time so each failure is attributed.
 for t in calibreal scenecloud rigcalib annotate slreal replaycam \
-         livehub nettest; do
+         hubengine nettest; do
     stage "tool $t" make "$t"
 done
 
@@ -86,13 +86,15 @@ stage "tool stream_cam_v4l2" make stream_cam_v4l2
 
 # Stage 4: build test binaries.
 for t in test_mv test_refine test_optimal test_feat test_session \
-         test_photo test_bundle test_mux; do
+         test_photo test_bundle test_mux test_reader_speed \
+         test_clock_sync test_hub_solve; do
     stage "build $t" make "$t"
 done
 
 # Stage 5: run test binaries (only those that were built).
 for t in test_mv test_refine test_optimal test_feat test_session \
-         test_photo test_bundle test_mux; do
+         test_photo test_bundle test_mux test_reader_speed \
+         test_clock_sync test_hub_solve; do
     if [ -x "./$t" ]; then
         stage "run $t" "./$t"
     else

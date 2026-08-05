@@ -126,6 +126,7 @@ check: test_mv test_refine test_optimal test_feat test_session test_photo test_b
 	./test_reader_speed
 	./test_clock_sync
 	./test_hub_solve
+	python3 tests/check_targets.py
 	python3 tests/check_bib.py
 
 checkbib:

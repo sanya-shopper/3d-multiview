@@ -1,8 +1,13 @@
 # CI: keep the Ubuntu code paths from rotting. The ubuntu job is the
 # deployment truth (the target platform); the macos job guards the
 # development platform. Both drive deploy/build-linux.sh, which builds
-# the library, every deployable tool, and runs all eight test binaries
+# the library, every deployable tool, and runs every test binary
 # (the LaTeX/bibliography checks need a TeX toolchain and stay local).
+#
+# The build-consistency job runs first and cheaply: it catches make
+# targets renamed out from under these scripts (which once silently
+# disabled every Linux gate) and suites added to `make check` that CI
+# never learned to run.
 name: ci
 on:
   push:
@@ -13,6 +18,14 @@ on:
     - cron: '0 4 * * 1'   # weekly full-valgrind sweep, Mondays 04:00 UTC
 
 jobs:
+  build-consistency:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: make targets referenced by CI and deploy scripts resolve
+        run: python3 tests/check_targets.py
+
   ubuntu:
     runs-on: ubuntu-24.04
     steps:
@@ -64,8 +77,8 @@ jobs:
           TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1
         run: |
           make libmv.a replaycam nettest genframes
-          rm -f tools/livehub.o
-          CFLAGS="-std=c99 -pedantic -Wall -Wextra -O1 -g -fsanitize=thread" make livehub
+          rm -f tools/livehub.o tools/hub_clock.o tools/hub_solve.o
+          CFLAGS="-std=c99 -pedantic -Wall -Wextra -O1 -g -fsanitize=thread" make hubengine
           sh deploy/stress-live.sh 0
 
   ubuntu-coverage:
@@ -118,7 +131,7 @@ jobs:
       - name: build live tools
         env:
           CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g
-        run: make libmv.a livehub replaycam nettest genframes
+        run: make libmv.a hubengine replaycam nettest genframes
       - name: valgrind the live hub (memcheck on the streaming path)
         run: sh deploy/valgrind-hub.sh
 
@@ -160,7 +173,7 @@ jobs:
         run: |
           scan-build -o scanout --status-bugs \
             make CC=clang libmv.a calibreal rigcalib scenecloud slreal \
-                 annotate replaycam livehub nettest genframes || \
+                 annotate replaycam hubengine nettest genframes || \
             { echo "scan-build found issues"; exit 1; }
 
   fuzz:

@@ -6,7 +6,7 @@ LDLIBS   = -lm -lpthread
 SRC = src/mat.c src/cam.c src/epipolar.c src/triangulate.c src/rectify.c \
       src/stereo.c src/img.c src/cloud.c src/target.c src/graycode.c \
       src/calib.c src/pattern.c src/render.c src/reader.c src/tsdf.c \
-      src/refine.c src/optimal.c src/feat.c src/session.c src/photo.c src/bundle.c
+      src/refine.c src/optimal.c src/feat.c src/session.c src/photo.c src/bundle.c src/rot.c
 OBJ = $(SRC:.c=.o)
 
 all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv

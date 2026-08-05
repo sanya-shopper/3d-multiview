@@ -5,7 +5,9 @@
 //   ./stream_cam <hub-host> <port> <camid> [fps]
 //
 // First run prompts for camera permission (grant it in System Settings
-// if the prompt is missed). Frames go out as:
+// if the prompt is missed). Status changes are also SPOKEN (macOS say)
+// because mid-session this screen faces the volume, not the operator;
+// MV_MUTE=1 silences. Frames go out as:
 //   "MVFR" | u32 camid | u32 w | u32 h | u64 seq | f64 t_mono | w*h gray
 // little-endian, t_mono = this machine's monotonic uptime seconds (each
 // camera is its own clock domain; the display counter is the shared
@@ -22,6 +24,16 @@ let host = a.count > 1 ? a[1] : "172.20.10.2"
 let port = a.count > 2 ? (UInt16(a[2]) ?? 9900) : 9900
 let camid = a.count > 3 ? (UInt32(a[3]) ?? 2) : 2
 let fps = a.count > 4 ? (Double(a[4]) ?? 5.0) : 5.0
+
+// Spoken feedback: fire-and-forget /usr/bin/say child; it survives an
+// exit() right after, so failure paths can speak then die.
+func speak(_ text: String) {
+    if ProcessInfo.processInfo.environment["MV_MUTE"] != nil { return }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+    p.arguments = [text]
+    try? p.run()
+}
 
 // ---- TCP client (BSD sockets) ----
 var sock: Int32 = -1
@@ -81,6 +93,7 @@ for _ in 0..<150 {
 }
 guard sock >= 0 else {
     print("cannot reach hub at \(host):\(port) -- check the IP, same Wi-Fi, hub running")
+    speak("camera \(camid) cannot reach the hub")
     exit(1)
 }
 print("connected to \(host):\(port) as camera \(camid), \(fps) fps")
@@ -166,6 +179,7 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
             sendOK = false
             status = "HUB CONNECTION LOST"
             print("hub connection lost")
+            speak("camera \(self.camid) lost the hub")
             exit(1)
         }
         sendOK = true
@@ -230,6 +244,11 @@ app.activate(ignoringOtherApps: true)
 
 // banner: GREEN = hub is acknowledging our frames; AMBER = waiting for
 // the camera / first frames; RED = sending but the hub isn't confirming
+// State TRANSITIONS are spoken (once each), so the operator can aim and
+// troubleshoot without seeing this screen.
+var saidLive = false, saidDecoding = false, saidPermission = false
+var inRed = false
+let tStart = ProcessInfo.processInfo.systemUptime
 Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
     readAcks(grabber)
     let nowU = ProcessInfo.processInfo.systemUptime
@@ -237,17 +256,39 @@ Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
     if grabber.seq == 0 {
         banner.textColor = .systemYellow
         banner.stringValue = "waiting for camera… (grant camera permission if prompted)"
+        if !saidPermission && nowU - tStart > 5 {
+            saidPermission = true
+            speak("camera \(camid) is waiting for camera permission")
+        }
     } else if !grabber.sendOK || ackAge > 4 {
         banner.textColor = .systemRed
         banner.stringValue =
             "⚠ HUB NOT CONFIRMING  camera \(camid)  ·  sent \(grabber.seq)"
             + "  ·  check the hub is running and on this Wi-Fi"
+        if !inRed {
+            inRed = true
+            speak("camera \(camid), hub not confirming")
+        }
     } else {
         banner.textColor = .systemGreen
         banner.stringValue =
             "● LIVE  camera \(camid)  \(grabber.dims)  ·  sent \(grabber.seq)"
             + "  ·  hub got \(grabber.hubRx), decoded \(grabber.hubDecoded)"
             + "  ·  aim so the pattern fills the view"
+        if inRed {
+            inRed = false
+            saidLive = true
+            speak("camera \(camid) confirmed again")
+        } else if !saidLive {
+            saidLive = true
+            speak("camera \(camid) live, hub confirming")
+        }
+        // the aiming cue: the hub decoding frames means the pattern is
+        // actually in this camera's view
+        if !saidDecoding && grabber.hubDecoded > 0 {
+            saidDecoding = true
+            speak("hub is decoding camera \(camid)")
+        }
     }
 }
 app.run()

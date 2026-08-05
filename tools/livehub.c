@@ -21,6 +21,11 @@
  *     the recorded frames for the full-precision pass.
  *  Loopback test without hardware:  ./livehub 9900 0.1133  plus two
  *  replaycam instances streaming recorded PGM frames.
+ *  AUDIO: the load-bearing events (hub ready, camera connected /
+ *  calibrated / stalled, pair solved, shutdown) are also spoken aloud
+ *  (macOS `say`, Linux `spd-say`/`espeak`) -- during the session the
+ *  laptop screens face the volume, not the operator.  MV_MUTE=1
+ *  silences all speech.
  *
  * Ubuntu delta: only the capture shim differs (tools/stream_cam_v4l2.c);
  * this hub and replaycam compile unchanged. */
@@ -96,6 +101,8 @@ typedef struct {
     int last_tier;
     unsigned last_counter;
     double last_dist;
+    int stall_said;    /* spoken-stall latch: announce each stall and
+                        * each recovery once, not every status tick */
 } cam_t;
 
 typedef struct {
@@ -112,6 +119,34 @@ static const char *recdir = NULL;   /* the per-session log directory */
 static FILE *reclog = NULL;
 static FILE *hublog = NULL;          /* session copy of the hub console */
 static volatile sig_atomic_t g_stop = 0;
+
+/* Spoken feedback: during a live session the laptops face each other
+ * (screens are the pattern and the cameras' subjects), so the operator
+ * cannot see any display -- announce the load-bearing events out loud.
+ * Rare one-shot events only (connect / calibrate / pair / stall), so
+ * the fork cost is irrelevant; the speech itself runs in background.
+ * Text is program-authored (no network input reaches the shell).
+ * MV_MUTE=1 disables. */
+static void say(const char *fmt, ...)
+{
+    char msg[200], cmd[480];
+    int rc;
+    va_list ap;
+    if (getenv("MV_MUTE"))
+        return;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+#ifdef __APPLE__
+    snprintf(cmd, sizeof(cmd), "say \"%s\" >/dev/null 2>&1 &", msg);
+#else
+    snprintf(cmd, sizeof(cmd),
+             "{ spd-say \"%s\" 2>/dev/null || espeak \"%s\"; } "
+             ">/dev/null 2>&1 &", msg, msg);
+#endif
+    rc = system(cmd);
+    (void)rc;
+}
 
 /* print to the console AND the session hub.log, so the log is
  * self-contained regardless of how the hub was launched */
@@ -276,6 +311,7 @@ static cam_t *cam_slot(unsigned camid, int ci)
             cams[stale].calibrated = 0;
             cams[stale].nanch = cams[stale].anhead = 0;
             cams[stale].last_tier = 0;
+            cams[stale].stall_said = 0;
             return &cams[stale];
         }
     }
@@ -335,7 +371,9 @@ static void try_calibrate(cam_t *c)
         if (m >= 6
             && mv_calib_refine(K, ie, kr, iv, m) == MV_OK) {
             double rms = mv_calib_reproj_rms(ie, iv, m);
+            int first;
             pthread_mutex_lock(&mbx);
+            first = !c->calibrated;
             memcpy(c->K, K, sizeof(K));
             memcpy(c->kr, kr, sizeof(kr));
             c->rms = rms;
@@ -345,6 +383,9 @@ static void try_calibrate(cam_t *c)
                    "k1 %+.3f k2 %+.3f | RMS %.3f px over %d views\n",
                    c->camid, K[0], K[4], K[2], K[5], kr[0], kr[1],
                    rms, m);
+            if (first)
+                say("camera %u calibrated, r m s %.2f pixels",
+                    c->camid, rms);
         }
     }
 }
@@ -352,6 +393,7 @@ static void try_calibrate(cam_t *c)
 /* accumulate pairwise relative poses; report chordal mean */
 static void try_extrinsics(void)
 {
+    static unsigned char pair_said[MAXCAMS][MAXCAMS];
     int a, b;
     for (a = 0; a < MAXCAMS; a++)
         for (b = a + 1; b < MAXCAMS; b++) {
@@ -428,6 +470,15 @@ static void try_extrinsics(void)
                        sqrt(tm[0] * tm[0] + tm[1] * tm[1]
                             + tm[2] * tm[2]), tm[0], tm[1], tm[2],
                        npair, 1000.0 * dev / npair);
+                /* the session goal, announced once per pair: after
+                 * this the operator knows the rig is solved */
+                if (!pair_said[a][b]) {
+                    pair_said[a][b] = 1;
+                    say("cameras %u and %u paired, baseline %.2f "
+                        "meters", A->camid, B->camid,
+                        sqrt(tm[0] * tm[0] + tm[1] * tm[1]
+                             + tm[2] * tm[2]));
+                }
             }
         }
 }
@@ -651,10 +702,20 @@ static void status(void)
             hlog(" | last tier %d ctr %u", c->last_tier,
                  c->last_counter);
         /* loud flag when a camera that WAS flowing has gone quiet */
-        if (c->frames_rx > 0 && age > 2.0)
+        if (c->frames_rx > 0 && age > 2.0) {
             hlog(" | *** STALLED: no frames for %.0f s ***", age);
-        else
+            if (!c->stall_said) {
+                c->stall_said = 1;
+                say("camera %u stalled", c->camid);
+            }
+        }
+        else {
             hlog(" | frame age %.1f s", age);
+            if (c->stall_said) {
+                c->stall_said = 0;
+                say("camera %u back", c->camid);
+            }
+        }
         hlog("\n");
     }
 }
@@ -747,6 +808,7 @@ int main(int argc, char **argv)
     hlog("[hub] logs -> %s/\n", recdir);
     print_hub_ips(port);
     fflush(stdout);
+    say("hub ready on port %d", port);
 
     while (!g_stop) {
         fd_set rd;
@@ -905,10 +967,12 @@ int main(int argc, char **argv)
                         c->t_latest = now_mono();
                         c->fresh = 1;
                         c->frames_rx++;
-                        if (c->frames_rx == 1)
+                        if (c->frames_rx == 1) {
                             hlog("[hub] >>> camera %u CONNECTED, "
                                  "frames flowing (%ux%u) <<<\n",
                                  camid, w, h);
+                            say("camera %u connected", camid);
+                        }
                     }
                 }
                 pthread_mutex_unlock(&mbx);
@@ -951,6 +1015,15 @@ int main(int argc, char **argv)
      * heap so Valgrind can distinguish real leaks from live state */
     hlog("\n[hub] shutting down\n");
     pthread_join(decoder_th, NULL);
+    {
+        int nc = 0, ncal = 0;
+        for (i = 0; i < MAXCAMS; i++)
+            if (cams[i].used) {
+                nc++;
+                ncal += cams[i].calibrated != 0;
+            }
+        say("hub stopped. %d cameras, %d calibrated", nc, ncal);
+    }
 
     /* write a post-mortem summary into the recording dir: per-camera
      * throughput, decode rates, calibration, and the extrinsics -- the

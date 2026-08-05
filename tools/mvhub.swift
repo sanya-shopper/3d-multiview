@@ -41,6 +41,18 @@ do { try hub.run() } catch {
     exit(1)
 }
 
+// Spoken feedback for THIS process's own failure paths; the hubengine
+// child speaks the hub-level events (ready/connected/calibrated/paired)
+// itself on this same Mac, so only camera-1 local issues live here.
+// MV_MUTE=1 silences (the child inherits the environment).
+func speak(_ text: String) {
+    if ProcessInfo.processInfo.environment["MV_MUTE"] != nil { return }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+    p.arguments = [text]
+    try? p.run()
+}
+
 // ---- TCP client (BSD sockets), with retry while the hub binds ----
 func sendAll(_ s: Int32, _ data: [UInt8]) -> Bool {
     var off = 0
@@ -100,6 +112,7 @@ func connectLocal(_ port: UInt16) -> Int32 {
 let sock = connectLocal(port)
 guard sock >= 0 else {
     FileHandle.standardError.write(Data("camera 1 could not reach the local hub\n".utf8))
+    speak("camera 1 could not reach the local hub")
     hub.interrupt(); exit(1)
 }
 
@@ -142,7 +155,10 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         var s = seq; for _ in 0..<8 { msg.append(UInt8(s & 255)); s >>= 8 }
         var t = now.bitPattern; for _ in 0..<8 { msg.append(UInt8(t & 255)); t >>= 8 }
         msg.append(contentsOf: gray)
-        if !sendAll(sock, msg) { exit(1) }
+        if !sendAll(sock, msg) {
+            speak("camera 1 lost the local hub")
+            exit(1)
+        }
         seq += 1; dims = "\(w)x\(h)"
         if seq == 1 { sendLog(sock, camid, "camera 1 (hub-local) connected, \(w)x\(h)") }
         if seq % 50 == 0 { sendLog(sock, camid, "sent \(seq) frames") }
@@ -153,6 +169,7 @@ session.sessionPreset = .hd1280x720
 guard let dev = AVCaptureDevice.default(for: .video),
       let input = try? AVCaptureDeviceInput(device: dev) else {
     FileHandle.standardError.write(Data("no camera (check permission)\n".utf8))
+    speak("no camera on the hub laptop, check camera permission")
     hub.interrupt(); exit(1)
 }
 session.addInput(input)
@@ -197,11 +214,18 @@ root.addSubview(banner)
 win.contentView = root
 win.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
+var saidPermission = false
+let tStart = ProcessInfo.processInfo.systemUptime
 Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
     readAcks(grabber, sock)
     if grabber.seq == 0 {
         banner.textColor = .systemYellow
         banner.stringValue = "waiting for camera… (grant camera permission if prompted)"
+        if !saidPermission
+           && ProcessInfo.processInfo.systemUptime - tStart > 5 {
+            saidPermission = true
+            speak("hub laptop is waiting for camera permission")
+        }
     } else {
         banner.textColor = .systemGreen
         banner.stringValue = "● LIVE  camera 1  \(grabber.dims)  ·  hub got "

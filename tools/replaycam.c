@@ -59,6 +59,59 @@ static void send_log(int sock, unsigned camid, const char *text)
         send_all(sock, text, n);
 }
 
+/* Hub -> camera channel, exactly like a real camera (see
+ * tools/hub_clock.h): the hub piggybacks 12-byte messages here --
+ * "MVAK"|u32|u32 liveness acks (ignored) and "MVPB"|f64 clock-sync
+ * probes, answered immediately with
+ *   "MVTS" | u32 camid | f64 t_hub_echo | f64 t_cam
+ * echoing t_hub_send bit-exactly (raw bytes) and stamping t_cam from
+ * CLOCK_MONOTONIC, the clock the MVFR headers carry.  Answering from
+ * the loopback camera makes hub-level clock sync testable end to end.
+ * Bytes can arrive split at any boundary, so a small carry buffer
+ * keeps the partial tail (< 12 bytes) between drain calls. */
+static unsigned char rxbuf[256];
+static size_t rxlen;
+
+static void drain_hub(int s, unsigned camid)
+{
+    size_t i = 0;
+
+    if (rxlen < sizeof(rxbuf)) {
+        ssize_t k = recv(s, rxbuf + rxlen, sizeof(rxbuf) - rxlen,
+                         MSG_DONTWAIT);
+        if (k > 0)
+            rxlen += (size_t)k;
+    }
+    while (i + 12 <= rxlen) {
+        if (memcmp(rxbuf + i, "MVAK", 4) == 0) {
+            i += 12;
+            continue;
+        }
+        if (memcmp(rxbuf + i, "MVPB", 4) == 0) {
+            unsigned char rep[24];
+            unsigned long long bits;
+            struct timespec ts;
+            double t;
+            int j;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            t = ts.tv_sec + 1e-9 * ts.tv_nsec;
+            rep[0] = 'M'; rep[1] = 'V'; rep[2] = 'T'; rep[3] = 'S';
+            put32(rep + 4, camid);
+            memcpy(rep + 8, rxbuf + i + 4, 8); /* bit-exact echo */
+            memcpy(&bits, &t, 8);
+            for (j = 0; j < 8; j++)
+                rep[16 + j] = (unsigned char)((bits >> (8 * j)) & 255);
+            send_all(s, rep, sizeof(rep)); /* whole message: blocking
+                                              socket, single thread */
+            i += 12;
+            continue;
+        }
+        i++; /* resync byte by byte */
+    }
+    memmove(rxbuf, rxbuf + i, rxlen - i);
+    rxlen -= i;
+}
+
 int main(int argc, char **argv)
 {
     struct addrinfo hints, *res;
@@ -108,6 +161,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "skip unreadable %s\n", argv[f]);
             continue;
         }
+        drain_hub(sock, camid); /* answer clock probes each frame */
         clock_gettime(CLOCK_MONOTONIC, &ts);
         t = ts.tv_sec + 1e-9 * ts.tv_nsec;
         hdr[0] = 'M'; hdr[1] = 'V'; hdr[2] = 'F'; hdr[3] = 'R';

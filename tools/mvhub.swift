@@ -54,7 +54,14 @@ func speak(_ text: String) {
 }
 
 // ---- TCP client (BSD sockets), with retry while the hub binds ----
+// One lock serializes every message onto the socket: frames go out on
+// the capture queue while clock-sync replies (MVTS, in readAcks) go
+// out on the main-thread timer, and interleaved partial send()s would
+// tear a frame mid-stream.
+let sendLock = NSLock()
 func sendAll(_ s: Int32, _ data: [UInt8]) -> Bool {
+    sendLock.lock()
+    defer { sendLock.unlock() }
     var off = 0
     while off < data.count {
         let n = data.withUnsafeBytes { p -> Int in
@@ -73,21 +80,37 @@ func sendLog(_ s: Int32, _ id: UInt32, _ text: String) {
     le32(id); le32(UInt32(body.count)); m.append(contentsOf: body)
     _ = sendAll(s, m)
 }
+// MVAK acks + MVPB clock-sync probes; probes are answered with
+// "MVTS" | u32 camid | f64 t_hub_echo | f64 t_cam.  Messages can
+// arrive split at any byte boundary, so g.rxPending carries the
+// partial tail between timer ticks (see stream_cam.swift).
 func readAcks(_ g: Grabber, _ s: Int32) {
     var buf = [UInt8](repeating: 0, count: 4096)
     let n = buf.withUnsafeMutableBytes { recv(s, $0.baseAddress, 4096, MSG_DONTWAIT) }
-    if n < 12 { return }
+    if n > 0 { g.rxPending.append(contentsOf: buf[0..<n]) }
+    let bytes = g.rxPending
     var i = 0
-    while i + 12 <= n {
-        if buf[i]==0x4D && buf[i+1]==0x56 && buf[i+2]==0x41 && buf[i+3]==0x4B {
+    while i + 12 <= bytes.count {
+        if bytes[i]==0x4D && bytes[i+1]==0x56 && bytes[i+2]==0x41 && bytes[i+3]==0x4B {
             func u32(_ o: Int) -> UInt32 {
-                UInt32(buf[i+o]) | (UInt32(buf[i+o+1])<<8)
-                | (UInt32(buf[i+o+2])<<16) | (UInt32(buf[i+o+3])<<24) }
+                UInt32(bytes[i+o]) | (UInt32(bytes[i+o+1])<<8)
+                | (UInt32(bytes[i+o+2])<<16) | (UInt32(bytes[i+o+3])<<24) }
             g.hubRx = u32(4); g.hubDecoded = u32(8)
             g.lastAck = ProcessInfo.processInfo.systemUptime
             i += 12
+        } else if bytes[i]==0x4D && bytes[i+1]==0x56 && bytes[i+2]==0x50 && bytes[i+3]==0x42 {
+            // echo t_hub_send bit-exactly (raw bytes), stamp t_cam now
+            var reply: [UInt8] = [0x4D, 0x56, 0x54, 0x53] // "MVTS"
+            var v = camid
+            for _ in 0..<4 { reply.append(UInt8(v & 255)); v >>= 8 }
+            reply.append(contentsOf: bytes[(i+4)..<(i+12)])
+            var t = ProcessInfo.processInfo.systemUptime.bitPattern
+            for _ in 0..<8 { reply.append(UInt8(t & 255)); t >>= 8 }
+            _ = sendAll(s, reply)
+            i += 12
         } else { i += 1 }
     }
+    g.rxPending.removeFirst(i) // keep the (< 12 byte) partial tail
 }
 func connectLocal(_ port: UInt16) -> Int32 {
     var addr = sockaddr_in()
@@ -124,6 +147,7 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var hubRx: UInt32 = 0
     var hubDecoded: UInt32 = 0
     var lastAck = 0.0
+    var rxPending: [UInt8] = [] // partial hub message carry (readAcks)
     let minGap: Double, sock: Int32
     init(minGap: Double, sock: Int32) { self.minGap = minGap; self.sock = sock }
     func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer,

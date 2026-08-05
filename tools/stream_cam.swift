@@ -58,7 +58,14 @@ func connectHub(_ host: String, _ port: UInt16) -> Int32 {
                socklen_t(MemoryLayout<Int32>.size))
     return s
 }
+// One lock serializes every message onto the socket: frames go out on
+// the capture queue while clock-sync replies (MVTS, below) go out on
+// the main-thread timer, and interleaved partial send()s would tear a
+// frame mid-stream (the hub resyncs on magic, but the frame is lost).
+let sendLock = NSLock()
 func sendAll(_ s: Int32, _ data: [UInt8]) -> Bool {
+    sendLock.lock()
+    defer { sendLock.unlock() }
     var off = 0
     while off < data.count {
         let n = data.withUnsafeBytes { p -> Int in
@@ -98,23 +105,44 @@ guard sock >= 0 else {
 }
 print("connected to \(host):\(port) as camera \(camid), \(fps) fps")
 
-// read hub ACKs (MVAK | rx | decoded) so the sender knows the hub is
-// really receiving, not just that TCP accepted the bytes
+// read hub messages from the socket: MVAK acks (rx | decoded, so the
+// sender knows the hub is really receiving, not just that TCP accepted
+// the bytes) and MVPB clock-sync probes ("MVPB" | f64 t_hub_send),
+// answered immediately with "MVTS" | u32 camid | f64 t_hub_echo | f64
+// t_cam.  Both hub->camera messages are 12 bytes but can arrive SPLIT
+// at any byte boundary, so a persistent carry buffer (g.rxPending)
+// holds the partial tail between timer ticks; unrecognized bytes are
+// skipped one at a time (resync on the next magic).
 func readAcks(_ g: Grabber) {
     var buf = [UInt8](repeating: 0, count: 4096)
     let n = buf.withUnsafeMutableBytes { recv(sock, $0.baseAddress, 4096, MSG_DONTWAIT) }
-    if n < 12 { return }
+    if n > 0 { g.rxPending.append(contentsOf: buf[0..<n]) }
+    let bytes = g.rxPending
     var i = 0
-    while i + 12 <= n {
-        if buf[i] == 0x4D && buf[i+1] == 0x56 && buf[i+2] == 0x41 && buf[i+3] == 0x4B {
+    while i + 12 <= bytes.count {
+        if bytes[i] == 0x4D && bytes[i+1] == 0x56 && bytes[i+2] == 0x41 && bytes[i+3] == 0x4B {
             func u32(_ o: Int) -> UInt32 {
-                UInt32(buf[i+o]) | (UInt32(buf[i+o+1])<<8)
-                | (UInt32(buf[i+o+2])<<16) | (UInt32(buf[i+o+3])<<24) }
+                UInt32(bytes[i+o]) | (UInt32(bytes[i+o+1])<<8)
+                | (UInt32(bytes[i+o+2])<<16) | (UInt32(bytes[i+o+3])<<24) }
             g.hubRx = u32(4); g.hubDecoded = u32(8)
             g.lastAck = ProcessInfo.processInfo.systemUptime
             i += 12
+        } else if bytes[i] == 0x4D && bytes[i+1] == 0x56 && bytes[i+2] == 0x50 && bytes[i+3] == 0x42 {
+            // MVPB: echo t_hub_send BIT-EXACTLY (raw byte copy, never
+            // through a Double) and stamp t_cam at reply time; the
+            // hub midpoints the probe, so reply latency only widens
+            // RTT a little while a corrupted echo would poison the fit
+            var reply: [UInt8] = [0x4D, 0x56, 0x54, 0x53] // "MVTS"
+            var v = camid
+            for _ in 0..<4 { reply.append(UInt8(v & 255)); v >>= 8 }
+            reply.append(contentsOf: bytes[(i+4)..<(i+12)])
+            var t = ProcessInfo.processInfo.systemUptime.bitPattern
+            for _ in 0..<8 { reply.append(UInt8(t & 255)); t >>= 8 }
+            _ = sendAll(sock, reply)
+            i += 12
         } else { i += 1 }
     }
+    g.rxPending.removeFirst(i) // keep the (< 12 byte) partial tail
 }
 
 // ---- capture ----
@@ -126,6 +154,7 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var hubRx: UInt32 = 0        // frames the hub says it received
     var hubDecoded: UInt32 = 0
     var lastAck = 0.0           // uptime of last ACK from the hub
+    var rxPending: [UInt8] = [] // partial hub message carry (readAcks)
     var sendOK = true
     let minGap: Double
     let camid: UInt32

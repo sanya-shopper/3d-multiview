@@ -25,6 +25,12 @@ struct offs {
     double t[4][128]; /* template value per phase */
 };
 
+/* Frames at or above this pixel count take the downscale-first ladder
+ * (decode on a half-resolution working image, then re-localize corners
+ * at full resolution): detection cost scales with pixels, and full-HD
+ * frames put the validated ~20 px cell regime at half resolution. */
+#define BIGFRAME_PX 1500000L
+
 static void build_offsets(struct offs *o)
 {
     const double ph[4] = { 0.0, 0.3927, 0.7854, 1.1781 };
@@ -51,37 +57,74 @@ struct cand {
     int used;
 };
 
-static int detect_saddles(struct cand *cd, const unsigned char *img,
-                          int w, int h, double relthr)
+static const struct offs *offsets(void)
 {
     static struct offs o;
     static int o_init = 0;
-    float *R = (float *)calloc((size_t)w * h, sizeof(float));
-    double rmax = 0.0;
-    int x, y, k, p, n = 0;
-
-    if (!R)
-        return 0;
     if (!o_init) {
         build_offsets(&o);
         o_init = 1;
     }
-    for (y = SADR + 1; y < h - SADR - 1; y++)
-        for (x = SADR + 1; x < w - SADR - 1; x++) {
-            double best = 0.0;
-            for (p = 0; p < 4; p++) {
-                double s = 0.0;
-                for (k = 0; k < o.n; k++)
-                    s += o.t[p][k]
-                       * img[(y + o.dy[k]) * w + (x + o.dx[k])];
-                if (fabs(s) > best)
-                    best = fabs(s);
+    return &o;
+}
+
+static int detect_saddles(struct cand *cd, const unsigned char *img,
+                          int w, int h, double relthr)
+{
+    const struct offs *o = offsets();
+    float *R;
+    short *acc; /* four phase-accumulator rows */
+    double rmax = 0.0;
+    int x, y, k, p, n = 0;
+
+    if (w < 2 * SADR + 4 || h < 2 * SADR + 4)
+        return 0;
+    R = (float *)calloc((size_t)w * h, sizeof(float));
+    acc = (short *)malloc(4 * (size_t)w * sizeof(short));
+    if (!R || !acc) {
+        free(R);
+        free(acc);
+        return 0;
+    }
+    /* Response pass, restructured for throughput: accumulate each
+     * template tap across a whole output row (contiguous loads the
+     * compiler vectorizes) instead of gathering all taps per pixel.
+     * Every sum is an exact integer with |s| <= o->n * 255 < 32767,
+     * so int16 accumulation reproduces the per-pixel double formula
+     * bit for bit -- detection behavior is unchanged. */
+    for (y = SADR + 1; y < h - SADR - 1; y++) {
+        const int x0 = SADR + 1, x1 = w - SADR - 1;
+        memset(acc, 0, 4 * (size_t)w * sizeof(short));
+        for (p = 0; p < 4; p++) {
+            short *ap = acc + (size_t)p * w;
+            for (k = 0; k < o->n; k++) {
+                const unsigned char *src =
+                    img + (size_t)(y + o->dy[k]) * w + o->dx[k];
+                if (o->t[p][k] > 0.0) {
+                    for (x = x0; x < x1; x++)
+                        ap[x] = (short)(ap[x] + src[x]);
+                } else if (o->t[p][k] < 0.0) {
+                    for (x = x0; x < x1; x++)
+                        ap[x] = (short)(ap[x] - src[x]);
+                }
             }
-            best /= o.n;
-            R[y * w + x] = (float)best;
-            if (best > rmax)
-                rmax = best;
         }
+        for (x = SADR + 1; x < w - SADR - 1; x++) {
+            int best = 0;
+            double b;
+            for (p = 0; p < 4; p++) {
+                int s = acc[(size_t)p * w + x];
+                if (s < 0)
+                    s = -s;
+                if (s > best)
+                    best = s;
+            }
+            b = (double)best / o->n;
+            R[(size_t)y * w + x] = (float)b;
+            if (b > rmax)
+                rmax = b;
+        }
+    }
 
     /* NMS + threshold + sub-pixel; if the pool fills, keep strongest */
     for (y = SADR + 2; y < h - SADR - 2; y++)
@@ -136,8 +179,194 @@ static int detect_saddles(struct cand *cd, const unsigned char *img,
                 }
             }
         }
+    free(acc);
     free(R);
     return n;
+}
+
+/* Gradient-orthogonality sub-pixel corner solve (Foerstner / the
+ * cornerSubPix normal equations): at a checkerboard corner q the image
+ * gradient g(p) at every window pixel p lies on an edge through q or
+ * is ~zero, so g(p) . (p - q) = 0; q solves the weighted least-squares
+ * system (sum w g g^T) q = sum w g g^T p.  Iterates with window
+ * recentering; returns 0 (leaving q untouched) when the window leaves
+ * the image, the normal matrix degenerates, or the solution runs away
+ * (> 2 px from the start -- then the initial estimate was not on a
+ * corner and must be kept). */
+#define FSR 5  /* half-window, px; < half a cell so the fine tier's
+                * center dots stay outside the window */
+#define FPAD 3 /* patch margin: gradient (1) + two blur passes (2) */
+#define FPW (2 * (FSR + FPAD) + 1)
+
+static int foerstner_step(const unsigned char *img, int w, int h,
+                          double *u, double *v)
+{
+    static double wtab[2 * FSR + 1][2 * FSR + 1];
+    static int wtab_init = 0;
+    double qu = *u, qv = *v;
+    int it, i, j;
+
+    if (!wtab_init) {
+        const double sig = 0.5 * FSR;
+        for (j = -FSR; j <= FSR; j++)
+            for (i = -FSR; i <= FSR; i++)
+                wtab[j + FSR][i + FSR] =
+                    exp(-(i * i + j * j) / (2.0 * sig * sig));
+        wtab_init = 1;
+    }
+    for (it = 0; it < 8; it++) {
+        int cx = (int)floor(qu + 0.5), cy = (int)floor(qv + 0.5);
+        double P[FPW][FPW], Q[FPW][FPW];
+        double A0 = 0.0, A1 = 0.0, A3 = 0.0, b0 = 0.0, b1 = 0.0;
+        double det, nu, nv, du, dv;
+        if (cx - FSR - FPAD < 0 || cy - FSR - FPAD < 0
+            || cx + FSR + FPAD >= w || cy + FSR + FPAD >= h)
+            return 0;
+        /* Smooth the patch (two separable [1 2 1]/4 passes) before
+         * taking gradients: sampled/rendered edges are nearly hard
+         * steps whose sub-pixel position lives in a single transition
+         * pixel, and smoothing spreads it into gradients the normal
+         * equations can use.  The kernel is symmetric, so the solve
+         * stays unbiased. */
+        for (j = 0; j < FPW; j++)
+            for (i = 0; i < FPW; i++)
+                P[j][i] = img[(size_t)(cy - FSR - FPAD + j) * w
+                              + cx - FSR - FPAD + i];
+        for (j = 0; j < 2; j++) {
+            int a, b;
+            for (a = 0; a < FPW; a++)
+                for (b = 1; b < FPW - 1; b++)
+                    Q[a][b] = 0.25 * P[a][b - 1] + 0.5 * P[a][b]
+                              + 0.25 * P[a][b + 1];
+            for (b = 1; b < FPW - 1; b++)
+                for (a = 1; a < FPW - 1; a++)
+                    P[a][b] = 0.25 * Q[a - 1][b] + 0.5 * Q[a][b]
+                              + 0.25 * Q[a + 1][b];
+        }
+        for (j = -FSR; j <= FSR; j++)
+            for (i = -FSR; i <= FSR; i++) {
+                int pi = i + FSR + FPAD, pj = j + FSR + FPAD;
+                double gx = 0.5 * (P[pj][pi + 1] - P[pj][pi - 1]);
+                double gy = 0.5 * (P[pj + 1][pi] - P[pj - 1][pi]);
+                double wt = wtab[j + FSR][i + FSR];
+                double gxx = wt * gx * gx, gxy = wt * gx * gy;
+                double gyy = wt * gy * gy;
+                A0 += gxx;
+                A1 += gxy;
+                A3 += gyy;
+                b0 += gxx * (cx + i) + gxy * (cy + j);
+                b1 += gxy * (cx + i) + gyy * (cy + j);
+            }
+        det = A0 * A3 - A1 * A1;
+        if (!(det > 1e-6))
+            return 0;
+        nu = (A3 * b0 - A1 * b1) / det;
+        nv = (A0 * b1 - A1 * b0) / det;
+        du = nu - qu;
+        dv = nv - qv;
+        qu = nu;
+        qv = nv;
+        if (du * du + dv * dv < 1e-6)
+            break;
+    }
+    if ((qu - *u) * (qu - *u) + (qv - *v) * (qv - *v) > 4.0)
+        return 0;
+    *u = qu;
+    *v = qv;
+    return 1;
+}
+
+/* Re-localize one corner at full resolution after a decode on a
+ * downscaled working image: evaluate the same saddle response on a
+ * small pixel grid around the scaled-up estimate, snap to the peak
+ * (with the detector's quadratic sub-pixel step), then polish with the
+ * gradient-orthogonality solve above.  The estimate error after a
+ * 2x/4x downscale is ~1 px, well inside the search radius and far from
+ * the >= 15 px saddle spacing, so the peak is the same physical
+ * corner.  Leaves the estimate untouched when the window would cross
+ * the image border. */
+#define RFR 3 /* search radius, px */
+
+static void refine_saddle(const unsigned char *img, int w, int h,
+                          double *u, double *v)
+{
+    const struct offs *o = offsets();
+    double Rw[2 * RFR + 3][2 * RFR + 3];
+    int cx = (int)floor(*u + 0.5), cy = (int)floor(*v + 0.5);
+    int i, j, k, p, bi = 0, bj = 0;
+    double bbest = -1.0, dxs, dys, den, r0;
+
+    if (cx - RFR - 1 - SADR < 0 || cy - RFR - 1 - SADR < 0
+        || cx + RFR + 1 + SADR >= w || cy + RFR + 1 + SADR >= h)
+        return;
+    for (j = -RFR - 1; j <= RFR + 1; j++)
+        for (i = -RFR - 1; i <= RFR + 1; i++) {
+            const unsigned char *c0 = img + (size_t)(cy + j) * w + cx + i;
+            int best = 0;
+            for (p = 0; p < 4; p++) {
+                int s = 0;
+                for (k = 0; k < o->n; k++) {
+                    int g = c0[o->dy[k] * w + o->dx[k]];
+                    if (o->t[p][k] > 0.0)
+                        s += g;
+                    else if (o->t[p][k] < 0.0)
+                        s -= g;
+                }
+                if (s < 0)
+                    s = -s;
+                if (s > best)
+                    best = s;
+            }
+            Rw[j + RFR + 1][i + RFR + 1] = (double)best / o->n;
+        }
+    for (j = -RFR; j <= RFR; j++)
+        for (i = -RFR; i <= RFR; i++)
+            if (Rw[j + RFR + 1][i + RFR + 1] > bbest) {
+                bbest = Rw[j + RFR + 1][i + RFR + 1];
+                bi = i;
+                bj = j;
+            }
+    r0 = Rw[bj + RFR + 1][bi + RFR + 1];
+    den = Rw[bj + RFR + 1][bi + RFR] - 2.0 * r0
+          + Rw[bj + RFR + 1][bi + RFR + 2];
+    dxs = (den < 0.0)
+          ? 0.5 * (Rw[bj + RFR + 1][bi + RFR]
+                   - Rw[bj + RFR + 1][bi + RFR + 2]) / den : 0.0;
+    den = Rw[bj + RFR][bi + RFR + 1] - 2.0 * r0
+          + Rw[bj + RFR + 2][bi + RFR + 1];
+    dys = (den < 0.0)
+          ? 0.5 * (Rw[bj + RFR][bi + RFR + 1]
+                   - Rw[bj + RFR + 2][bi + RFR + 1]) / den : 0.0;
+    if (fabs(dxs) > 1.0)
+        dxs = 0.0;
+    if (fabs(dys) > 1.0)
+        dys = 0.0;
+    *u = cx + bi + dxs;
+    *v = cy + bj + dys;
+    foerstner_step(img, w, h, u, v);
+}
+
+/* Image-pixel size of one pattern cell at the pattern center under H
+ * (the smaller of the two axis steps): the gate for the sub-pixel
+ * polish, whose FSR window must stay inside a half cell. */
+static double cell_size_px(const double H[9], double cx, double cy,
+                           double cell)
+{
+    double W0 = H[6] * cx + H[7] * cy + H[8];
+    double Wx = H[6] * (cx + cell) + H[7] * cy + H[8];
+    double Wy = H[6] * cx + H[7] * (cy + cell) + H[8];
+    double u0, v0, ux, vx, uy, vy, dx, dy;
+    if (fabs(W0) < 1e-12 || fabs(Wx) < 1e-12 || fabs(Wy) < 1e-12)
+        return 0.0;
+    u0 = (H[0] * cx + H[1] * cy + H[2]) / W0;
+    v0 = (H[3] * cx + H[4] * cy + H[5]) / W0;
+    ux = (H[0] * (cx + cell) + H[1] * cy + H[2]) / Wx;
+    vx = (H[3] * (cx + cell) + H[4] * cy + H[5]) / Wx;
+    uy = (H[0] * cx + H[1] * (cy + cell) + H[2]) / Wy;
+    vy = (H[3] * cx + H[4] * (cy + cell) + H[5]) / Wy;
+    dx = sqrt((ux - u0) * (ux - u0) + (vx - v0) * (vx - v0));
+    dy = sqrt((uy - u0) * (uy - u0) + (vy - v0) * (vy - v0));
+    return dx < dy ? dx : dy;
 }
 
 /* ---------------- grid growth ---------------------------------------- */
@@ -336,10 +565,152 @@ static double med4(double a, double b, double c, double d)
     return 0.5 * (v[1] + v[2]);
 }
 
+/* ---------------- edge-intersection corner polish --------------------- */
+
+static void proj_H(const double H[9], double X, double Y, double *u,
+                   double *v); /* defined with the display-outline code */
+
+/* Collect sub-pixel edge crossings along the checker edge through
+ * pattern point (X0,Y0) in pattern direction (ex,ey), both ways, at
+ * arc offsets lo..hi pattern px from the corner: at each spot, sample
+ * the image profile perpendicular to the projected edge and take the
+ * mid-level crossing nearest the prediction by linear interpolation.
+ * Writes up to maxp (u,v) points; returns the count. */
+static int edge_crossings(const unsigned char *img, int w, int h,
+                          const double H[9], double X0, double Y0,
+                          double ex, double ey, double lo, double hi,
+                          double *pts, int maxp)
+{
+    int side, k, np = 0;
+
+    for (side = 0; side < 2; side++) {
+        double sgn = side ? -1.0 : 1.0;
+        for (k = 0; k < 8 && np < maxp; k++) {
+            double s = sgn * (lo + (hi - lo) * k / 7.0);
+            double uc, vc, u1, v1, tx, ty, tn, px, py;
+            double g[13], gmin = 255.0, gmax = 0.0, mid;
+            double bestd = 1e18, rstar = 0.0;
+            int m, bad = 0, found = 0;
+            proj_H(H, X0 + s * ex, Y0 + s * ey, &uc, &vc);
+            proj_H(H, X0 + (s + 1.0) * ex, Y0 + (s + 1.0) * ey,
+                   &u1, &v1);
+            tx = u1 - uc;
+            ty = v1 - vc;
+            tn = sqrt(tx * tx + ty * ty);
+            if (tn < 1e-9)
+                continue;
+            px = -ty / tn;
+            py = tx / tn;
+            for (m = 0; m < 13 && !bad; m++) {
+                double r = -2.4 + 0.4 * m;
+                g[m] = bilin(img, w, h, uc + r * px, vc + r * py);
+                if (g[m] < 0.0)
+                    bad = 1;
+                else {
+                    if (g[m] < gmin)
+                        gmin = g[m];
+                    if (g[m] > gmax)
+                        gmax = g[m];
+                }
+            }
+            if (bad || gmax - gmin < 25.0)
+                continue;
+            mid = 0.5 * (gmin + gmax);
+            for (m = 0; m < 12; m++) {
+                double a = g[m] - mid, b = g[m + 1] - mid;
+                double f, r, d;
+                if (a == 0.0 && b == 0.0)
+                    continue;
+                if ((a <= 0.0 && b >= 0.0) || (a >= 0.0 && b <= 0.0)) {
+                    f = a / (a - b);
+                    r = -2.4 + 0.4 * (m + f);
+                    d = fabs(r);
+                    if (d < bestd) {
+                        bestd = d;
+                        rstar = r;
+                        found = 1;
+                    }
+                }
+            }
+            if (!found)
+                continue;
+            pts[2 * np] = uc + rstar * px;
+            pts[2 * np + 1] = vc + rstar * py;
+            np++;
+        }
+    }
+    return np;
+}
+
+/* Total-least-squares line through a point scatter: centroid plus the
+ * principal direction. */
+static int fit_line(const double *pts, int n, double c[2], double d[2])
+{
+    double mx = 0.0, my = 0.0, sxx = 0.0, sxy = 0.0, syy = 0.0, ang;
+    int k;
+    if (n < 8)
+        return MV_ERR;
+    for (k = 0; k < n; k++) {
+        mx += pts[2 * k];
+        my += pts[2 * k + 1];
+    }
+    mx /= n;
+    my /= n;
+    for (k = 0; k < n; k++) {
+        double dx = pts[2 * k] - mx, dy = pts[2 * k + 1] - my;
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+    }
+    ang = 0.5 * atan2(2.0 * sxy, sxx - syy);
+    c[0] = mx;
+    c[1] = my;
+    d[0] = cos(ang);
+    d[1] = sin(ang);
+    return MV_OK;
+}
+
+/* Refine one corner as the intersection of its two fitted edge lines.
+ * Checker edges are exactly straight under a homography, so ~30
+ * crossings per edge average the per-pixel sampling quantization far
+ * below what any local window can reach.  Rejects (keeping *u,*v)
+ * when either edge collects too few crossings, the lines are near
+ * parallel, or the intersection runs away from the start (> 2.5 px:
+ * then the corner was not where H says and the local estimate is the
+ * safer answer). */
+static int refine_corner_edges(const unsigned char *img, int w, int h,
+                               const double H[9], double X0, double Y0,
+                               double cell, double *u, double *v)
+{
+    double p1[2 * 16], p2[2 * 16];
+    double c1[2], d1[2], c2[2], d2[2];
+    double lo = 0.12 * cell, hi = 0.78 * cell;
+    double det, a, iu, iv;
+    int n1, n2;
+
+    n1 = edge_crossings(img, w, h, H, X0, Y0, 1.0, 0.0, lo, hi, p1, 16);
+    n2 = edge_crossings(img, w, h, H, X0, Y0, 0.0, 1.0, lo, hi, p2, 16);
+    if (fit_line(p1, n1, c1, d1) != MV_OK
+        || fit_line(p2, n2, c2, d2) != MV_OK)
+        return MV_ERR;
+    det = d1[0] * (-d2[1]) - (-d2[0]) * d1[1];
+    if (fabs(det) < 0.34) /* < ~20 degrees apart */
+        return MV_ERR;
+    a = ((c2[0] - c1[0]) * (-d2[1]) - (-d2[0]) * (c2[1] - c1[1])) / det;
+    iu = c1[0] + a * d1[0];
+    iv = c1[1] + a * d1[1];
+    if ((iu - *u) * (iu - *u) + (iv - *v) * (iv - *v) > 6.25)
+        return MV_ERR;
+    *u = iu;
+    *v = iv;
+    return MV_OK;
+}
+
 /* ---------------- main entry ------------------------------------------ */
 
-int mv_read_pattern(mv_read_result *res, const unsigned char *img,
-                    int w, int h)
+static int read_pattern_once(mv_read_result *res, const unsigned char *img,
+                             int w, int h, int allow_down2,
+                             int *used_down2)
 {
     static struct cand cd[MAXCAND];
     static struct lattice L;
@@ -350,16 +721,31 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
 
     /* escalation ladder: threshold x scale; small-in-frame patterns
      * (cells ~10 px) need the 2x upsample to re-enter the validated
-     * ~20 px regime */
-    static const double RELTHR[4] = { 0.55, 0.30, 0.55, 0.30 };
-    static const int SCALE[4] = { 1, 1, 2, 2 };
-    unsigned char *up = NULL;
+     * ~20 px regime; big frames (full HD) get two half-resolution
+     * rungs FIRST -- the common in-range decode then costs a quarter
+     * of the detection work, and corners are re-localized at full
+     * resolution afterwards so no precision is lost */
+    enum { WM_FULL, WM_UP2, WM_DOWN2 };
+    double relthr[6];
+    int wmode[6], npass = 0;
+    unsigned char *up = NULL, *dn = NULL;
     const unsigned char *im;
-    int iw, ih, scale = 1;
+    int iw, ih, wm = WM_FULL;
     int pass, decoded = 0;
     int best_m = -1, best_u = 0, best_v = 0;
 
     memset(res, 0, sizeof(*res));
+    if (used_down2)
+        *used_down2 = 0;
+
+    if (allow_down2 && (long)w * h >= BIGFRAME_PX) {
+        wmode[npass] = WM_DOWN2; relthr[npass++] = 0.55;
+        wmode[npass] = WM_DOWN2; relthr[npass++] = 0.30;
+    }
+    wmode[npass] = WM_FULL; relthr[npass++] = 0.55;
+    wmode[npass] = WM_FULL; relthr[npass++] = 0.30;
+    wmode[npass] = WM_UP2;  relthr[npass++] = 0.55;
+    wmode[npass] = WM_UP2;  relthr[npass++] = 0.30;
 
     /* Detection-threshold escalation: the strict threshold suppresses
      * dot L-corners when the pattern is large in frame (the sim regime);
@@ -367,14 +753,35 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
      * polarities below it, leaving only the 45-degree sublattice -- so
      * on decode failure retry with the permissive threshold (tiny dots
      * cannot produce significant L-corner clutter). */
-    for (pass = 0; pass < 4 && !decoded; pass++) {
+    for (pass = 0; pass < npass && !decoded; pass++) {
     memset(bit, -1, sizeof(bit));
 
-    scale = SCALE[pass];
-    if (scale == 1) {
+    wm = wmode[pass];
+    if (wm == WM_FULL) {
         im = img;
         iw = w;
         ih = h;
+    } else if (wm == WM_DOWN2) {
+        int dw = w / 2, dh = h / 2;
+        if (!dn) {
+            int x2, y2;
+            dn = (unsigned char *)malloc((size_t)dw * dh);
+            if (!dn)
+                break;
+            /* 2x2 box mean, truncating, matching the coarse tier's
+             * downsample convention (full-res center of downsampled
+             * pixel x is 2x + 0.5) */
+            for (y2 = 0; y2 < dh; y2++)
+                for (x2 = 0; x2 < dw; x2++) {
+                    const unsigned char *q = img + (size_t)2 * y2 * w
+                                             + 2 * x2;
+                    dn[(size_t)y2 * dw + x2] = (unsigned char)
+                        ((q[0] + q[1] + q[w] + q[w + 1]) / 4);
+                }
+        }
+        im = dn;
+        iw = dw;
+        ih = dh;
     } else {
         if (!up) {
             int x2, y2;
@@ -400,9 +807,9 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
         iw = 2 * w;
         ih = 2 * h;
     }
-    ncand = detect_saddles(cd, im, iw, ih, RELTHR[pass]);
-    RDBG("reader: pass %d (scale %d) candidates %d\n", pass, scale,
-         ncand);
+    ncand = detect_saddles(cd, im, iw, ih, relthr[pass]);
+    RDBG("reader: pass %d (mode %d, %dx%d) candidates %d\n", pass, wm,
+         iw, ih, ncand);
     if (ncand < 12)
         continue;
     ngrid = grow_grid(&L, cd, ncand);
@@ -709,9 +1116,13 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
     }
     } /* escalation loop */
     free(up);
+    free(dn);
     up = NULL;
+    dn = NULL;
     if (!decoded)
         return MV_ERR;
+    if (used_down2 && wm == WM_DOWN2)
+        *used_down2 = 1;
     {
 
         /* --- corners: map each lattice corner via its 4 squares --- */
@@ -743,9 +1154,18 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
                     || pj_min < 0 || pj_min >= MV_PAT_CORNER_ROWS)
                     continue;
                 if (res->n < MV_READ_MAXC) {
+                    double uu = L.p[i][j][0], vv = L.p[i][j][1];
+                    if (wm == WM_UP2) {
+                        uu *= 0.5;
+                        vv *= 0.5;
+                    } else if (wm == WM_DOWN2) {
+                        uu = 2.0 * uu + 0.5;
+                        vv = 2.0 * vv + 0.5;
+                        refine_saddle(img, w, h, &uu, &vv);
+                    }
                     res->id[res->n] = pj_min * MV_PAT_CORNER_COLS + pi_min;
-                    res->uv[2 * res->n] = L.p[i][j][0] / scale;
-                    res->uv[2 * res->n + 1] = L.p[i][j][1] / scale;
+                    res->uv[2 * res->n] = uu;
+                    res->uv[2 * res->n + 1] = vv;
                     res->n++;
                 }
             }
@@ -766,6 +1186,126 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
         }
         if (mv_homography_dlt(res->H, obj, res->uv, res->n) != MV_OK)
             return MV_ERR;
+        /* residual gate: lattice growth can capture auxiliary screen
+         * elements (version block, nested reference grid) whose
+         * lattice positions map into valid corner ids; a corner far
+         * from the consensus homography is such a capture error, not
+         * noise.  Two rounds: a wide gate first so catastrophic
+         * outliers stop skewing the fit, then a tight one. */
+        {
+            static const double GATE[2] = { 20.0, 3.0 };
+            int round, k;
+            for (round = 0; round < 2; round++) {
+                int nk = 0;
+                for (k = 0; k < res->n; k++) {
+                    double pu, pv, du, dv;
+                    proj_H(res->H, obj[2 * k], obj[2 * k + 1], &pu,
+                           &pv);
+                    du = res->uv[2 * k] - pu;
+                    dv = res->uv[2 * k + 1] - pv;
+                    if (du * du + dv * dv
+                        <= GATE[round] * GATE[round]) {
+                        res->id[nk] = res->id[k];
+                        res->uv[2 * nk] = res->uv[2 * k];
+                        res->uv[2 * nk + 1] = res->uv[2 * k + 1];
+                        obj[2 * nk] = obj[2 * k];
+                        obj[2 * nk + 1] = obj[2 * k + 1];
+                        nk++;
+                    }
+                }
+                if (nk == res->n)
+                    continue;
+                RDBG("reader: residual gate %.0f px dropped %d of %d\n",
+                     GATE[round], res->n - nk, res->n);
+                res->n = nk;
+                if (res->n < 8)
+                    return MV_ERR;
+                if (mv_homography_dlt(res->H, obj, res->uv, res->n)
+                    != MV_OK)
+                    return MV_ERR;
+            }
+        }
+        /* sub-pixel polish at full resolution: when the cells are big
+         * enough that a corner's polish window sees only its own two
+         * edges (>= 14 px keeps the M-array dots clear), refine every
+         * corner by edge-line intersection (gradient-orthogonality
+         * fallback) and refit.  Cuts corner error from the detector's
+         * ~0.35 px quadratic-peak floor to well under 0.1 px;
+         * tiny-cell (upsampled) decodes keep the detector estimate. */
+        if (cell_size_px(res->H,
+                         MV_PAT_GRID_X0
+                         + 0.5 * MV_PAT_GRID_COLS * MV_PAT_CELL,
+                         MV_PAT_GRID_Y0
+                         + 0.5 * MV_PAT_GRID_ROWS * MV_PAT_CELL,
+                         MV_PAT_CELL) >= 14.0) {
+            int moved = 0;
+            for (i = 0; i < res->n; i++) {
+                if (refine_corner_edges(img, w, h, res->H, obj[2 * i],
+                                        obj[2 * i + 1], MV_PAT_CELL,
+                                        &res->uv[2 * i],
+                                        &res->uv[2 * i + 1]) == MV_OK)
+                    moved++;
+                else
+                    moved += foerstner_step(img, w, h, &res->uv[2 * i],
+                                            &res->uv[2 * i + 1]);
+            }
+            if (moved
+                && mv_homography_dlt(res->H, obj, res->uv, res->n)
+                   != MV_OK)
+                return MV_ERR;
+            /* corner recovery: ids the lattice never reached (blur or
+             * noise broke a saddle at working resolution) now have a
+             * predicted position under H; measure each candidate with
+             * the edge-line intersection ALONE (no gradient fallback:
+             * recovery demands the strong evidence) and accept only if
+             * it lands within 1 px of the prediction.  Occluded and
+             * out-of-frame corners fail the crossing checks and stay
+             * absent. */
+            {
+                static char have[MV_PAT_CORNER_COLS
+                                 * MV_PAT_CORNER_ROWS];
+                int k, added = 0;
+                memset(have, 0, sizeof(have));
+                for (k = 0; k < res->n; k++)
+                    have[res->id[k]] = 1;
+                for (k = 0;
+                     k < MV_PAT_CORNER_COLS * MV_PAT_CORNER_ROWS
+                     && res->n < MV_READ_MAXC; k++) {
+                    double xy[2], pu, pv, ru, rv, du, dv;
+                    if (have[k])
+                        continue;
+                    mv_pattern_corner_px(k % MV_PAT_CORNER_COLS,
+                                         k / MV_PAT_CORNER_COLS, xy);
+                    proj_H(res->H, xy[0], xy[1], &pu, &pv);
+                    if (pu < 8.0 || pv < 8.0 || pu >= w - 8.0
+                        || pv >= h - 8.0)
+                        continue;
+                    ru = pu;
+                    rv = pv;
+                    if (refine_corner_edges(img, w, h, res->H, xy[0],
+                                            xy[1], MV_PAT_CELL, &ru,
+                                            &rv) != MV_OK)
+                        continue;
+                    du = ru - pu;
+                    dv = rv - pv;
+                    if (du * du + dv * dv > 1.0)
+                        continue;
+                    res->id[res->n] = k;
+                    res->uv[2 * res->n] = ru;
+                    res->uv[2 * res->n + 1] = rv;
+                    obj[2 * res->n] = xy[0];
+                    obj[2 * res->n + 1] = xy[1];
+                    res->n++;
+                    added++;
+                }
+                if (added) {
+                    RDBG("reader: recovered %d corners via H\n", added);
+                    if (mv_homography_dlt(res->H, obj, res->uv, res->n)
+                        != MV_OK)
+                        return MV_ERR;
+                }
+            }
+        }
     }
 
     /* --- counter strip --- */
@@ -818,6 +1358,40 @@ int mv_read_pattern(mv_read_result *res, const unsigned char *img,
     return MV_OK;
 }
 
+int mv_read_pattern(mv_read_result *res, const unsigned char *img,
+                    int w, int h)
+{
+    int used_down2 = 0;
+    int r = read_pattern_once(res, img, w, h, 1, &used_down2);
+    /* A half-resolution decode that identified well under the corners
+     * its own homography says are in view has lost real corners to
+     * the downscale (strong tilt foreshortens the far cells below the
+     * detector's regime); the pattern is demonstrably present, so one
+     * native-resolution retry is cheap relative to a lost anchor, and
+     * the richer result wins.  Partial visibility does NOT trigger
+     * this: out-of-frame corners are not counted as expected. */
+    if (r == MV_OK && used_down2) {
+        int vis = 0, i, j;
+        for (j = 0; j < MV_PAT_CORNER_ROWS; j++)
+            for (i = 0; i < MV_PAT_CORNER_COLS; i++) {
+                double xy[2], u, v;
+                mv_pattern_corner_px(i, j, xy);
+                proj_H(res->H, xy[0], xy[1], &u, &v);
+                if (u >= 8.0 && v >= 8.0 && u < w - 8.0 && v < h - 8.0)
+                    vis++;
+            }
+        if (10 * res->n < 9 * vis) {
+            mv_read_result full;
+            RDBG("reader: down2 kept %d of %d visible, native retry\n",
+                 res->n, vis);
+            if (read_pattern_once(&full, img, w, h, 0, NULL) == MV_OK
+                && full.n > res->n)
+                *res = full;
+        }
+    }
+    return r;
+}
+
 /* ================= coarse tier (spec v2) ============================= */
 
 /* Map an observed lattice cell (a,b) within a di x dj bounding box to
@@ -831,6 +1405,64 @@ static void coarse_map(int rot, int a, int b, int *i, int *j)
     case 1:  *i = b;     *j = 1 - a; break;
     case 2:  *i = 4 - a; *j = 1 - b; break;
     default: *i = 4 - b; *j = a;     break;
+    }
+}
+
+/* Coarse counter strip: [1,0] sync + 8 Gray bits + parity + ~parity,
+ * sampled through H on the given image against the checker-derived
+ * mid level.  Sets counter/counter_valid/counter_conf on a clean
+ * decode; leaves res untouched otherwise.  Single implementation for
+ * the in-validation decode and the full-resolution retry. */
+static void coarse_strip_decode(mv_read_result *res,
+                                const unsigned char *img, int w, int h,
+                                const double H[9], double mid,
+                                double halfrange)
+{
+    unsigned bits[MV_PAT2_CTR_CELLS], g2 = 0, parity = 0;
+    double conf = 1.0;
+    int okc = 1, c;
+
+    for (c = 0; c < MV_PAT2_CTR_CELLS && okc; c++) {
+        double X = MV_PAT2_CTR_X0 + (c + 0.5) * MV_PAT2_CTR_CELL;
+        double Y = MV_PAT2_CTR_Y0 + 0.5 * MV_PAT2_CTR_H;
+        double W = H[6] * X + H[7] * Y + H[8], u, v, s, m;
+        if (fabs(W) < 1e-12) {
+            okc = 0;
+            break;
+        }
+        u = (H[0] * X + H[1] * Y + H[2]) / W;
+        v = (H[3] * X + H[4] * Y + H[5]) / W;
+        s = sample3(img, w, h, u, v);
+        if (s < 0.0) {
+            okc = 0;
+            break;
+        }
+        bits[c] = (s < mid) ? 1u : 0u;
+        m = fabs(s - mid) / (halfrange > 1.0 ? halfrange : 1.0);
+        if (m > 1.0)
+            m = 1.0;
+        if (m < conf)
+            conf = m;
+    }
+    if (okc)
+        RDBG("coarse strip: bits %u%u %u%u%u%u%u%u%u%u p %u%u "
+             "(mid %.0f)\n", bits[0], bits[1], bits[2], bits[3],
+             bits[4], bits[5], bits[6], bits[7], bits[8], bits[9],
+             bits[10], bits[11], mid);
+    if (okc && bits[0] == 1u && bits[1] == 0u) {
+        for (c = 0; c < MV_PAT2_CTR_BITS; c++) {
+            g2 = (g2 << 1) | bits[2 + c];
+            parity ^= bits[2 + c];
+        }
+        if (bits[10] == parity && bits[11] == (parity ^ 1u)) {
+            unsigned bv = g2;
+            bv ^= bv >> 1;
+            bv ^= bv >> 2;
+            bv ^= bv >> 4;
+            res->counter = bv;
+            res->counter_valid = 1;
+            res->counter_conf = conf;
+        }
     }
 }
 
@@ -934,48 +1566,7 @@ static int coarse_validate(mv_read_result *res, const unsigned char *img,
 
         /* counter strip: [1,0] + 8 Gray + parity + ~parity */
         res->counter_valid = 0;
-        {
-            unsigned bits[MV_PAT2_CTR_CELLS], g2 = 0, parity = 0;
-            double conf = 1.0, halfrange = 0.5 * (mw - mb);
-            int okc = 1;
-            for (c = 0; c < MV_PAT2_CTR_CELLS && okc; c++) {
-                double X = MV_PAT2_CTR_X0 + (c + 0.5) * MV_PAT2_CTR_CELL;
-                double Y = MV_PAT2_CTR_Y0 + 0.5 * MV_PAT2_CTR_H;
-                double W = H[6] * X + H[7] * Y + H[8], u, v, s, m;
-                if (fabs(W) < 1e-12) {
-                    okc = 0;
-                    break;
-                }
-                u = (H[0] * X + H[1] * Y + H[2]) / W;
-                v = (H[3] * X + H[4] * Y + H[5]) / W;
-                s = sample3(img, w, h, u, v);
-                if (s < 0.0) {
-                    okc = 0;
-                    break;
-                }
-                bits[c] = (s < mid) ? 1u : 0u;
-                m = fabs(s - mid) / (halfrange > 1.0 ? halfrange : 1.0);
-                if (m > 1.0)
-                    m = 1.0;
-                if (m < conf)
-                    conf = m;
-            }
-            if (okc && bits[0] == 1u && bits[1] == 0u) {
-                for (c = 0; c < MV_PAT2_CTR_BITS; c++) {
-                    g2 = (g2 << 1) | bits[2 + c];
-                    parity ^= bits[2 + c];
-                }
-                if (bits[10] == parity && bits[11] == (parity ^ 1u)) {
-                    unsigned bv = g2;
-                    bv ^= bv >> 1;
-                    bv ^= bv >> 2;
-                    bv ^= bv >> 4;
-                    res->counter = bv;
-                    res->counter_valid = 1;
-                    res->counter_conf = conf;
-                }
-            }
-        }
+        coarse_strip_decode(res, img, w, h, H, mid, 0.5 * (mw - mb));
     }
 
     res->n = n;
@@ -1072,16 +1663,153 @@ static int coarse_try(mv_read_result *res, const unsigned char *img,
     return MV_ERR;
 }
 
+/* Shared full-resolution polish for a successful coarse read: when the
+ * cells are big enough for the crossing profiles to stay inside their
+ * own cells, refine each corner by edge-line intersection (gradient
+ * fallback) and refit the homography. */
+static void coarse_polish(mv_read_result *res, const unsigned char *img,
+                          int w, int h)
+{
+    static double obj[2 * 10];
+    int i, moved = 0;
+
+    if (cell_size_px(res->H,
+                     MV_PAT2_GRID_X0
+                     + 0.5 * MV_PAT2_GRID_COLS * MV_PAT2_CELL,
+                     MV_PAT2_GRID_Y0
+                     + 0.5 * MV_PAT2_GRID_ROWS * MV_PAT2_CELL,
+                     MV_PAT2_CELL) < 14.0)
+        return;
+    for (i = 0; i < res->n; i++) {
+        double xy[2];
+        mv_pattern2_corner_px(res->id[i] % MV_PAT2_CORNER_COLS,
+                              res->id[i] / MV_PAT2_CORNER_COLS, xy);
+        obj[2 * i] = xy[0];
+        obj[2 * i + 1] = xy[1];
+        if (refine_corner_edges(img, w, h, res->H, xy[0], xy[1],
+                                MV_PAT2_CELL, &res->uv[2 * i],
+                                &res->uv[2 * i + 1]) == MV_OK)
+            moved++;
+        else
+            moved += foerstner_step(img, w, h, &res->uv[2 * i],
+                                    &res->uv[2 * i + 1]);
+    }
+    if (moved)
+        mv_homography_dlt(res->H, obj, res->uv, res->n);
+    /* corner recovery, as in the fine tier: measure missing ids at
+     * their H-predicted positions with the edge-line intersection
+     * alone, accept within 1 px */
+    {
+        char have[MV_PAT2_CORNER_COLS * MV_PAT2_CORNER_ROWS];
+        int k, added = 0;
+        memset(have, 0, sizeof(have));
+        for (k = 0; k < res->n; k++)
+            have[res->id[k]] = 1;
+        for (k = 0; k < MV_PAT2_CORNER_COLS * MV_PAT2_CORNER_ROWS
+                    && res->n < MV_READ_MAXC; k++) {
+            double xy[2], pu, pv, ru, rv, du, dv;
+            if (have[k])
+                continue;
+            mv_pattern2_corner_px(k % MV_PAT2_CORNER_COLS,
+                                  k / MV_PAT2_CORNER_COLS, xy);
+            proj_H(res->H, xy[0], xy[1], &pu, &pv);
+            if (pu < 8.0 || pv < 8.0 || pu >= w - 8.0 || pv >= h - 8.0)
+                continue;
+            ru = pu;
+            rv = pv;
+            if (refine_corner_edges(img, w, h, res->H, xy[0], xy[1],
+                                    MV_PAT2_CELL, &ru, &rv) != MV_OK)
+                continue;
+            du = ru - pu;
+            dv = rv - pv;
+            if (du * du + dv * dv > 1.0)
+                continue;
+            res->id[res->n] = k;
+            res->uv[2 * res->n] = ru;
+            res->uv[2 * res->n + 1] = rv;
+            obj[2 * res->n] = xy[0];
+            obj[2 * res->n + 1] = xy[1];
+            res->n++;
+            added++;
+        }
+        if (added) {
+            RDBG("coarse: recovered %d corners via H\n", added);
+            mv_homography_dlt(res->H, obj, res->uv, res->n);
+        }
+    }
+}
+
+/* Full-resolution counter retry for a decode won on a downsampled
+ * working image: the 60 px-high strip can blur below the margin there
+ * while remaining crisp at native resolution.  Re-derives the checker
+ * brightness references through the final H and reruns the SAME strip
+ * decode; only ever turns an invalid counter into a valid one. */
+static void coarse_counter_fullres(mv_read_result *res,
+                                   const unsigned char *img, int w,
+                                   int h)
+{
+    static const double off[4][2] = {
+        { -0.30, -0.30 }, { 0.30, -0.30 },
+        { -0.30, 0.30 }, { 0.30, 0.30 }
+    };
+    double mb = 0.0, mw = 0.0;
+    int nb = 0, nw = 0, r, c, k, ok = 1;
+
+    for (r = 0; r < MV_PAT2_GRID_ROWS && ok; r++)
+        for (c = 0; c < MV_PAT2_GRID_COLS && ok; c++) {
+            double cx = MV_PAT2_GRID_X0 + (c + 0.5) * MV_PAT2_CELL;
+            double cy = MV_PAT2_GRID_Y0 + (r + 0.5) * MV_PAT2_CELL;
+            double s = 0.0;
+            for (k = 0; k < 4 && ok; k++) {
+                double u, v, g;
+                proj_H(res->H, cx + off[k][0] * MV_PAT2_CELL,
+                       cy + off[k][1] * MV_PAT2_CELL, &u, &v);
+                g = sample3(img, w, h, u, v);
+                if (g < 0.0)
+                    ok = 0;
+                else
+                    s += g;
+            }
+            if (!ok)
+                break;
+            if ((r + c) % 2 == 0) {
+                mb += s / 4.0;
+                nb++;
+            } else {
+                mw += s / 4.0;
+                nw++;
+            }
+        }
+    if (!ok || !nb || !nw)
+        return;
+    mb /= nb;
+    mw /= nw;
+    if (mw - mb < 25.0)
+        return;
+    coarse_strip_decode(res, img, w, h, res->H, 0.5 * (mb + mw),
+                        0.5 * (mw - mb));
+}
+
 int mv_read_coarse(mv_read_result *res, const unsigned char *img,
                    int w, int h)
 {
-    static const int SC[3] = { 1, 2, 4 };
+    /* Big frames try the cheap downsampled rungs first (detection cost
+     * scales with pixels; corners are re-localized at full resolution
+     * on success, so precision does not follow the working scale).
+     * Small frames keep the native-resolution-first order: their s=1
+     * pass is cheap and the far-range regime lives there. */
+    static const int SC_NEAR[3] = { 1, 2, 4 };
+    static const int SC_BIG[3] = { 2, 4, 1 };
     static const double THR[2] = { 0.55, 0.30 };
+    const int *SC = ((long)w * h >= BIGFRAME_PX) ? SC_BIG : SC_NEAR;
+    mv_read_result keep;
+    int have_keep = 0;
     int si, ti, i;
 
     memset(res, 0, sizeof(*res));
     for (si = 0; si < 3; si++) {
         int s = SC[si], ws = w / s, hs = h / s;
+        int got = 0;
         unsigned char *ds;
         if (ws < 32 || hs < 32)
             continue;
@@ -1101,31 +1829,49 @@ int mv_read_coarse(mv_read_result *res, const unsigned char *img,
                     ds[y * ws + x] = (unsigned char)(acc / (s * s));
                 }
         }
-        for (ti = 0; ti < 2; ti++) {
-            if (coarse_try(res, ds, ws, hs, THR[ti]) == MV_OK) {
-                if (s != 1) {
-                    static double obj[2 * 10];
-                    for (i = 0; i < res->n; i++) {
-                        double xy[2];
-                        res->uv[2 * i] = res->uv[2 * i] * s
-                                         + (s - 1) * 0.5;
-                        res->uv[2 * i + 1] = res->uv[2 * i + 1] * s
-                                             + (s - 1) * 0.5;
-                        mv_pattern2_corner_px(res->id[i]
-                                              % MV_PAT2_CORNER_COLS,
-                                              res->id[i]
-                                              / MV_PAT2_CORNER_COLS, xy);
-                        obj[2 * i] = xy[0];
-                        obj[2 * i + 1] = xy[1];
-                    }
-                    mv_homography_dlt(res->H, obj, res->uv, res->n);
-                    free(ds);
-                }
-                return MV_OK;
+        for (ti = 0; ti < 2 && !got; ti++)
+            got = (coarse_try(res, ds, ws, hs, THR[ti]) == MV_OK);
+        if (got && s != 1) {
+            static double obj[2 * 10];
+            for (i = 0; i < res->n; i++) {
+                double xy[2];
+                res->uv[2 * i] = res->uv[2 * i] * s + (s - 1) * 0.5;
+                res->uv[2 * i + 1] = res->uv[2 * i + 1] * s
+                                     + (s - 1) * 0.5;
+                refine_saddle(img, w, h, &res->uv[2 * i],
+                              &res->uv[2 * i + 1]);
+                mv_pattern2_corner_px(res->id[i] % MV_PAT2_CORNER_COLS,
+                                      res->id[i] / MV_PAT2_CORNER_COLS,
+                                      xy);
+                obj[2 * i] = xy[0];
+                obj[2 * i + 1] = xy[1];
             }
+            mv_homography_dlt(res->H, obj, res->uv, res->n);
         }
         if (s != 1)
             free(ds);
+        if (!got)
+            continue;
+        coarse_polish(res, img, w, h);
+        if (s != 1 && !res->counter_valid)
+            coarse_counter_fullres(res, img, w, h);
+        if (res->counter_valid)
+            return MV_OK;
+        /* Decode is good but the counter strip would not read at this
+         * working scale (blur can erase the 60 px-high strip before it
+         * touches the checker): keep the first such result and let the
+         * remaining scales try -- a later rung may read the strip, and
+         * an anchor without a counter cannot time-align. */
+        if (!have_keep) {
+            keep = *res;
+            have_keep = 1;
+        }
+        RDBG("coarse: scale %d decoded but counter invalid, "
+             "escalating\n", s);
+    }
+    if (have_keep) {
+        *res = keep;
+        return MV_OK;
     }
     return MV_ERR;
 }

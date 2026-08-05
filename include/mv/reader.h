@@ -10,6 +10,15 @@
  * pattern->image homography. Blind: no pose prior needed.
  * Not reentrant: uses static working buffers; one reader call at a time.
  *
+ * Full-HD throughput: frames of ~1.5 Mpx and up decode on a
+ * half-resolution working image first (both tiers), then every corner
+ * is re-localized at full resolution -- edge-line intersection under
+ * the fitted homography, with a gradient-orthogonality fallback -- so
+ * the speedup costs no calibration precision (sub-0.1 px against
+ * rendered ground truth; see tests/test_reader_speed.c).  Corners the
+ * lattice missed are recovered at their homography-predicted positions
+ * when the same edge evidence supports them.
+ *
  * Setup & run: needs only an 8-bit mono frame (any source; the demo
  * renders one synthetically). Build and exercise end to end with
  *     make demo_patternsim && ./demo_patternsim

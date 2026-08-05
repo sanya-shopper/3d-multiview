@@ -826,6 +826,17 @@ static void guidance(void)
         say("calibration done, clocks reading. waiting for time "
             "alignment. hold the pattern still where both cameras "
             "see it");
+    else if (ncal >= 2) {
+        /* every pair solved: make success unmissable (live lesson:
+         * the one-shot 'paired' announcement was missed and the
+         * operator kept standing by, thinking it was stuck) */
+        static int solved_said;
+        if (solved_said)
+            return;
+        solved_said = 1;
+        say("the rig is solved. more angles only sharpen it. "
+            "you can stop when you like");
+    }
     else
         return; /* nothing pending: stay quiet, keep the timer */
     last_say = now;

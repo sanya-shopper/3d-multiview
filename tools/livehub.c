@@ -430,6 +430,28 @@ static int npair_best[MAXCAMS][MAXCAMS];
 static int npair_ann[MAXCAMS][MAXCAMS];
 static double last_pose_say;
 
+/* SCENE MODE: once the rig is solved the hub does not stop -- it
+ * flushes the calibration artifacts and switches the decoder thread
+ * to live stereo on the solved pair: detect features in a
+ * near-simultaneous frame pair, match, epipolar-gate with the rig's
+ * F, triangulate, and grow a metric point cloud written periodically
+ * to <recdir>/scene.ply.  All rig and scene fields are mbx-guarded
+ * except the cloud, which only the decoder thread touches. */
+#define SCENE_MAXFEAT 800
+#define SCENE_PAIR_DT 0.35   /* s: max capture-time skew of a pair */
+#define SCENE_EPI_PX 3.0     /* px: symmetric epipolar gate */
+#define SCENE_RMS_PX 2.0     /* px: triangulation reprojection gate */
+#define SCENE_ZMIN 0.2       /* m, in camera-A frame */
+#define SCENE_ZMAX 6.0
+#define SCENE_MAXPTS 300000
+#define SCENE_SETTLE_S 30.0  /* extra refinement time after solve */
+static double rig_R9[9], rig_t3[3]; /* x_a = R x_b + t (solved pair) */
+static int rig_a = -1, rig_b = -1;  /* cam table indices of the pair */
+static int rig_have;
+static double t_solved;
+static int scene_mode;
+static long scene_pairs, scene_npts;
+
 static void try_extrinsics(void)
 {
     int a, b;
@@ -520,10 +542,17 @@ static void try_extrinsics(void)
                        sqrt(tm[0] * tm[0] + tm[1] * tm[1]
                             + tm[2] * tm[2]), tm[0], tm[1], tm[2],
                        npair, 1000.0 * dev / npair);
+                /* latest solution becomes THE rig for scene mode */
+                memcpy(rig_R9, Rm, sizeof(rig_R9));
+                memcpy(rig_t3, tm, sizeof(rig_t3));
+                rig_a = a;
+                rig_b = b;
+                rig_have = 1;
                 /* the session goal, announced once per pair: after
                  * this the operator knows the rig is solved */
                 if (!pair_said[a][b]) {
                     pair_said[a][b] = 1;
+                    t_solved = now_mono();
                     npair_ann[a][b] = npair;
                     last_pose_say = now_mono();
                     say("cameras %u and %u paired, baseline %.2f "
@@ -716,6 +745,203 @@ static void release_conn(int ci)
     pthread_mutex_unlock(&mbx);
 }
 
+/* post-mortem / milestone summary into the recording dir: per-camera
+ * throughput, decode rates, calibration, extrinsics, scene stats --
+ * the one file to read to see what happened.  Called at scene-mode
+ * entry (auto-flush: the calibration result is on disk from that
+ * moment) and again at shutdown. */
+static void write_summary(void)
+{
+    char path[512];
+    FILE *f;
+    int i, a, b;
+    if (!recdir)
+        return;
+    snprintf(path, sizeof(path), "%s/summary.txt", recdir);
+    f = fopen(path, "w");
+    if (!f)
+        return;
+    fprintf(f, "multiview live session summary\n");
+    fprintf(f, "pitch %.4f mm\n\n", pitch * 1000.0);
+    for (i = 0; i < MAXCAMS; i++) {
+        cam_t *c = &cams[i];
+        if (!c->used)
+            continue;
+        fprintf(f, "camera %u: rx %ld frames, decoded %ld/%ld"
+                " (%.0f%%), valid-counter %ld, views %d\n",
+                c->camid, c->frames_rx, c->reads_ok, c->decodes,
+                c->decodes ? 100.0 * c->reads_ok / c->decodes : 0,
+                c->valid_ctr, c->nviews);
+        if (c->calibrated)
+            fprintf(f, "  CALIBRATED fx %.1f fy %.1f cx %.1f "
+                    "cy %.1f k1 %+.3f k2 %+.3f | RMS %.3f px\n",
+                    c->K[0], c->K[4], c->K[2], c->K[5],
+                    c->kr[0], c->kr[1], c->rms);
+        else
+            fprintf(f, "  NOT calibrated (need ~12+ views with "
+                    "pose diversity)\n");
+    }
+    fprintf(f, "\nextrinsics (camera pairs):\n");
+    for (a = 0; a < MAXCAMS; a++)
+        for (b = a + 1; b < MAXCAMS; b++)
+            if (cams[a].used && cams[b].used
+                && cams[a].calibrated && cams[b].calibrated)
+                fprintf(f, "  cam %u<->%u: %d anchors each; see"
+                        " hub.log [ext] lines for the pose\n",
+                        cams[a].camid, cams[b].camid,
+                        cams[a].nanch < cams[b].nanch
+                            ? cams[a].nanch : cams[b].nanch);
+    if (rig_have) {
+        fprintf(f, "\nsolved rig (x_a = R x_b + t, a=cam %u b=cam %u)"
+                ":\n  R = [%+.6f %+.6f %+.6f; %+.6f %+.6f %+.6f; "
+                "%+.6f %+.6f %+.6f]\n  t = (%+.4f %+.4f %+.4f) m  "
+                "baseline %.4f m\n",
+                cams[rig_a].camid, cams[rig_b].camid,
+                rig_R9[0], rig_R9[1], rig_R9[2], rig_R9[3], rig_R9[4],
+                rig_R9[5], rig_R9[6], rig_R9[7], rig_R9[8],
+                rig_t3[0], rig_t3[1], rig_t3[2],
+                sqrt(rig_t3[0] * rig_t3[0] + rig_t3[1] * rig_t3[1]
+                     + rig_t3[2] * rig_t3[2]));
+    }
+    if (scene_mode)
+        fprintf(f, "\nscene mode: %ld stereo pairs, %ld points -> "
+                "scene.ply\n", scene_pairs, scene_npts);
+    fclose(f);
+    printf("[hub] wrote %s\n", path);
+}
+
+/* one live-stereo step on the solved pair: snapshot a near-
+ * simultaneous frame pair, feature-match, epipolar-gate under the
+ * solved rig, triangulate, accumulate the cloud.  Runs on the decoder
+ * thread; the pattern reader is no longer called in scene mode. */
+static void scene_step(void)
+{
+    static mv_feature fA[SCENE_MAXFEAT], fB[SCENE_MAXFEAT];
+    static int idx2[SCENE_MAXFEAT];
+    static mv_cloud cloud;
+    static int cloud_init, first_said;
+    static double last_ply;
+    cam_t *A, *B;
+    int wA, hA, wB, hB, nA, nB, nm, i, ok = 0;
+    mv_camera camA, camB;
+    double F[9];
+
+    pthread_mutex_lock(&mbx);
+    A = &cams[rig_a];
+    B = &cams[rig_b];
+    if (A->used && B->used && A->latest && B->latest
+        && (A->fresh || B->fresh)
+        && fabs(A->t_latest - B->t_latest) < SCENE_PAIR_DT) {
+        size_t sA = (size_t)A->w * A->h, sB = (size_t)B->w * B->h;
+        if (A->workcap < (int)sA) {
+            unsigned char *nb = realloc(A->work, sA);
+            if (nb) {
+                A->work = nb;
+                A->workcap = (int)sA;
+            }
+        }
+        if (B->workcap < (int)sB) {
+            unsigned char *nb = realloc(B->work, sB);
+            if (nb) {
+                B->work = nb;
+                B->workcap = (int)sB;
+            }
+        }
+        if (A->workcap >= (int)sA && B->workcap >= (int)sB) {
+            memcpy(A->work, A->latest, sA);
+            memcpy(B->work, B->latest, sB);
+            A->fresh = B->fresh = 0;
+            A->busy = B->busy = 1;
+            wA = A->w;
+            hA = A->h;
+            wB = B->w;
+            hB = B->h;
+            ok = 1;
+        }
+    }
+    pthread_mutex_unlock(&mbx);
+    if (!ok) {
+        struct timespec d = { 0, 50000000L };
+        nanosleep(&d, NULL);
+        return;
+    }
+
+    nA = mv_feat_detect(fA, SCENE_MAXFEAT, A->work, wA, hA);
+    nB = mv_feat_detect(fB, SCENE_MAXFEAT, B->work, wB, hB);
+    nm = 0;
+    if (nA > 0 && nB > 0)
+        nm = mv_feat_match(idx2, fA, nA, fB, nB, 0.56);
+    if (nm > 0) {
+        /* world = camera A frame: A at identity, B from the rig
+         * (x_a = R x_b + t  =>  x_b = R^T x_a - R^T t) */
+        double Rt[9];
+        int k;
+        memset(&camA, 0, sizeof(camA));
+        memset(&camB, 0, sizeof(camB));
+        memcpy(camA.K, A->K, sizeof(camA.K));
+        mv_cam_set_identity_pose(&camA);
+        memcpy(camB.K, B->K, sizeof(camB.K));
+        mv_mat_transpose(Rt, rig_R9, 3, 3);
+        memcpy(camB.R, Rt, sizeof(camB.R));
+        mv_mat_mul(camB.t, Rt, rig_t3, 3, 3, 1);
+        for (k = 0; k < 3; k++)
+            camB.t[k] = -camB.t[k];
+        mv_fundamental_from_cams(F, &camA, &camB);
+
+        if (!cloud_init) {
+            mv_cloud_init(&cloud, 1);
+            cloud_init = 1;
+        }
+        for (i = 0; i < nA; i++) {
+            double ua[2], ub[2], da[2], db[2], X[3], uv4[4], rms;
+            const mv_camera *cc[2] = { &camA, &camB };
+            unsigned char rgb[3];
+            if (idx2[i] < 0 || cloud.n >= SCENE_MAXPTS)
+                continue;
+            da[0] = fA[i].u;
+            da[1] = fA[i].v;
+            db[0] = fB[idx2[i]].u;
+            db[1] = fB[idx2[i]].v;
+            undo_distort(ua, da, 1, A->K, A->kr);
+            undo_distort(ub, db, 1, B->K, B->kr);
+            if (mv_sym_epipolar_dist(F, ua, ub) > SCENE_EPI_PX)
+                continue;
+            uv4[0] = ua[0];
+            uv4[1] = ua[1];
+            uv4[2] = ub[0];
+            uv4[3] = ub[1];
+            if (mv_triangulate(X, cc, uv4, 2) != MV_OK)
+                continue;
+            if (!(X[2] > SCENE_ZMIN && X[2] < SCENE_ZMAX))
+                continue;
+            rms = mv_reproj_rms(cc, uv4, 2, X);
+            if (!(rms < SCENE_RMS_PX))
+                continue;
+            rgb[0] = rgb[1] = rgb[2] =
+                A->work[(int)(da[1] + 0.5) * wA + (int)(da[0] + 0.5)];
+            mv_cloud_push(&cloud, X, rgb);
+        }
+    }
+
+    pthread_mutex_lock(&mbx);
+    scene_pairs++;
+    scene_npts = cloud_init ? cloud.n : 0;
+    A->busy = B->busy = 0;
+    pthread_mutex_unlock(&mbx);
+
+    if (!first_said && cloud_init && cloud.n > 300) {
+        first_said = 1;
+        say("stereo is live. %d points and counting", cloud.n);
+    }
+    if (recdir && cloud_init && cloud.n > 0
+        && now_mono() - last_ply > 30.0) {
+        char path[512];
+        last_ply = now_mono();
+        snprintf(path, sizeof(path), "%s/scene.ply", recdir);
+        mv_cloud_write_ply(path, &cloud);
+    }
+}
+
 /* decoder thread: the reader is non-reentrant (static buffers), so one
  * thread serializes all decodes; it always works on each camera's
  * FRESHEST frame, and the network thread never blocks on it */
@@ -726,6 +952,30 @@ static void *decoder_main(void *arg)
     while (!g_stop) {
         cam_t *pick = NULL;
         int i, dw = 0, dh = 0;
+        /* rig solved and settled -> auto-flush and switch this thread
+         * to live stereo; the pattern has done its job */
+        if (!scene_mode) {
+            int enter;
+            pthread_mutex_lock(&mbx);
+            enter = rig_have && pair_said[rig_a][rig_b]
+                    && now_mono() - t_solved > SCENE_SETTLE_S;
+            pthread_mutex_unlock(&mbx);
+            if (enter) {
+                write_summary();
+                if (reclog)
+                    fflush(reclog);
+                hlog("[hub] >>> RIG SOLVED -- entering SCENE MODE "
+                     "(live stereo on cams %u and %u) <<<\n",
+                     cams[rig_a].camid, cams[rig_b].camid);
+                say("rig saved. scene mode. remove the pattern, "
+                    "stereo is live");
+                scene_mode = 1;
+            }
+        }
+        if (scene_mode) {
+            scene_step();
+            continue;
+        }
         pthread_mutex_lock(&mbx);
         for (i = 0; i < MAXCAMS; i++) {
             cam_t *c = &cams[(rr_next + i) % MAXCAMS];
@@ -777,6 +1027,7 @@ static void *decoder_main(void *arg)
 static void guidance(void)
 {
     static double last_say;
+    static long last_pts;
     double now = now_mono();
     int i, a, b;
     int used = 0, ncal = 0, uncal = -1, noclk = -1, only = -1;
@@ -784,6 +1035,15 @@ static void guidance(void)
 
     if (now - last_say < 30.0)
         return;
+    if (scene_mode) {
+        /* live stereo progress, only while it is actually growing */
+        if (scene_npts > last_pts) {
+            say("%ld points", scene_npts);
+            last_pts = scene_npts;
+            last_say = now;
+        }
+        return;
+    }
     for (i = 0; i < MAXCAMS; i++) {
         cam_t *c = &cams[i];
         if (!c->used || c->frames_rx == 0)
@@ -859,6 +1119,9 @@ static void status(void)
         if (c->last_tier)
             hlog(" | last tier %d ctr %u", c->last_tier,
                  c->last_counter);
+        if (scene_mode && (i == rig_a || i == rig_b))
+            hlog(" | SCENE pairs %ld pts %ld", scene_pairs,
+                 scene_npts);
         /* loud flag when a camera that WAS flowing has gone quiet */
         if (c->frames_rx > 0 && age > 2.0) {
             hlog(" | *** STALLED: no frames for %.0f s ***", age);
@@ -1184,52 +1447,7 @@ int main(int argc, char **argv)
         say("hub stopped. %d cameras, %d calibrated", nc, ncal);
     }
 
-    /* write a post-mortem summary into the recording dir: per-camera
-     * throughput, decode rates, calibration, and the extrinsics -- the
-     * one file to read to see what happened */
-    if (recdir) {
-        char path[512];
-        FILE *f;
-        snprintf(path, sizeof(path), "%s/summary.txt", recdir);
-        f = fopen(path, "w");
-        if (f) {
-            int a, b;
-            fprintf(f, "multiview live session summary\n");
-            fprintf(f, "pitch %.4f mm\n\n", pitch * 1000.0);
-            for (i = 0; i < MAXCAMS; i++) {
-                cam_t *c = &cams[i];
-                if (!c->used)
-                    continue;
-                fprintf(f, "camera %u: rx %ld frames, decoded %ld/%ld"
-                        " (%.0f%%), valid-counter %ld, views %d\n",
-                        c->camid, c->frames_rx, c->reads_ok, c->decodes,
-                        c->decodes ? 100.0 * c->reads_ok / c->decodes : 0,
-                        c->valid_ctr, c->nviews);
-                if (c->calibrated)
-                    fprintf(f, "  CALIBRATED fx %.1f fy %.1f cx %.1f "
-                            "cy %.1f k1 %+.3f k2 %+.3f | RMS %.3f px\n",
-                            c->K[0], c->K[4], c->K[2], c->K[5],
-                            c->kr[0], c->kr[1], c->rms);
-                else
-                    fprintf(f, "  NOT calibrated (need ~12+ views with "
-                            "pose diversity)\n");
-            }
-            fprintf(f, "\nextrinsics (camera pairs):\n");
-            for (a = 0; a < MAXCAMS; a++)
-                for (b = a + 1; b < MAXCAMS; b++)
-                    if (cams[a].used && cams[b].used
-                        && cams[a].calibrated && cams[b].calibrated)
-                        fprintf(f, "  cam %u<->%u: %d anchors each; see"
-                                " hub.log [ext] lines for the pose\n",
-                                cams[a].camid, cams[b].camid,
-                                cams[a].nanch < cams[b].nanch
-                                    ? cams[a].nanch : cams[b].nanch);
-            fclose(f);
-            printf("[hub] wrote %s -- collection is in %s/ (frames, "
-                   "records.txt, camlog_*.txt, hub.log, summary.txt)\n",
-                   path, recdir);
-        }
-    }
+    write_summary();
     for (i = 0; i < MAXCONN; i++) {
         if (conns[i].sock >= 0)
             close(conns[i].sock);

@@ -44,6 +44,7 @@ jobs:
         run: sh deploy/build-linux.sh
       - name: live-stack stress under ASan (fuzz + live calibration)
         env:
+          CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
           ASAN_OPTIONS: halt_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |

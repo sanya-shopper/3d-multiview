@@ -5,6 +5,7 @@
  * Build (clang):
  *   clang -std=c99 -g -O1 -fsanitize=fuzzer,address,undefined \
  *     -Iinclude fuzz/fuzz_pgm.c src/all.c -lm -o fuzz_pgm */
+#define _POSIX_C_SOURCE 200809L
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

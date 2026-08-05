@@ -641,11 +641,6 @@ static void test_pattern_coarse(void)
     }
 }
 
-static int sl_cmp_dbl(const void *a, const void *b)
-{
-    double d = *(const double *)a - *(const double *)b;
-    return d < 0 ? -1 : d > 0 ? 1 : 0;
-}
 
 static void sl_set_plane(mv_plane *p, unsigned char *tex, int tw, int th,
                          double pitch, const double r1[3],

@@ -75,3 +75,17 @@ platforms, including the first true Linux compile of stream_cam_v4l2
 for local pre-push validation once a docker/podman runtime exists;
 LINUX-ISSUES.md's predictions were confirmed by the fixes landing
 before CI existed, and CI now guards against regression.
+
+
+## Instrumented CI (measured)
+
+Every push runs, on ubuntu-24.04:
+- build + all 8 test suites (also on macos-14)
+- ASan+UBSan over the suites and the live fuzz-then-calibrate stress
+- ThreadSanitizer over the live hub stack (the network/decoder threads)
+- Valgrind memcheck over the quick suites (heavy suites weekly/on-demand)
+- gcov coverage: **86.3% lines, 71.5% branches** over src/ (HTML report
+  uploaded as the `coverage-html` artifact on each run)
+
+TSan caught real hub data races on its first run (network vs decoder
+thread on shared camera state); fixed, and the job is green since.

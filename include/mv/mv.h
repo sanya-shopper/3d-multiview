@@ -24,5 +24,6 @@
 #include "mv/feat.h"
 #include "mv/session.h"
 #include "mv/photo.h"
+#include "mv/bundle.h"
 
 #endif /* MV_MV_H */

@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -52,7 +53,8 @@ typedef struct {
     int used;
     unsigned camid;
     int w, h;
-    unsigned char *latest;
+    unsigned char *latest;  /* written by network thread (mutex) */
+    unsigned char *work;    /* decoder-owned copy */
     double t_latest;
     int fresh;
     long frames_rx, decodes, reads_ok, valid_ctr;
@@ -85,6 +87,7 @@ typedef struct {
 
 static cam_t cams[MAXCAMS];
 static conn_t conns[MAXCONN];
+static pthread_mutex_t mbx = PTHREAD_MUTEX_INITIALIZER;
 static double pitch;
 static const char *recdir = NULL;
 static FILE *reclog = NULL;
@@ -276,10 +279,9 @@ static void process_cam(cam_t *c)
     mv_read_result rr;
     int tier = 1, i;
 
-    c->fresh = 0;
     c->decodes++;
-    if (mv_read_pattern(&rr, c->latest, c->w, c->h) != MV_OK) {
-        if (mv_read_coarse(&rr, c->latest, c->w, c->h) != MV_OK) {
+    if (mv_read_pattern(&rr, c->work, c->w, c->h) != MV_OK) {
+        if (mv_read_coarse(&rr, c->work, c->w, c->h) != MV_OK) {
             c->last_tier = 0;
             return;
         }
@@ -296,7 +298,7 @@ static void process_cam(cam_t *c)
         snprintf(path, sizeof(path), "%s/cam%u_%06ld.pgm", recdir,
                  c->camid, c->reads_ok);
         snprintf(camname, sizeof(camname), "%u", c->camid);
-        mv_pgm_write(path, c->latest, c->w, c->h);
+        mv_pgm_write(path, c->work, c->w, c->h);
         mv_session_frm(reclog, camname, c->t_latest, (int)c->reads_ok);
         mv_session_read(reclog, camname, c->t_latest, &rr, NULL);
     }
@@ -386,6 +388,43 @@ static void process_cam(cam_t *c)
     }
 }
 
+/* decoder thread: the reader is non-reentrant (static buffers), so one
+ * thread serializes all decodes; it always works on each camera's
+ * FRESHEST frame, and the network thread never blocks on it */
+static void *decoder_main(void *arg)
+{
+    int rr_next = 0;
+    (void)arg;
+    for (;;) {
+        cam_t *pick = NULL;
+        int i;
+        pthread_mutex_lock(&mbx);
+        for (i = 0; i < MAXCAMS; i++) {
+            cam_t *c = &cams[(rr_next + i) % MAXCAMS];
+            if (c->used && c->fresh && c->latest) {
+                size_t sz = (size_t)c->w * c->h;
+                if (!c->work)
+                    c->work = malloc(sz);
+                if (c->work) {
+                    memcpy(c->work, c->latest, sz);
+                    c->fresh = 0;
+                    pick = c;
+                    rr_next = ((rr_next + i) % MAXCAMS) + 1;
+                }
+                break;
+            }
+        }
+        pthread_mutex_unlock(&mbx);
+        if (pick)
+            process_cam(pick);
+        else {
+            struct timespec d = { 0, 50000000L };
+            nanosleep(&d, NULL);
+        }
+    }
+    return NULL;
+}
+
 static void status(void)
 {
     int i;
@@ -411,8 +450,8 @@ int main(int argc, char **argv)
     int port, lsock, i;
     struct sockaddr_in addr;
     double last_status = 0.0;
-    int rr_next = 0;
 
+    setvbuf(stdout, NULL, _IOLBF, 0); /* live logs must survive kill */
     if (argc < 3 || argc > 4) {
         fprintf(stderr, "usage: %s <port> <pitch_mm> [record_dir]\n",
                 argv[0]);
@@ -447,6 +486,13 @@ int main(int argc, char **argv)
     }
     for (i = 0; i < MAXCONN; i++)
         conns[i].sock = -1;
+    {
+        pthread_t th;
+        if (pthread_create(&th, NULL, decoder_main, NULL) != 0) {
+            fprintf(stderr, "cannot start decoder thread\n");
+            return 1;
+        }
+    }
     printf("[hub] listening on %d (pitch %.4f mm)%s%s\n", port,
            pitch * 1000.0, recdir ? ", recording to " : "",
            recdir ? recdir : "");
@@ -529,9 +575,12 @@ int main(int argc, char **argv)
                     break;
                 c = cam_slot(camid);
                 if (c) {
+                    pthread_mutex_lock(&mbx);
                     if (!c->latest || c->w != (int)w
                         || c->h != (int)h) {
                         free(c->latest);
+                        free(c->work);
+                        c->work = NULL;
                         c->latest = malloc((size_t)w * h);
                         c->w = (int)w;
                         c->h = (int)h;
@@ -543,26 +592,18 @@ int main(int argc, char **argv)
                         c->fresh = 1;
                         c->frames_rx++;
                     }
+                    pthread_mutex_unlock(&mbx);
                 }
                 memmove(cn->buf, cn->buf + need, cn->len - need);
                 cn->len -= need;
             }
         }
 
-        /* decode ONE fresh frame per loop, round-robin: decode is much
-         * slower than frame arrival, so always work on the newest */
-        for (i = 0; i < MAXCAMS; i++) {
-            cam_t *c = &cams[(rr_next + i) % MAXCAMS];
-            if (c->used && c->fresh && c->latest) {
-                process_cam(c);
-                rr_next = ((rr_next + i) % MAXCAMS) + 1;
-                break;
-            }
-        }
-
         if (now_mono() - last_status > 5.0) {
             last_status = now_mono();
+            pthread_mutex_lock(&mbx);
             status();
+            pthread_mutex_unlock(&mbx);
             if (reclog)
                 fflush(reclog);
         }

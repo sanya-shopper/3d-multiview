@@ -2690,33 +2690,42 @@ T3 slope, tracking $0.1\!\to\!0.3$ & $|\text{slope}-1|>0.1$ & $1.06$ & pass \\
 T3 slope, tracking $0.3\!\to\!0.6$ & --- & $2.4$ & fired$^{a}$ \\
 T4 bias, calibration $f_x$ & $|t|>3$ \ ($M{=}10$) & $t=0.07$ & pass \\
 T5 residual, triangulation & $|r-1|>0.13$ & $r=1.03$ & pass \\
-T5 residual, calibration & $|r-1|>0.08$ & $r=1.17$ & \textbf{fired}$^{b}$ \\
+T5 residual, calibration & $|r-1|>0.08$ & $1.17\to0.999$ & resolved$^{b}$ \\
 T6 gate rejections & excess over noise tail & $6/\sim10^4$ & pass \\
 \bottomrule
 \end{tabular}
-\caption{Tripwire standings. $^{a}$Investigated and resolved: the
-known-radius circle fit leaves its linear regime at $\sigma=0.6$\,px
-(noise anisotropy, \autoref{tab:diagtrack}); a regime boundary, not a
-defect. $^{b}$Genuine standing flag, see text.}
+\caption{Tripwire standings. $^{a}$Investigated and resolved twice
+over: first explained as a regime boundary (noise anisotropy,
+\autoref{tab:diagtrack}), then retired by the Mahalanobis-weighted
+fit of \code{mv/optimal.h} ($1.4\times$ lower center error at the
+same noise). $^{b}$Resolved by LM refinement, see text.}
 \label{tab:tripwires}
 \end{table}
 
-\paragraph{The one standing flag.} T5 fires on calibration: across ten
-seeds the fitted reprojection RMS averages $0.484$\,px against the
-noise-model prediction $\sqrt2\,\sigma\sqrt{1-42/756}=0.412$\,px ---
-ratio $1.17$, roughly twenty standard errors outside the null band. The
-statistics are working exactly as intended: they have detected that the
-alternation estimator of \autoref{sec:radial} (Zhang closed form $+$
-linear radial step) is \emph{not} the joint maximum-likelihood fit ---
-it minimizes algebraic surrogates, leaving $\sim17\%$ systematic residual
-above the noise floor. This is the documented, expected cost of the
-missing Levenberg--Marquardt stage, and it hands that roadmap item a
-quantitative acceptance criterion: \emph{after LM refinement, the T5
-ratio must fall to $1.00\pm0.03$}. If it does not, \emph{then} we have a
-bug. This is the general pattern the project commits to: every claimed
-improvement must move a named statistic into a predicted band, and every
-statistic outside its band must be either explained to this standard or
-treated as a defect.
+\paragraph{The flag, and its resolution.} T5 fired on calibration
+for most of the project's life: across ten seeds the fitted
+reprojection RMS averaged $0.484$\,px against the noise-model
+prediction $\sqrt2\,\sigma\sqrt{1-42/756}=0.412$\,px --- ratio
+$1.17$, roughly twenty standard errors outside the null band. The
+statistics had detected that the alternation estimator of
+\autoref{sec:radial} (Zhang closed form $+$ linear radial step) is
+\emph{not} the joint maximum-likelihood fit --- it minimizes
+algebraic surrogates, leaving $\sim17\%$ systematic residual above
+the noise floor. That handed the Levenberg--Marquardt roadmap item a
+\emph{pre-registered} acceptance criterion, stated here well before
+the implementation existed: after LM refinement the T5 ratio must
+fall to $1.00\pm0.03$, else the implementation is buggy. The joint
+refinement (\code{mv\_calib\_refine}, \code{mv/refine.h}: shared
+intrinsics $+$ distortion and per-view Rodrigues poses, Schur
+complement over the view blocks) was then built against that bar and
+passed on the first green run: ensemble ratio $1.1087$ before,
+$\mathbf{0.9990}$ after, refined RMS $\leq$ alternation RMS on every
+member, exact recovery at $\sigma=0$
+(\code{tests/test\_refine.c}). This is the general pattern the
+project commits to: every claimed improvement must move a named
+statistic into a predicted band, and every statistic outside its band
+must be either explained to this standard or treated as a defect ---
+T5 is the pattern's first full life cycle, flag to acceptance.
 
 %----------------------------------------------------------------------
 \section{Scenario studies}
@@ -3267,10 +3276,12 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         $\to$ chordal-mean relative poses). All components field-proven,
         rigcalib included: the round-five capture produced the first
         real camera-to-camera extrinsics ($0.330$\,m baseline at
-        $2.3^\circ$/$6$\,mm pair consistency). Remaining: the record-emitting wrapper of
-        \autoref{tab:records} (the reader does not yet check the
-        version block or sample the phase patches), and the joint
-        orbit $+$ clock fits.
+        $2.3^\circ$/$6$\,mm pair consistency). The record-emitting wrapper, version-block
+        check, phase-patch sampling, and the robust Theil--Sen clock
+        fit are now built (\code{mv/session.h}, grammar per
+        \autoref{tab:records}, round-trip tested). Remaining: only
+        the joint orbit fit, which waits on the rotating fixture
+        hardware.
         \emph{Pitch}: this turns the fixture design into a push-button
         session --- one revolution in, geometry and clocks out --- and
         every missing piece already has its spec (\autoref{sec:calibspec})
@@ -3313,7 +3324,14 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         \emph{Unlocks}: dense room geometry on textureless surfaces;
         awaiting only the projector hardware --- the runbook in
         \autoref{sec:slight} is written for solo operation.
-  \item \textbf{Levenberg--Marquardt refinement} (later: bundle
+  \item \textbf{[done] Levenberg--Marquardt refinement} ---
+        implemented as \code{mv\_calib\_refine} (\code{mv/refine.h}):
+        joint LM over shared intrinsics/distortion and per-view
+        Rodrigues poses with a Schur complement over the view blocks;
+        the pre-registered T5 acceptance passed (ensemble ratio
+        $1.1087\to0.9990$, \autoref{sec:statrules}); exact at
+        $\sigma=0$; never worse than the alternation initializer on
+        any ensemble member. (Later: bundle
         adjustment \cite{Triggs2000}). Joint nonlinear minimization of
         reprojection error over intrinsics, poses, and distortion.
         \emph{Pitch}: the single most attractive item on the list ---
@@ -3326,7 +3344,14 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         \emph{Unlocks}: no new scenario --- it upgrades all of them;
         tightened $\K$ and clocks propagate into every tracking and
         model figure, and the drift monitor gains sensitivity.
-  \item \textbf{Feature detection and robust matching}. General interest
+  \item \textbf{[done] Feature detection and robust matching} ---
+        \code{mv/feat.h}: Shi--Tomasi corners with sub-pixel
+        refinement, orientation-normalized $8\times8$ patch
+        descriptors, Lowe-ratio $+$ mutual matching, verified through
+        the robust 8-point: 219 verified matches at $0.117$\,px median
+        epipolar residual against the analytic $\F$ in sim, 176 under
+        a $20^\circ$ roll; single-scale by design (v1).
+        General interest
         points with descriptors, matched under the RANSAC gate of
         \autoref{sec:epipolar}. \emph{Pitch}: unlocks everything
         ``live'' --- the $\F$-drift and $\Delta t$ monitors get real
@@ -3370,7 +3395,17 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         \emph{Unlocks}: high-fidelity topology capture (the coverage
         argument of \autoref{sec:occlusion}) and the drone /
         self-tracking scenario itself.
-  \item \textbf{Optimal and weighted estimators}. Hartley--Sturm
+  \item \textbf{[done] Optimal and weighted estimators} ---
+        \code{mv/optimal.h}: Hartley--Sturm optimal triangulation
+        (polynomial minimization, exact epipolar consistency to
+        $10^{-13}$\,px; the honest sim finding is that for our
+        well-conditioned rig it matches plain DLT to $0.01\%$ ---
+        consistent with Hartley--Sturm's own assessment) and the
+        Mahalanobis-weighted known-radius circle fit that retires the
+        documented $\sigma=0.6$\,px nonlinearity ($1.4\times$ lower
+        center error; an intermediate IRLS design was measured
+        \emph{worse} than unweighted and rejected --- exact ML on the
+        anisotropic distance was required). Hartley--Sturm
         triangulation \cite{HartleySturm1997}, Mahalanobis-weighted
         model fits, weighted DLT (\autoref{sec:heterogeneous}).
         \emph{Pitch}: retires the \emph{documented} estimator floors ---

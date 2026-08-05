@@ -102,8 +102,17 @@ function drawM2(k){
     if(MARR[r][c]){ const d0=(CELL-DOT)/2;
       B(x+d0,y+d0,DOT,DOT, black?0:1); }
   }
-  /* counter strip: [1,0] + 20 Gray bits + parity + ~parity */
-  { const gv=gray(k & ((1<<CBITS)-1)); let par=0;
+  /* counter strip: [1,0] + 20 Gray bits + parity + ~parity.
+     COUNTER HOLD (live-session fix, 2026-08-05): the strip shows
+     k>>4, advancing every 16 refreshes (~267 ms), NOT every refresh.
+     Gray code flips one bit per increment, so the parity cell (and
+     the low bit cells) otherwise toggle at refresh rate and a
+     multi-refresh auto-exposure in a dim room time-averages them to
+     ~187 gray (0.5^(1/2.2)*255) -- measured exactly that in the
+     first live session, killing every counter decode.  Consumers are
+     unaffected: mv_clock_fit estimates seconds-per-count from data,
+     and hub pairing gates are in counter units. */
+  { const gv=gray((k>>>4) & ((1<<CBITS)-1)); let par=0;
     const bits=[1,0];
     for(let i=CBITS-1;i>=0;i--){ const b=(gv>>>i)&1; par^=b; bits.push(b); }
     bits.push(par, par^1);
@@ -126,7 +135,8 @@ function drawM4(k){
     if(mark(c,r)){ const d0=(C2-MK)/2;
       B(x+d0,y+d0,MK,MK, black?0:1); }
   }
-  { const gv=gray(k&255); let par=0; const bits=[1,0];
+  /* counter hold k>>4: same rationale as the fine strip above */
+  { const gv=gray((k>>>4)&255); let par=0; const bits=[1,0];
     for(let i=7;i>=0;i--){ const b=(gv>>>i)&1; par^=b; bits.push(b); }
     bits.push(par, par^1);
     bits.forEach((b,i)=>{ if(b) B(CX2+CC2*i+22,CY2,MK,CH2,1); }); }
@@ -199,7 +209,8 @@ function tick(t){
     else if(mode===4) drawM4(k); else if(mode===5) drawM5(k);
     else if(mode===6) drawM6(k);
     else drawM0(k);
-    if(log.length<200000) log.push('DSP k='+k+' t='+(t/1000).toFixed(6));
+    if(log.length<200000) log.push('DSP k='+k+' ctr='+(k>>>4)
+                                   +' t='+(t/1000).toFixed(6));
   }
   requestAnimationFrame(tick);
 }

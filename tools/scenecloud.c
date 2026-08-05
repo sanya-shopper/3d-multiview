@@ -103,7 +103,7 @@ static unsigned char *half_undistort(const unsigned char *img, int w,
     unsigned char *tmp, *out;
     double Kinv[9];
 
-    tmp = (unsigned char *)malloc((size_t)hw * hh);
+    tmp = (unsigned char *)calloc((size_t)hw * hh, 1);
     out = (unsigned char *)malloc((size_t)hw * hh);
     if (!tmp || !out) {
         free(tmp);
@@ -533,19 +533,31 @@ int main(int argc, char **argv)
         snprintf(path, sizeof(path), "%s.ply", prefix);
         mv_cloud_write_ply(path, &cloud);
         printf("wrote %s\n", path);
-        /* frame on the 3rd..97th percentile so stragglers cannot zoom
-         * the camera out to nothing */
-        ax = (double *)malloc((size_t)cloud.n * sizeof(double));
+        /* start from the full min/max (always defined), then refine to
+         * the 3rd..97th percentile so stragglers cannot zoom the camera
+         * out to nothing. The min/max seed means lo/hi are never
+         * uninitialized even if the percentile buffer cannot allocate. */
         for (j = 0; j < 3; j++) {
-            if (!ax)
-                break;
-            for (p = 0; p < cloud.n; p++)
-                ax[p] = cloud.xyz[3 * p + j];
-            qsort(ax, (size_t)cloud.n, sizeof(double), mv_cmp_double);
-            lo[j] = ax[(int)(0.03 * (cloud.n - 1))];
-            hi[j] = ax[(int)(0.97 * (cloud.n - 1))];
+            lo[j] = hi[j] = cloud.xyz[j];
+            for (p = 1; p < cloud.n; p++) {
+                double v = cloud.xyz[3 * p + j];
+                if (v < lo[j])
+                    lo[j] = v;
+                if (v > hi[j])
+                    hi[j] = v;
+            }
         }
-        free(ax);
+        ax = (double *)malloc((size_t)cloud.n * sizeof(double));
+        if (ax) {
+            for (j = 0; j < 3; j++) {
+                for (p = 0; p < cloud.n; p++)
+                    ax[p] = cloud.xyz[3 * p + j];
+                qsort(ax, (size_t)cloud.n, sizeof(double), mv_cmp_double);
+                lo[j] = ax[(int)(0.03 * (cloud.n - 1))];
+                hi[j] = ax[(int)(0.97 * (cloud.n - 1))];
+            }
+            free(ax);
+        }
         for (j = 0; j < 3; j++)
             ctr[j] = 0.5 * (lo[j] + hi[j]);
         span = fmax(hi[0] - lo[0], fmax(hi[1] - lo[1], hi[2] - lo[2]));

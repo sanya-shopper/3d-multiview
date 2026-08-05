@@ -44,7 +44,7 @@
 
 typedef struct {
     double K[9], kr[2], interval;
-    char paths[MAXFR][300];
+    char paths[MAXFR][512];
     double mean[MAXFR];
     int nfr;
     /* per-slot representative frames (loaded on demand) */
@@ -80,7 +80,7 @@ static int load_spec(slcam_t *c, const char *spec)
         if (nl)
             *nl = 0;
         if (line[0])
-            snprintf(c->paths[c->nfr++], 300, "%s", line);
+            snprintf(c->paths[c->nfr++], 512, "%s", line);
     }
     fclose(fp);
     return c->nfr > 100 ? MV_OK : MV_ERR;
@@ -206,8 +206,15 @@ static int decode_cam(slcam_t *c, int **colc, int **rowc,
     *rowc = (int *)malloc((size_t)npix * sizeof(int));
     *valid = (unsigned char *)malloc((size_t)npix);
     vb = (unsigned char *)malloc((size_t)npix);
-    if (!*colc || !*rowc || !*valid || !vb)
+    if (!*colc || !*rowc || !*valid || !vb) {
+        free(*colc);
+        free(*rowc);
+        free(*valid);
+        free(vb);
+        *colc = *rowc = NULL;
+        *valid = NULL;
         return MV_ERR;
+    }
     for (b = 0; b < NBITS; b++) {
         fr[b] = c->rep[2 + 2 * b];
         fi[b] = c->rep[2 + 2 * b + 1];
@@ -228,11 +235,11 @@ int main(int argc, char **argv)
 {
     static slcam_t A, B;
     double baseline;
-    double *uv1, *uv2, *x1, *x2;
-    int *colcA, *rowcA, *colcB, *rowcB;
-    unsigned char *validA, *validB;
+    double *uv1 = NULL, *uv2 = NULL, *x1 = NULL, *x2 = NULL;
+    int *colcA = NULL, *rowcA = NULL, *colcB = NULL, *rowcB = NULL;
+    unsigned char *validA = NULL, *validB = NULL;
     double F[9], E[9], R[9], t[3], K1i[9], K2i[9];
-    int nm, i;
+    int nm, i, ret = 1;
 
     if (argc != 5) {
         fprintf(stderr, "usage: %s <baseline_m|0> <camA.spec> "
@@ -243,20 +250,20 @@ int main(int argc, char **argv)
 
     if (load_spec(&A, argv[2]) != MV_OK
         || load_spec(&B, argv[3]) != MV_OK)
-        return 1;
+        goto cleanup;
     printf("camera A: %d frames; camera B: %d frames\n", A.nfr, B.nfr);
     if (scan_means(&A) != MV_OK || scan_means(&B) != MV_OK)
-        return 1;
+        goto cleanup;
     printf("camera A:\n");
     if (load_reps(&A) != MV_OK)
-        return 1;
+        goto cleanup;
     printf("camera B:\n");
     if (load_reps(&B) != MV_OK)
-        return 1;
+        goto cleanup;
 
     if (decode_cam(&A, &colcA, &rowcA, &validA) != MV_OK
         || decode_cam(&B, &colcB, &rowcB, &validB) != MV_OK)
-        return 1;
+        goto cleanup;
     {
         int nva = 0, nvb = 0, npixA = A.w * A.h, npixB = B.w * B.h;
         for (i = 0; i < npixA; i++)
@@ -272,7 +279,7 @@ int main(int argc, char **argv)
     x1 = (double *)malloc(2 * MAXM * sizeof(double));
     x2 = (double *)malloc(2 * MAXM * sizeof(double));
     if (!uv1 || !uv2 || !x1 || !x2)
-        return 1;
+        goto cleanup;
     nm = mv_graycode_match(uv1, uv2, MAXM, colcA, rowcA, validA, A.w,
                            A.h, colcB, rowcB, validB, B.w, B.h, 1920,
                            1080);
@@ -280,14 +287,14 @@ int main(int argc, char **argv)
     if (nm < 100) {
         fprintf(stderr, "too few matches -- views must overlap on lit "
                         "surfaces\n");
-        return 1;
+        goto cleanup;
     }
     undistort_uv(uv1, uv1, nm, A.K, A.kr);
     undistort_uv(uv2, uv2, nm, B.K, B.kr);
 
     if (mv_fundamental_8point_robust(F, uv1, uv2, &nm) != MV_OK) {
         fprintf(stderr, "F estimation failed\n");
-        return 1;
+        goto cleanup;
     }
     printf("after robust trim: %d correspondences\n", nm);
     mv_essential_from_fundamental(E, F, A.K, B.K);
@@ -301,7 +308,7 @@ int main(int argc, char **argv)
     }
     if (mv_essential_pose(R, t, E, x1, x2, nm) != MV_OK) {
         fprintf(stderr, "essential pose failed\n");
-        return 1;
+        goto cleanup;
     }
     {
         double tr = (R[0] + R[4] + R[8] - 1.0) / 2.0, ang;
@@ -375,5 +382,21 @@ int main(int argc, char **argv)
         printf("\ntriangulated %d points -> %s\n", kept, path);
         mv_cloud_free(&cloud);
     }
-    return 0;
+    ret = 0;
+cleanup:
+    free(uv1);
+    free(uv2);
+    free(x1);
+    free(x2);
+    free(colcA);
+    free(rowcA);
+    free(validA);
+    free(colcB);
+    free(rowcB);
+    free(validB);
+    for (i = 0; i < NSLOTS; i++) {
+        free(A.rep[i]);
+        free(B.rep[i]);
+    }
+    return ret;
 }

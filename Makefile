@@ -47,7 +47,7 @@ slreal: tools/slreal.o libmv.a
 replaycam: tools/replaycam.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/replaycam.o libmv.a $(LDLIBS)
 
-livehub: tools/livehub.o libmv.a
+hubengine: tools/livehub.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/livehub.o libmv.a $(LDLIBS)
 
 nettest: tools/nettest.o libmv.a

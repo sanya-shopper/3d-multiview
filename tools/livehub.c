@@ -45,6 +45,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <stdarg.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -107,9 +108,26 @@ static cam_t cams[MAXCAMS];
 static conn_t conns[MAXCONN];
 static pthread_mutex_t mbx = PTHREAD_MUTEX_INITIALIZER;
 static double pitch;
-static const char *recdir = NULL;
+static const char *recdir = NULL;   /* the per-session log directory */
 static FILE *reclog = NULL;
+static FILE *hublog = NULL;          /* session copy of the hub console */
 static volatile sig_atomic_t g_stop = 0;
+
+/* print to the console AND the session hub.log, so the log is
+ * self-contained regardless of how the hub was launched */
+static void hlog(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+    if (hublog) {
+        va_start(ap, fmt);
+        vfprintf(hublog, fmt, ap);
+        va_end(ap);
+        fflush(hublog);
+    }
+}
 
 static void on_signal(int s)
 {
@@ -156,6 +174,14 @@ static unsigned get32(const unsigned char *p)
          | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
 }
 
+static void put32_le(unsigned char *p, unsigned v)
+{
+    p[0] = (unsigned char)(v & 255);
+    p[1] = (unsigned char)((v >> 8) & 255);
+    p[2] = (unsigned char)((v >> 16) & 255);
+    p[3] = (unsigned char)((v >> 24) & 255);
+}
+
 /* append a camera's pushed log line to rec/camlog_<id>.txt (called from
  * the network thread only). This is how remote cameras' diagnostics --
  * fps, drops, errors -- reach the hub without any SSH or file transfer:
@@ -170,6 +196,13 @@ static void camlog(unsigned camid, const unsigned char *text, int len)
     f = fopen(path, "a");
     if (!f)
         return;
+    if (ftell(f) == 0) { /* new file: identify it */
+        time_t nw = time(NULL);
+        char st[64];
+        strftime(st, sizeof(st), "%Y-%m-%d %H:%M:%S", localtime(&nw));
+        fprintf(f, "# multiview camera %u log (pushed to hub) | opened "
+                "%s\n", camid, st);
+    }
     fprintf(f, "[%.3f] ", now_mono());
     fwrite(text, 1, (size_t)len, f);
     fputc('\n', f);
@@ -190,8 +223,8 @@ static cam_t *cam_slot(unsigned camid, int ci)
                 cams[i].conn = ci;
                 return &cams[i];
             }
-            printf("[hub] camid %u already owned by another live "
-                   "connection; frame refused\n", camid);
+            hlog("[hub] camid %u already owned by another live "
+                 "connection; frame refused\n", camid);
             return NULL;
         }
     for (i = 0; i < MAXCAMS; i++)
@@ -211,7 +244,7 @@ static cam_t *cam_slot(unsigned camid, int ci)
             cams[i].conn = ci;
             cams[i].objs = o;
             cams[i].imgs = m;
-            printf("[hub] camera %u joined\n", camid);
+            hlog("[hub] camera %u joined\n", camid);
             return &cams[i];
         }
     /* table full: reclaim a slot that went quiet (a camera restarted
@@ -226,8 +259,8 @@ static cam_t *cam_slot(unsigned camid, int ci)
                     || cams[i].t_latest < cams[stale].t_latest))
                 stale = i;
         if (stale >= 0) {
-            printf("[hub] camera %u replaces quiet camera %u\n",
-                   camid, cams[stale].camid);
+            hlog("[hub] camera %u replaces quiet camera %u\n",
+                 camid, cams[stale].camid);
             free(cams[stale].latest);
             free(cams[stale].work);
             cams[stale].latest = NULL;
@@ -246,7 +279,7 @@ static cam_t *cam_slot(unsigned camid, int ci)
             return &cams[stale];
         }
     }
-    printf("[hub] camera %u refused: %d slots busy\n", camid, MAXCAMS);
+    hlog("[hub] camera %u refused: %d slots busy\n", camid, MAXCAMS);
     return NULL;
 }
 
@@ -308,7 +341,7 @@ static void try_calibrate(cam_t *c)
             c->rms = rms;
             c->calibrated = 1;
             pthread_mutex_unlock(&mbx);
-            printf("[cal] cam %u: fx %.1f fy %.1f cx %.1f cy %.1f "
+            hlog("[cal] cam %u: fx %.1f fy %.1f cx %.1f cy %.1f "
                    "k1 %+.3f k2 %+.3f | RMS %.3f px over %d views\n",
                    c->camid, K[0], K[4], K[2], K[5], kr[0], kr[1],
                    rms, m);
@@ -389,7 +422,7 @@ static void try_extrinsics(void)
                              * (tacc[k][i] - tm[k]);
                     dev += sqrt(d);
                 }
-                printf("[ext] cam %u <-> cam %u: baseline %.3f m  "
+                hlog("[ext] cam %u <-> cam %u: baseline %.3f m  "
                        "t=(%+.3f %+.3f %+.3f)  %d pairs, mean |dt| "
                        "%.1f mm\n", A->camid, B->camid,
                        sqrt(tm[0] * tm[0] + tm[1] * tm[1]
@@ -607,17 +640,22 @@ static void status(void)
         cam_t *c = &cams[i];
         if (!c->used)
             continue;
-        printf("[cam %u] rx %ld | decoded %ld/%ld | ctr %ld | views %d"
-               " | %s", c->camid, c->frames_rx, c->reads_ok,
-               c->decodes, c->valid_ctr, c->nviews,
-               c->calibrated ? "CALIBRATED" : "collecting");
+        double age = now_mono() - c->t_latest;
+        hlog("[cam %u] rx %ld | decoded %ld/%ld | ctr %ld | views %d"
+             " | %s", c->camid, c->frames_rx, c->reads_ok,
+             c->decodes, c->valid_ctr, c->nviews,
+             c->calibrated ? "CALIBRATED" : "collecting");
         if (c->calibrated)
-            printf(" fx %.0f rms %.2f", c->K[0], c->rms);
+            hlog(" fx %.0f rms %.2f", c->K[0], c->rms);
         if (c->last_tier)
-            printf(" | last: tier %d ctr %u dist %.2f m", c->last_tier,
-                   c->last_counter, c->last_dist);
-        printf(" | frame age %.1f s", now_mono() - c->t_latest);
-        printf("\n");
+            hlog(" | last tier %d ctr %u", c->last_tier,
+                 c->last_counter);
+        /* loud flag when a camera that WAS flowing has gone quiet */
+        if (c->frames_rx > 0 && age > 2.0)
+            hlog(" | *** STALLED: no frames for %.0f s ***", age);
+        else
+            hlog(" | frame age %.1f s", age);
+        hlog("\n");
     }
 }
 
@@ -628,22 +666,46 @@ int main(int argc, char **argv)
     double last_status = 0.0;
     pthread_t decoder_th;
 
+    static char sess[600];
+    const char *base;
+    char host[128], stamp[32], started[64];
+    time_t now = time(NULL);
+    struct tm *lt = localtime(&now);
+
     setvbuf(stdout, NULL, _IOLBF, 0); /* live logs must survive kill */
-    if (argc < 3 || argc > 4) {
-        fprintf(stderr, "usage: %s <port> <pitch_mm> [record_dir]\n",
-                argv[0]);
-        return 1;
-    }
-    port = atoi(argv[1]);
-    pitch = atof(argv[2]) * 1e-3;
-    if (argc == 4) {
-        char path[512];
-        recdir = argv[3];
-        mkdir(recdir, 0755);
-        snprintf(path, sizeof(path), "%s/records.txt", recdir);
+    /* every argument is optional, with the deployment defaults baked in:
+     *   hubengine [port] [pitch_mm] [logs_base_dir]   (9900 0.1133 logs) */
+    port = argc > 1 ? atoi(argv[1]) : 9900;
+    pitch = (argc > 2 ? atof(argv[2]) : 0.1133) * 1e-3;
+    base = argc > 3 ? argv[3] : "logs";
+
+    /* one clean, self-identifying directory per session:
+     * <base>/<host>-<YYYYMMDD-HHMMSS>/ -- keeps runs from mixing and
+     * makes it obvious which log is which, from where, and when */
+    if (gethostname(host, sizeof(host)) != 0)
+        strcpy(host, "hub");
+    { char *d = strchr(host, '.'); if (d) *d = 0; }
+    strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", lt);
+    strftime(started, sizeof(started), "%Y-%m-%d %H:%M:%S", lt);
+    mkdir(base, 0755);
+    snprintf(sess, sizeof(sess), "%s/%s-%s", base, host, stamp);
+    if (mkdir(sess, 0755) == 0 || 1) {
+        char path[700];
+        recdir = sess;
+        snprintf(path, sizeof(path), "%s/hub.log", sess);
+        hublog = fopen(path, "w");
+        if (hublog) {
+            fprintf(hublog, "# multiview HUB log | host %s | started %s "
+                    "| port %d\n", host, started, port);
+            fflush(hublog);
+        }
+        snprintf(path, sizeof(path), "%s/records.txt", sess);
         reclog = fopen(path, "w");
-        if (reclog)
+        if (reclog) {
+            fprintf(reclog, "# multiview records | host %s | started %s\n",
+                    host, started);
             mv_session_ver(reclog, MV_PAT_SPEC_VERSION, "hub");
+        }
     }
     signal(SIGPIPE, SIG_IGN);
     {   /* clean shutdown on Ctrl-C / SIGTERM: no SA_RESTART so select
@@ -677,9 +739,9 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    printf("[hub] listening on %d (pitch %.4f mm)%s%s\n", port,
-           pitch * 1000.0, recdir ? ", recording to " : "",
-           recdir ? recdir : "");
+    hlog("[hub] host %s | started %s | listening on %d "
+         "(pitch %.4f mm)\n", host, started, port, pitch * 1000.0);
+    hlog("[hub] logs -> %s/\n", recdir);
     print_hub_ips(port);
     fflush(stdout);
 
@@ -687,6 +749,7 @@ int main(int argc, char **argv)
         fd_set rd;
         struct timeval tv;
         int maxfd = lsock, n;
+        static double last_ack = 0.0;
         FD_ZERO(&rd);
         FD_SET(lsock, &rd);
         for (i = 0; i < MAXCONN; i++)
@@ -840,15 +903,35 @@ int main(int argc, char **argv)
                         c->fresh = 1;
                         c->frames_rx++;
                         if (c->frames_rx == 1)
-                            printf("[hub] >>> camera %u CONNECTED, "
-                                   "frames flowing (%ux%u) <<<\n",
-                                   camid, w, h);
+                            hlog("[hub] >>> camera %u CONNECTED, "
+                                 "frames flowing (%ux%u) <<<\n",
+                                 camid, w, h);
                     }
                 }
                 pthread_mutex_unlock(&mbx);
                 memmove(cn->buf, cn->buf + need, cn->len - need);
                 cn->len -= need;
             }
+        }
+
+        /* ACK each camera ~1/s: send back what we have received and
+         * decoded, so the sender knows the hub is really getting its
+         * frames (not just that TCP accepted them). MVAK | rx | reads. */
+        if (now_mono() - last_ack > 1.0) {
+            last_ack = now_mono();
+            pthread_mutex_lock(&mbx);
+            for (i = 0; i < MAXCAMS; i++) {
+                cam_t *c = &cams[i];
+                unsigned char ak[12];
+                if (!c->used || c->conn < 0
+                    || conns[c->conn].sock < 0)
+                    continue;
+                ak[0] = 'M'; ak[1] = 'V'; ak[2] = 'A'; ak[3] = 'K';
+                put32_le(ak + 4, (unsigned)c->frames_rx);
+                put32_le(ak + 8, (unsigned)c->reads_ok);
+                send(conns[c->conn].sock, ak, 12, 0);
+            }
+            pthread_mutex_unlock(&mbx);
         }
 
         if (now_mono() - last_status > 5.0) {
@@ -863,7 +946,7 @@ int main(int argc, char **argv)
 
     /* clean shutdown: stop the decoder, close everything, free all
      * heap so Valgrind can distinguish real leaks from live state */
-    printf("\n[hub] shutting down\n");
+    hlog("\n[hub] shutting down\n");
     pthread_join(decoder_th, NULL);
 
     /* write a post-mortem summary into the recording dir: per-camera
@@ -926,5 +1009,7 @@ int main(int argc, char **argv)
     close(lsock);
     if (reclog)
         fclose(reclog);
+    if (hublog)
+        fclose(hublog);
     return 0;
 }

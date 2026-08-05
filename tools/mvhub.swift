@@ -25,7 +25,7 @@ let logPath = "\(recdir)/hub.log"
 FileManager.default.createFile(atPath: logPath, contents: nil)
 let logfh = try? FileHandle(forWritingTo: URL(fileURLWithPath: logPath))
 let hub = Process()
-hub.executableURL = kitDir.appendingPathComponent("livehub")
+hub.executableURL = kitDir.appendingPathComponent("hubengine")
 hub.arguments = [String(port), pitch, recdir]
 let pipe = Pipe()
 hub.standardOutput = pipe
@@ -37,7 +37,7 @@ pipe.fileHandleForReading.readabilityHandler = { h in
     logfh?.write(d)                      // into the collection
 }
 do { try hub.run() } catch {
-    FileHandle.standardError.write(Data("cannot start ./livehub (is it beside mvhub?)\n".utf8))
+    FileHandle.standardError.write(Data("cannot start ./hubengine (must be beside hublaptop)\n".utf8))
     exit(1)
 }
 
@@ -60,6 +60,22 @@ func sendLog(_ s: Int32, _ id: UInt32, _ text: String) {
         m.append(UInt8((v >> 16) & 255)); m.append(UInt8((v >> 24) & 255)) }
     le32(id); le32(UInt32(body.count)); m.append(contentsOf: body)
     _ = sendAll(s, m)
+}
+func readAcks(_ g: Grabber, _ s: Int32) {
+    var buf = [UInt8](repeating: 0, count: 4096)
+    let n = buf.withUnsafeMutableBytes { recv(s, $0.baseAddress, 4096, MSG_DONTWAIT) }
+    if n < 12 { return }
+    var i = 0
+    while i + 12 <= n {
+        if buf[i]==0x4D && buf[i+1]==0x56 && buf[i+2]==0x41 && buf[i+3]==0x4B {
+            func u32(_ o: Int) -> UInt32 {
+                UInt32(buf[i+o]) | (UInt32(buf[i+o+1])<<8)
+                | (UInt32(buf[i+o+2])<<16) | (UInt32(buf[i+o+3])<<24) }
+            g.hubRx = u32(4); g.hubDecoded = u32(8)
+            g.lastAck = ProcessInfo.processInfo.systemUptime
+            i += 12
+        } else { i += 1 }
+    }
 }
 func connectLocal(_ port: UInt16) -> Int32 {
     var addr = sockaddr_in()
@@ -92,6 +108,9 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var seq: UInt64 = 0
     var lastSent = 0.0
     var dims = "?"
+    var hubRx: UInt32 = 0
+    var hubDecoded: UInt32 = 0
+    var lastAck = 0.0
     let minGap: Double, sock: Int32
     init(minGap: Double, sock: Int32) { self.minGap = minGap; self.sock = sock }
     func captureOutput(_ o: AVCaptureOutput, didOutput sb: CMSampleBuffer,
@@ -179,13 +198,15 @@ win.contentView = root
 win.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-    if grabber.seq > 0 {
-        banner.textColor = .green
-        banner.stringValue = "● LIVE  camera 1  \(grabber.dims)  ·  sent "
-            + "\(grabber.seq) frames  ·  hub IP + [cal]/[ext] are in the Terminal"
+    readAcks(grabber, sock)
+    if grabber.seq == 0 {
+        banner.textColor = .systemYellow
+        banner.stringValue = "waiting for camera… (grant camera permission if prompted)"
     } else {
-        banner.textColor = .yellow
-        banner.stringValue = "waiting for frames… (grant camera permission if prompted)"
+        banner.textColor = .systemGreen
+        banner.stringValue = "● LIVE  camera 1  \(grabber.dims)  ·  hub got "
+            + "\(grabber.hubRx), decoded \(grabber.hubDecoded)  ·  hub IP + "
+            + "[cal]/[ext] are in the Terminal"
     }
 }
 app.run()

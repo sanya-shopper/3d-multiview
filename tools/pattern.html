@@ -196,6 +196,21 @@ function tick(t){
 }
 requestAnimationFrame(tick);
 
+/* Display pixel pitch = 25.4 / ppi. Apple built-in Retina panels use a
+   handful of ppi values, so the pitch is a LOOKUP, never a ruler
+   measurement. It only scales reported metric distances; intrinsics
+   and geometry do not depend on it. The table is auto-narrowed by the
+   detected backing resolution where that is unambiguous. */
+const PITCH = [
+  {ppi:224, mm:0.1134, who:'MacBook Air 13.6" / 15" (M2 2022 and later)'},
+  {ppi:227, mm:0.1119, who:'MacBook Air 13.3" (M1/Intel), MBP 13.3" Retina'},
+  {ppi:254, mm:0.1000, who:'MacBook Pro 14" / 16" (2021 and later)'},
+  {ppi:226, mm:0.1124, who:'MacBook Pro 15.4" Retina (2013-2019)'}
+];
+function pitchTable(){
+  return PITCH.map(p =>
+    '&nbsp;<b>'+p.mm.toFixed(4)+'</b> mm &nbsp; '+p.who).join('<br>');
+}
 function showInfo(){
   info.style.display = info.style.display==='none'?'block':'none';
   info.innerHTML =
@@ -203,8 +218,9 @@ function showInfo(){
    (mode===1?'2 composite':mode===2?'3 toggle':mode===4?'4 coarse (room range)':mode===5?'5 structured light (projector)':mode===6?'6 mux (near+far)':'0 ladder')+
    '<br>refresh Td &approx; '+Td.toFixed(3)+' ms, frame k='+k+
    '<br>render scale 1:'+scale+' (device px)'+
-   '<br><br>MEASURE: one grid square with a ruler;'+
-   '<br>pitch = measured mm / '+(CELL*scale)+' &rarr; session manifest.'+
+   '<br><br>DISPLAY PITCH (mm/px) -- pick your Mac, no ruler:<br>'+
+   pitchTable()+
+   '<br>(pitch only scales reported distances; intrinsics do not need it)'+
    '<br><br>keys: 1/2/3/4/5/6 mode &middot; f fullscreen &middot; '+
    'd download log &middot; i hide';
 }

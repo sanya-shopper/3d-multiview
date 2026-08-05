@@ -1,7 +1,8 @@
 /* Full-HD reader throughput and decode-parity tests (speedup work
  * item).  The live hub decodes 1920x1080 frames on one thread for two
- * cameras, so seconds/frame is a shipped quantity: these tests pin it
- * with a loose absolute ceiling, and pin decode QUALITY at full HD --
+ * cameras, so per-frame cost is a shipped quantity: these tests pin it
+ * as a ratio to a 640x480 decode (portable across build
+ * configurations -- see decode_ref), and pin decode QUALITY at full HD --
  * corner ids, counter, and sub-0.1 px corner localization against
  * rendered ground truth -- so the fast paths (half-resolution decode
  * plus full-resolution corner polish) cannot silently trade precision
@@ -216,18 +217,86 @@ static void test_coarse_fullhd_parity(void)
     }
 }
 
+/* Machine-and-build speed reference: blind-decode one 640x480 fine
+ * frame.  Absolute seconds are NOT portable here -- at -O2 the hub
+ * worst case runs in 0.34 s, but the same code takes 13.2 s at
+ * -O0 --coverage (40x) and more under ASan, so an absolute ceiling
+ * passes on the dev machine and fails the coverage, sanitizer and
+ * slow-runner CI jobs.  That is exactly how this test first went red:
+ * a flaky gate that says nothing about the reader.
+ *
+ * The reference is deliberately the SAME reader on a SMALLER frame
+ * (the sub-1.5 Mpx path, unchanged by the speedup work), not a
+ * different kind of loop: instrumentation and optimization level scale
+ * both sides together, so the ratio measures algorithmic cost rather
+ * than the build.  A render-based reference was tried first and
+ * rejected -- being a shallow per-pixel loop, it is far less sensitive
+ * to instrumentation than the reader's nested search, and the ratio
+ * still moved 5x between builds.
+ *
+ * What the ratio pins: full-HD decode must cost only a small multiple
+ * of a 640x480 decode.  Before the downscale-first work it was ~40x;
+ * after, ~3x. */
+static unsigned char ref_img[640 * 480];
+
+static double decode_ref(void)
+{
+    mv_camera cam;
+    mv_read_result rr;
+    unsigned long long seed = 3;
+    double t0, best = 0.0;
+    int i;
+    mv_pattern_render(pat, K_FINE);
+    mv_cam_set_K(&cam, 460.0, 460.0, 320.0, 240.0);
+    mv_cam_set_identity_pose(&cam);
+    memset(cam.k, 0, sizeof(cam.k));
+    {   /* frame the pattern at 640x480, mildly tilted */
+        double center[3] = { MV_PAT_W / 2.0 * PITCH,
+                             MV_PAT_H / 2.0 * PITCH, 0.0 };
+        int k;
+        for (k = 0; k < 3; k++)
+            cam.t[k] = -(cam.R[k * 3 + 0] * center[0]
+                         + cam.R[k * 3 + 1] * center[1]
+                         + cam.R[k * 3 + 2] * center[2]);
+        cam.t[2] += 0.42;
+    }
+    mv_render_plane(ref_img, 640, 480, &cam, pat, MV_PAT_W, MV_PAT_H,
+                    PITCH, 128, 0.0, &seed);
+    for (i = 0; i < 3; i++) {
+        double dt;
+        t0 = now_s();
+        mv_read_pattern(&rr, ref_img, 640, 480);
+        dt = now_s() - t0;
+        if (i == 0 || dt < best)
+            best = dt;
+    }
+    return best > 1e-9 ? best : 1e-9;
+}
+
 static void test_speed_fullhd(void)
 {
-    /* Loose absolute ceilings that catch a return of the ~2-4 s/frame
-     * regime without being flaky on slow machines.  The measured
-     * numbers are printed because seconds/frame is the quantity the
-     * live hub ships. */
+    /* Budgets in units of one 640x480 decode (see decode_ref).
+     * Measured, and stable across build configurations because both
+     * sides are the same code:
+     *            fine   coarse   hub worst case
+     *   -O2       2.1x     2.0x       73x
+     *   -O0 cov   1.8x     1.8x       75x
+     * The pre-speedup reader scored ~106x / ~106x / ~1160x (its
+     * 640x480 path, and hence the reference, was already what it is
+     * today), so these limits leave 4-8x headroom above the slowest
+     * observed build while still catching any return to that regime
+     * by an order of magnitude. */
+    const double LIM_FINE = 8.0, LIM_COARSE = 12.0, LIM_HUB = 150.0;
     mv_camera cam;
     mv_read_result rr;
     unsigned long long seed = 7;
-    double t0, t_fine, t_coarse, t_fallback;
-    char buf[160];
+    double t0, t_fine, t_coarse, t_fallback, t_ref;
+    char buf[200];
     int r;
+
+    t_ref = decode_ref();
+    printf("      (speed reference: %.3f s per 640x480 fine decode)\n",
+           t_ref);
 
     mv_pattern_render(pat, K_FINE);
     pose_cam(&cam, 0.70, 1400.0, 0.10, 0.08, 0.0);
@@ -238,8 +307,9 @@ static void test_speed_fullhd(void)
     t_fine = now_s() - t0;
     CHECK(r == MV_OK, "speed: fine full-HD decode succeeds");
     snprintf(buf, sizeof(buf),
-             "speed: fine full-HD decode %.3f s/frame < 1.0", t_fine);
-    CHECK(t_fine < 1.0, buf);
+             "speed: fine full-HD decode %.3f s = %.1fx ref < %.0f",
+             t_fine, t_fine / t_ref, LIM_FINE);
+    CHECK(t_fine / t_ref < LIM_FINE, buf);
 
     mv_pattern2_render(pat, K_COARSE);
     pose_cam(&cam, 2.00, 1400.0, 0.10, 0.08, 0.0);
@@ -255,13 +325,15 @@ static void test_speed_fullhd(void)
     t_coarse = now_s() - t0;
     CHECK(r == MV_OK, "speed: coarse full-HD decode succeeds");
     snprintf(buf, sizeof(buf),
-             "speed: coarse full-HD decode %.3f s/frame < 1.0",
-             t_coarse);
-    CHECK(t_coarse < 1.0, buf);
+             "speed: coarse full-HD decode %.3f s = %.1fx ref "
+             "< %.0f", t_coarse, t_coarse / t_ref, LIM_COARSE);
+    CHECK(t_coarse / t_ref < LIM_COARSE, buf);
     snprintf(buf, sizeof(buf),
              "speed: hub worst case (failed fine %.3f s + coarse) "
-             "%.3f s < 2.0", t_fallback, t_fallback + t_coarse);
-    CHECK(t_fallback + t_coarse < 2.0, buf);
+             "%.3f s = %.1fx ref < %.0f", t_fallback,
+             t_fallback + t_coarse, (t_fallback + t_coarse) / t_ref,
+             LIM_HUB);
+    CHECK((t_fallback + t_coarse) / t_ref < LIM_HUB, buf);
 }
 
 int main(void)

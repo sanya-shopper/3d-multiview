@@ -127,6 +127,7 @@ check: test_mv test_refine test_optimal test_feat test_session test_photo test_b
 	./test_clock_sync
 	./test_hub_solve
 	python3 tests/check_targets.py
+	$(MAKE) doc/multiview.aux
 	python3 tests/check_bib.py
 
 checkbib:
@@ -162,7 +163,16 @@ demo: demo_synthetic demo_calibrate demo_track demo_diagnose \
 	./demo_tsdf
 	./demo_room
 
-doc: doc/multiview.pdf
+doc: doc/multiview.pdf doc/multiview.aux
+
+# tests/check_bib.py reads doc/multiview.aux, a latex byproduct that
+# `make clean` removes while the versioned pdf stays. The pdf is then
+# newer than its sources, so the rule below never fires and `make doc`
+# cannot restore the aux -- which made `make check` fail after a clean
+# with advice ("run make doc first") that did not work. Keying a rule
+# on the aux itself forces the one rebuild that regenerates it.
+doc/multiview.aux:
+	$(MAKE) -B doc/multiview.pdf
 
 doc/multiview.pdf: doc/multiview.tex doc/refs.bib
 	cd doc && pdflatex -interaction=nonstopmode multiview >/dev/null \

@@ -445,8 +445,12 @@ static void try_extrinsics(void)
                 for (j = 0; j < B->nanch && npair < MAXPAIR; j++) {
                     struct anchor *pa = &A->anch[i], *pb = &B->anch[j];
                     double dk;
-                    int relaxed;
-                    if (fabs(pa->t_host - pb->t_host) > 4.0)
+                    int relaxed = pa->dwell && pb->dwell;
+                    /* both dwelling = display verified still: allow
+                     * the slow decoder's 7-15 s anchor spacing to
+                     * still produce cross-camera pairs */
+                    if (fabs(pa->t_host - pb->t_host)
+                        > (relaxed ? 15.0 : 4.0))
                         continue;
                     if (pa->tier == 1 && pb->tier == 1)
                         dk = fabs(pa->k - pb->k);
@@ -456,7 +460,6 @@ static void try_extrinsics(void)
                                          256.0) - 128.0;
                         dk = fabs(d8);
                     }
-                    relaxed = pa->dwell && pb->dwell;
                     if (dk > (relaxed ? 120.0 : 2.0))
                         continue;
                     {
@@ -680,8 +683,13 @@ static void process_cam(cam_t *c, const unsigned char *img, int w, int h)
                 for (i = 0; i < 3; i++)
                     d += (pv->pose.t[i] - pose.t[i])
                          * (pv->pose.t[i] - pose.t[i]);
+                /* 30 s window, not 5: at full-HD the decoder takes
+                 * ~4 s per frame, so consecutive counter-valid
+                 * anchors arrive 7-15 s apart and a 5 s rule can
+                 * never fire (measured live 2026-08-05; the <1 cm
+                 * pose gate still guarantees actual stillness) */
                 an.dwell = sqrt(d) < 0.01
-                           && an.t_host - pv->t_host < 5.0;
+                           && an.t_host - pv->t_host < 30.0;
             }
             c->anch[c->anhead] = an;
             c->anhead = (c->anhead + 1) % MAXANCH;

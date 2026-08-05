@@ -46,6 +46,19 @@ static void put32(unsigned char *p, unsigned v)
     p[3] = (unsigned char)((v >> 24) & 255);
 }
 
+/* push a log line to the hub (MVLG) -- the loopback path exercises the
+ * hub's camera-log collection exactly as a real camera would */
+static void send_log(int sock, unsigned camid, const char *text)
+{
+    unsigned char hdr[12];
+    size_t n = strlen(text);
+    hdr[0] = 'M'; hdr[1] = 'V'; hdr[2] = 'L'; hdr[3] = 'G';
+    put32(hdr + 4, camid);
+    put32(hdr + 8, (unsigned)n);
+    if (send_all(sock, hdr, 12) == 0)
+        send_all(sock, text, n);
+}
+
 int main(int argc, char **argv)
 {
     struct addrinfo hints, *res;
@@ -78,6 +91,11 @@ int main(int argc, char **argv)
     freeaddrinfo(res);
     printf("replaycam %u: %d frames every %.2f s -> %s:%s\n", camid,
            argc - 5, interval, argv[1], argv[2]);
+    {
+        char hello[64];
+        snprintf(hello, sizeof(hello), "replaycam %u connected", camid);
+        send_log(sock, camid, hello);
+    }
 
     for (f = 5; f < argc; f++) {
         unsigned char *img, hdr[32];
@@ -109,8 +127,12 @@ int main(int argc, char **argv)
         }
         free(img);
         seq++;
-        if (seq % 25 == 0)
+        if (seq % 25 == 0) {
+            char st[64];
             printf("  cam %u: sent %llu frames\n", camid, seq);
+            snprintf(st, sizeof(st), "sent %llu frames", seq);
+            send_log(sock, camid, st);
+        }
         {
             struct timespec d;
             d.tv_sec = (time_t)interval;

@@ -1,30 +1,41 @@
 multiview live test kit  (Apple Silicon)
 ========================================
-Nothing to type or memorize. Three MacBooks, three double-clicks.
+macOS blocks DOUBLE-CLICKING tools copied from another Mac (Gatekeeper).
+It does NOT block the same command run in Terminal. So the reliable way
+is: paste ONE line per Mac. Open Terminal first -- press Cmd-Space, type
+"terminal", Return -- then copy a line below, paste (Cmd-V), Return.
 
-  HUB MacBook (also camera 1):  double-click  1-start-hub.command
-      It prints a HUB IP.  Leave this window open; it shows [cal] and
-      [ext] progress. Ctrl-C in it when you're done.
+------------------------------------------------------------------
+HUB MacBook (this one also acts as camera 1) -- paste, Return:
 
-  SECOND camera MacBook:        double-click  2-start-camera.command
-      It asks once for the HUB IP (read it off the hub window), then runs.
+  cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./1-start-hub.command
 
-  PATTERN MacBook:              double-click  3-show-pattern.command
-      A page opens; click it once -> fullscreen, already in calibration
-      (mux) mode. Nothing else to press.
+  It prints a HUB IP and shows [cal]/[ext] progress. Leave it open.
+  Press Ctrl-C in that window when you are done.
+------------------------------------------------------------------
+SECOND camera MacBook -- paste, Return:
 
-Then just give the pattern MOTION where all cameras can see it (shared
-overlap): a $15 motorized turntable is ideal (tilt it ~25 deg, walk
-away ~2 min), or prop it at a few tilts, or slowly hand-rotate ~60 s.
-That is the only manual step, and it is unavoidable: each camera needs
-the pattern at several angles (pose diversity) -- a flat screen cannot
-fake that in software. All cameras calibrate at once; the shared
-display counter yields the camera-to-camera geometry for free.
+  cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./2-start-camera.command
 
-First double-click may hit macOS Gatekeeper: right-click the .command
--> Open -> Open (once per file). The scripts clear the flag for the
-binaries themselves.
+  It asks once for the HUB IP (read it off the hub window).
+------------------------------------------------------------------
+PATTERN MacBook -- nothing to unblock, just double-click:
 
-Distances note: NO ruler. The 0.1133 built-in is exactly a MacBook Air
-13.6"/15"; other Macs are one glance at the pattern page's info (press
-i). Pitch only scales reported distances -- intrinsics never need it.
+  pattern.html   (opens your browser)  ->  click the page once.
+
+  It goes fullscreen, already in calibration (mux) mode. Nothing to type.
+------------------------------------------------------------------
+
+After that first paste on a Mac, the block is cleared for good there --
+you can just double-click 1-start-hub / 2-start-camera next time.
+
+THEN: give the pattern MOTION where all cameras can see it (shared
+overlap). A $15 motorized turntable is ideal -- tilt it ~25 deg, walk
+away ~2 min. Or prop it at a few tilts, or slowly hand-rotate ~60 s.
+That is the one unavoidable manual step: each camera needs the pattern
+at several angles (pose diversity); a flat screen cannot fake that.
+All cameras calibrate at once; the shared counter gives the geometry.
+
+Distances: NO ruler. 0.1133 is exactly a MacBook Air 13.6"/15"; other
+Macs are one glance at the pattern page info (press i). Pitch only
+scales reported distances -- intrinsics never need it.

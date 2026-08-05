@@ -44,6 +44,18 @@ annotate: tools/annotate.o libmv.a
 slreal: tools/slreal.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/slreal.o libmv.a $(LDLIBS)
 
+replaycam: tools/replaycam.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tools/replaycam.o libmv.a $(LDLIBS)
+
+livehub: tools/livehub.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tools/livehub.o libmv.a $(LDLIBS)
+
+nettest: tools/nettest.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tools/nettest.o libmv.a $(LDLIBS)
+
+stream_cam_v4l2: tools/stream_cam_v4l2.o
+	$(CC) $(CFLAGS) -o $@ tools/stream_cam_v4l2.o $(LDLIBS)
+
 demo_patternsim: demo/patternsim.o libmv.a
 	$(CC) $(CFLAGS) -o $@ demo/patternsim.o libmv.a $(LDLIBS)
 
@@ -125,7 +137,7 @@ doc/multiview.pdf: doc/multiview.tex doc/refs.bib
 	&& pdflatex -interaction=nonstopmode multiview >/dev/null
 
 clean:
-	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o demo/roomsim.o demo/slightsim.o tools/calibreal.o tools/scenecloud.o tools/rigcalib.o tools/annotate.o tools/slreal.o tests/test_mv.o tests/test_refine.o tests/test_optimal.o tests/test_feat.o tests/test_session.o tests/test_photo.o tests/test_bundle.o tests/test_mux.o libmv.a \
+	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o demo/roomsim.o demo/slightsim.o tools/calibreal.o tools/scenecloud.o tools/rigcalib.o tools/annotate.o tools/slreal.o tools/replaycam.o tools/livehub.o tests/test_mv.o tests/test_refine.o tests/test_optimal.o tests/test_feat.o tests/test_session.o tests/test_photo.o tests/test_bundle.o tests/test_mux.o libmv.a \
 	      demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv out_cloud.ply out_track.ply \
 	      target_letter.pgm \
 	      doc/*.aux doc/*.log doc/*.bbl doc/*.blg doc/*.out doc/*.toc doc/*.brf

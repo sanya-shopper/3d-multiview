@@ -45,3 +45,8 @@ test_session
 test_photo
 test_bundle
 test_mux
+replaycam
+livehub
+stream_cam
+nettest
+stream_cam_v4l2

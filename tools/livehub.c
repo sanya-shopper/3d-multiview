@@ -394,6 +394,7 @@ static void try_calibrate(cam_t *c)
 static void try_extrinsics(void)
 {
     static unsigned char pair_said[MAXCAMS][MAXCAMS];
+    static int npair_best[MAXCAMS][MAXCAMS];
     int a, b;
     for (a = 0; a < MAXCAMS; a++)
         for (b = a + 1; b < MAXCAMS; b++) {
@@ -435,6 +436,15 @@ static void try_extrinsics(void)
                         npair++;
                     }
                 }
+            }
+            /* audible progress below the npair>=3 threshold: the
+             * operator holding a dwell cannot see that matches are
+             * (or are not) accumulating */
+            if (npair > npair_best[a][b]) {
+                npair_best[a][b] = npair;
+                if (npair < 3 && !pair_said[a][b])
+                    say("cameras %u and %u matched, keep holding",
+                        A->camid, B->camid);
             }
             if (npair >= 3) {
                 double U[9], S[3], V[9], Vt[9], Rm[9], tm[3];
@@ -510,7 +520,17 @@ static void process_cam(cam_t *c, const unsigned char *img, int w, int h)
     c->last_counter = rr.counter_valid ? rr.counter : 0;
     if (rr.counter_valid)
         c->valid_ctr++;
-    pthread_mutex_unlock(&mbx);
+    {
+        /* counter lock is the prerequisite for pairing (anchors need
+         * the shared clock), and its absence is invisible without a
+         * screen: announce the first one (live-session debug: cam 2
+         * decoded corners for 40 min while an occluded counter strip
+         * silently starved the extrinsics of anchors) */
+        int first_ctr = rr.counter_valid && c->valid_ctr == 1;
+        pthread_mutex_unlock(&mbx);
+        if (first_ctr)
+            say("camera %u reading the clock", c->camid);
+    }
 
     if (recdir && reclog) {
         char path[512], camname[32];

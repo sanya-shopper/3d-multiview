@@ -27,3 +27,60 @@ jobs:
         run: sh deploy/build-linux.sh
       - name: nettest selftest
         run: ./nettest --selftest
+
+  ubuntu-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: build and test under ASan+UBSan
+        env:
+          CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: sh deploy/build-linux.sh
+      - name: live-stack stress under ASan (fuzz + live calibration)
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          make genframes
+          sh deploy/stress-live.sh 1
+
+  ubuntu-tsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: live stack under ThreadSanitizer
+        env:
+          CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g -fsanitize=thread
+          TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1
+        run: |
+          make libmv.a livehub replaycam nettest genframes
+          sh deploy/stress-live.sh 0
+
+  ubuntu-coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: build and run suites with coverage
+        env:
+          CFLAGS: -std=c99 -pedantic -Wall -Wextra -O0 -g --coverage
+        run: sh deploy/build-linux.sh
+      - name: coverage report
+        run: |
+          pip install gcovr >/dev/null
+          mkdir -p covhtml
+          gcovr -r . --filter 'src/' --filter 'include/' \
+                --html-details covhtml/index.html \
+                --print-summary
+          echo '## Coverage (src/, line/branch)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          gcovr -r . --filter 'src/' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: covhtml/

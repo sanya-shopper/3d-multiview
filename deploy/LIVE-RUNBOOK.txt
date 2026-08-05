@@ -18,6 +18,11 @@ PATTERN laptop
     open ~/Desktop/multiview-live/pattern.html    (click the page once)
 
 Give the pattern motion where both cameras see it (turntable / tilt).
+You do NOT need to watch any screen: the laptops SPEAK the milestones
+("hub ready", "camera 2 connected", "hub is decoding camera 2",
+"camera 2 calibrated", "cameras 1 and 2 paired, baseline ...",
+"camera 2 stalled" / "camera 2 back"). Turn the volume up on all
+laptops; set MV_MUTE=1 in the environment to silence.
 Watch the hub Terminal for [cal] then [ext]. Each run's full logs land
 in a fresh, dated folder:  logs/<hostname>-<date-time>/  (frames,
 records.txt, camlog_<id>.txt, hub.log, summary.txt).

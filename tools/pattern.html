@@ -8,6 +8,7 @@
        1  mode M2: composite pattern, counter advancing (calibration)
        4  mode M4: coarse tier (spec v2) -- room-range calibration
        5  mode M5: structured-light stripe sequence (for a projector)
+       6  mode M6: mux (near+far) -- tiers alternate in 64-frame blocks
        2  mode M3: full-screen toggle (rolling-shutter banding)
        3  mode M0: flat gray ladder (radiometrics)
        f  fullscreen        i  info overlay        d  download DSP log
@@ -161,6 +162,14 @@ function drawM5(k){
   if (!m5frames) buildM5();
   g2.drawImage(m5frames[Math.floor(k/30)%46],0,0);
 }
+/* M6: temporal multiplexing (mv/pattern.h MV_PAT_MUX_BLOCK): fine and
+   coarse tiers alternate in 64-refresh blocks so near and far cameras
+   share one capture session; both tiers encode the same counter k
+   (coarse = k mod 256), readers reconcile wrap-aware mod 256. */
+const MUXBLK=64;
+function drawM6(k){
+  if (((Math.floor(k/MUXBLK))&1)===0) drawM2(k); else drawM4(k);
+}
 function drawM0(k){ const lv=[0,64,128,192,255];
   const l=lv[Math.floor(k/180)%lv.length];      /* ~3 s per step */
   g2.fillStyle=`rgb(${l},${l},${l})`; g2.fillRect(0,0,PW,PH); }
@@ -179,6 +188,7 @@ function tick(t){
     k = Math.round((t - t0)/Td);
     if(mode===1) drawM2(k); else if(mode===2) drawM3(k);
     else if(mode===4) drawM4(k); else if(mode===5) drawM5(k);
+    else if(mode===6) drawM6(k);
     else drawM0(k);
     if(log.length<200000) log.push('DSP k='+k+' t='+(t/1000).toFixed(6));
   }
@@ -190,12 +200,12 @@ function showInfo(){
   info.style.display = info.style.display==='none'?'block':'none';
   info.innerHTML =
    'multiview pattern spec v'+SPECVER+' &nbsp; mode M'+
-   (mode===1?'2 composite':mode===2?'3 toggle':mode===4?'4 coarse (room range)':mode===5?'5 structured light (projector)':'0 ladder')+
+   (mode===1?'2 composite':mode===2?'3 toggle':mode===4?'4 coarse (room range)':mode===5?'5 structured light (projector)':mode===6?'6 mux (near+far)':'0 ladder')+
    '<br>refresh Td &approx; '+Td.toFixed(3)+' ms, frame k='+k+
    '<br>render scale 1:'+scale+' (device px)'+
    '<br><br>MEASURE: one grid square with a ruler;'+
    '<br>pitch = measured mm / '+(CELL*scale)+' &rarr; session manifest.'+
-   '<br><br>keys: 1/2/3/4/5 mode &middot; f fullscreen &middot; '+
+   '<br><br>keys: 1/2/3/4/5/6 mode &middot; f fullscreen &middot; '+
    'd download log &middot; i hide';
 }
 function dl(){
@@ -206,6 +216,7 @@ function dl(){
 addEventListener('keydown',e=>{
   if(e.key==='1')mode=1; else if(e.key==='2')mode=2;
   else if(e.key==='3')mode=3; else if(e.key==='4')mode=4; else if(e.key==='5')mode=5;
+  else if(e.key==='6')mode=6;
   else if(e.key==='f')
     (document.fullscreenElement?document.exitFullscreen()
      :document.documentElement.requestFullscreen());
@@ -215,7 +226,7 @@ addEventListener('keydown',e=>{
 /* touch: tap cycles mode, two-finger tap = info (for the iPhone case) */
 addEventListener('touchend',e=>{
   if(e.touches.length===0 && e.changedTouches.length===1)
-    mode = mode%5+1;
+    mode = mode%6+1;
   else showInfo();
 });
 </script>

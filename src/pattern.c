@@ -253,3 +253,18 @@ int mv_pattern_selftest(void)
                 return MV_ERR;
     return MV_OK;
 }
+
+/* ---- temporal multiplexing (mv/pattern.h) ------------------------- */
+
+int mv_pattern_mux_tier(unsigned counter)
+{
+    return ((counter / MV_PAT_MUX_BLOCK) & 1u) == 0 ? 1 : 2;
+}
+
+void mv_pattern_mux_render(unsigned char *img, unsigned counter)
+{
+    if (mv_pattern_mux_tier(counter) == 1)
+        mv_pattern_render(img, counter);
+    else
+        mv_pattern2_render(img, counter);
+}

@@ -265,6 +265,91 @@ static int send_frame(int s, const unsigned char *buf, size_t len,
     return 0;
 }
 
+/* ---- hub -> camera channel (clock sync) --------------------------
+ * The hub piggybacks 12-byte messages on this same TCP connection:
+ *   "MVAK" | u32 rx | u32 decoded    liveness ack (ignored here)
+ *   "MVPB" | f64 t_hub_send          clock-sync probe (~1 Hz)
+ * A probe is answered immediately with
+ *   "MVTS" | u32 camid | f64 t_hub_echo | f64 t_cam
+ * where t_hub_echo is the probe's payload copied BIT-EXACTLY (raw
+ * bytes, never through a double) and t_cam is CLOCK_MONOTONIC at
+ * reply time -- the same clock the MVFR headers carry, which is what
+ * lets the hub map capture timestamps onto its own clock.
+ *
+ * Incoming bytes can arrive split at ANY boundary (the mirror image
+ * of the torn-frame invariant above), so a small carry buffer keeps
+ * the partial tail (< 12 bytes) between drain calls; unrecognized
+ * bytes are skipped one at a time until the next magic. */
+static unsigned char g_rxbuf[256];
+static size_t g_rxlen;
+
+/* the reply goes out whole or not at all on this non-blocking socket:
+ * if the FIRST byte cannot be written the probe is skipped (nothing
+ * torn, the next probe is a second away); once committed, short polls
+ * finish the message -- only a hub dead for >2 s aborts mid-message,
+ * and that connection is done for anyway */
+static void send_mvts(int s, const unsigned char *p, size_t len)
+{
+    size_t off = 0;
+    int polls = 0;
+    while (off < len) {
+        ssize_t k = send(s, p + off, len - off, MSG_NOSIGNAL);
+        if (k > 0) {
+            off += (size_t)k;
+            continue;
+        }
+        if (k < 0 && errno == EINTR)
+            continue;
+        if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pf;
+            if (off == 0)
+                return; /* backlogged: skip this probe entirely */
+            if (++polls > 20)
+                return; /* hub wedged mid-reply: give up */
+            pf.fd = s;
+            pf.events = POLLOUT;
+            pf.revents = 0;
+            (void)poll(&pf, 1, 100);
+            continue;
+        }
+        return; /* dead socket: the frame path will notice */
+    }
+}
+
+static void drain_hub(int s, unsigned camid)
+{
+    size_t i = 0;
+
+    if (g_rxlen < sizeof(g_rxbuf)) {
+        ssize_t k = recv(s, g_rxbuf + g_rxlen,
+                         sizeof(g_rxbuf) - g_rxlen, MSG_DONTWAIT);
+        if (k > 0)
+            g_rxlen += (size_t)k;
+    }
+    while (i + 12 <= g_rxlen) {
+        if (memcmp(g_rxbuf + i, "MVAK", 4) == 0) {
+            i += 12;
+            continue;
+        }
+        if (memcmp(g_rxbuf + i, "MVPB", 4) == 0) {
+            unsigned char rep[24];
+            unsigned long long bits;
+            double t = now_mono();
+            rep[0] = 'M'; rep[1] = 'V'; rep[2] = 'T'; rep[3] = 'S';
+            put32(rep + 4, camid);
+            memcpy(rep + 8, g_rxbuf + i + 4, 8); /* bit-exact echo */
+            memcpy(&bits, &t, 8);
+            put64(rep + 16, bits);
+            send_mvts(s, rep, sizeof(rep));
+            i += 12;
+            continue;
+        }
+        i++; /* resync byte by byte */
+    }
+    memmove(g_rxbuf, g_rxbuf + i, g_rxlen - i);
+    g_rxlen -= i;
+}
+
 int main(int argc, char **argv)
 {
     const char *device = "/dev/video0";
@@ -465,6 +550,10 @@ int main(int argc, char **argv)
         struct v4l2_buffer buf;
         int r;
         double now;
+
+        /* answer any pending clock-sync probes once per iteration;
+         * non-blocking either way, so the capture cadence is kept */
+        drain_hub(sock, camid);
 
         FD_ZERO(&fds);
         FD_SET(g_vfd, &fds);

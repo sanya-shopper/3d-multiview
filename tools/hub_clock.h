@@ -6,8 +6,9 @@
  * tools/stream_cam_v4l2.c belong to the CLOCK-SYNC work item ONLY.
  * livehub.c is FROZEN during the parallel phase; the hooks below are
  * already wired there (probe on the 1 Hz ACK tick, MVTS parse in the
- * network loop, hub_clock_map() at anchor-gating time) and v0 stubs
- * keep behavior identical until this module is implemented.
+ * network loop, hub_clock_map() at anchor-gating time).  hub_clock.c
+ * implements the per-camera estimator behind these four calls; see
+ * its header comment for the model and the robustness gates.
  *
  * WIRE FORMAT (fixed by this scaffold; little-endian):
  *   hub -> camera, ~1 Hz, piggybacked on the ACK tick:

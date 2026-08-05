@@ -27,7 +27,7 @@ if [ $NS -ne 0 ]; then
     cat "$NLOG"
     echo "--- hub log (sanitizer reports live here) ---"
     cat "$HLOG"
-    kill $HUB 2>/dev/null
+    kill -TERM $HUB 2>/dev/null
     exit 1
 fi
 
@@ -35,7 +35,7 @@ echo "--- live calibration stream (3 passes over 60 frames) ---"
 FR=$(ls "$FDIR"/f*.pgm)
 ./replaycam 127.0.0.1 $PORT 1 0.5 $FR $FR $FR > /dev/null 2>&1
 sleep 5
-kill $HUB 2>/dev/null
+kill -TERM $HUB 2>/dev/null
 wait $HUB 2>/dev/null
 
 echo "--- hub log tail ---"

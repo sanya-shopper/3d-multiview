@@ -58,9 +58,15 @@
 typedef struct {
     int used;
     unsigned camid;
-    int w, h;
+    int conn;               /* owning connection index, -1 = none:
+                             * binds a camid to one socket so two
+                             * cameras sharing an id cannot merge */
+    int w, h;               /* dims of `latest` (mutex-guarded) */
     unsigned char *latest;  /* written by network thread (mutex) */
-    unsigned char *work;    /* decoder-owned copy */
+    unsigned char *work;    /* DECODER-OWNED: allocated and read only by
+                             * the decoder thread; the network thread
+                             * must never touch it */
+    int workcap;            /* capacity of work in bytes */
     int busy;               /* decoder mid-decode: slot must not be
                              * reclaimed (mutex-guarded flag) */
     double t_latest;
@@ -73,7 +79,9 @@ typedef struct {
     int nviews, last_calib_n;
     int calibrated;
     double K[9], kr[2], rms;
-    /* extrinsic anchors: display pose at decoded counter */
+    /* extrinsic anchors: display pose at decoded counter. Ring buffer:
+     * late, wide-baseline dwells must not be lost once the array fills
+     * (the informative poses arrive over minutes). */
     struct anchor {
         double k;      /* counter (full for fine, mod 256 for coarse) */
         int tier;
@@ -81,7 +89,8 @@ typedef struct {
         double t_host; /* hub receive time */
         mv_camera pose;
     } anch[MAXANCH];
-    int nanch;
+    int nanch;         /* valid anchors, capped at MAXANCH */
+    int anhead;        /* ring write index */
     int last_tier;
     unsigned last_counter;
     double last_dist;
@@ -99,6 +108,13 @@ static pthread_mutex_t mbx = PTHREAD_MUTEX_INITIALIZER;
 static double pitch;
 static const char *recdir = NULL;
 static FILE *reclog = NULL;
+static volatile sig_atomic_t g_stop = 0;
+
+static void on_signal(int s)
+{
+    (void)s;
+    g_stop = 1;
+}
 
 static double now_mono(void)
 {
@@ -113,13 +129,24 @@ static unsigned get32(const unsigned char *p)
          | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
 }
 
-/* called from the network thread with mbx HELD */
-static cam_t *cam_slot(unsigned camid)
+/* called from the network thread with mbx HELD. ci = the connection
+ * index the frame arrived on; a camid is bound to one connection so a
+ * second camera claiming an in-use id is refused, not silently merged. */
+static cam_t *cam_slot(unsigned camid, int ci)
 {
     int i;
     for (i = 0; i < MAXCAMS; i++)
-        if (cams[i].used && cams[i].camid == camid)
-            return &cams[i];
+        if (cams[i].used && cams[i].camid == camid) {
+            if (cams[i].conn == ci)
+                return &cams[i];
+            if (cams[i].conn < 0) { /* prior owner disconnected */
+                cams[i].conn = ci;
+                return &cams[i];
+            }
+            printf("[hub] camid %u already owned by another live "
+                   "connection; frame refused\n", camid);
+            return NULL;
+        }
     for (i = 0; i < MAXCAMS; i++)
         if (!cams[i].used) {
             double (*o)[2 * MV_READ_MAXC] =
@@ -134,6 +161,7 @@ static cam_t *cam_slot(unsigned camid)
             memset(&cams[i], 0, sizeof(cams[i]));
             cams[i].used = 1;
             cams[i].camid = camid;
+            cams[i].conn = ci;
             cams[i].objs = o;
             cams[i].imgs = m;
             printf("[hub] camera %u joined\n", camid);
@@ -157,14 +185,16 @@ static cam_t *cam_slot(unsigned camid)
             free(cams[stale].work);
             cams[stale].latest = NULL;
             cams[stale].work = NULL;
+            cams[stale].workcap = 0;
             cams[stale].camid = camid;
+            cams[stale].conn = ci;
             cams[stale].w = cams[stale].h = 0;
             cams[stale].fresh = 0;
             cams[stale].frames_rx = cams[stale].decodes = 0;
             cams[stale].reads_ok = cams[stale].valid_ctr = 0;
             cams[stale].nviews = cams[stale].last_calib_n = 0;
             cams[stale].calibrated = 0;
-            cams[stale].nanch = 0;
+            cams[stale].nanch = cams[stale].anhead = 0;
             cams[stale].last_tier = 0;
             return &cams[stale];
         }
@@ -322,16 +352,18 @@ static void try_extrinsics(void)
         }
 }
 
-/* decode the freshest frame of one camera; all downstream state flows
- * from here */
-static void process_cam(cam_t *c)
+/* decode a camera's frame. img/w/h are a decoder-private snapshot (the
+ * shared c->work/c->w/c->h must never be read here -- the network
+ * thread can resize them concurrently); results are published into c
+ * under mbx. */
+static void process_cam(cam_t *c, const unsigned char *img, int w, int h)
 {
     mv_read_result rr;
     int tier = 1, i;
 
     int read_ok;
-    read_ok = mv_read_pattern(&rr, c->work, c->w, c->h) == MV_OK;
-    if (!read_ok && mv_read_coarse(&rr, c->work, c->w, c->h) == MV_OK) {
+    read_ok = mv_read_pattern(&rr, img, w, h) == MV_OK;
+    if (!read_ok && mv_read_coarse(&rr, img, w, h) == MV_OK) {
         read_ok = 1;
         tier = 2;
     }
@@ -354,7 +386,7 @@ static void process_cam(cam_t *c)
         snprintf(path, sizeof(path), "%s/cam%u_%06ld.pgm", recdir,
                  c->camid, c->reads_ok);
         snprintf(camname, sizeof(camname), "%u", c->camid);
-        mv_pgm_write(path, c->work, c->w, c->h);
+        mv_pgm_write(path, img, w, h);
         mv_session_frm(reclog, camname, c->t_latest, (int)c->reads_ok);
         mv_session_read(reclog, camname, c->t_latest, &rr, NULL);
     }
@@ -422,32 +454,49 @@ static void process_cam(cam_t *c)
         if (mv_calib_plane_pose(&pose, c->K, obj, und, rr.n) == MV_OK) {
             double cx = MV_PAT_W / 2.0 * pitch;
             double cy = MV_PAT_H / 2.0 * pitch;
+            struct anchor an;
+            an.k = (double)rr.counter;
+            an.tier = tier;
+            an.t_host = now_mono();
+            an.pose = pose;
+            an.dwell = 0;
+            /* append to the ring under the lock; try_extrinsics reads
+             * every camera's anchors/state, so it runs locked too */
             pthread_mutex_lock(&mbx);
             c->last_dist = pose.R[6] * cx + pose.R[7] * cy + pose.t[2];
-            pthread_mutex_unlock(&mbx);
-            if (c->nanch < MAXANCH) {
-                struct anchor *an = &c->anch[c->nanch];
-                an->k = (double)rr.counter;
-                an->tier = tier;
-                an->t_host = now_mono();
-                an->pose = pose;
-                an->dwell = 0;
-                if (c->nanch > 0) {
-                    struct anchor *pv = &c->anch[c->nanch - 1];
-                    double d = 0.0;
-                    for (i = 0; i < 3; i++)
-                        d += (pv->pose.t[i] - pose.t[i])
-                             * (pv->pose.t[i] - pose.t[i]);
-                    an->dwell = sqrt(d) < 0.01
-                                && an->t_host - pv->t_host < 5.0;
-                }
-                pthread_mutex_lock(&mbx);
-                c->nanch++;
-                pthread_mutex_unlock(&mbx);
-                try_extrinsics();
+            if (c->nanch > 0) {
+                int prev = (c->anhead - 1 + MAXANCH) % MAXANCH;
+                struct anchor *pv = &c->anch[prev];
+                double d = 0.0;
+                for (i = 0; i < 3; i++)
+                    d += (pv->pose.t[i] - pose.t[i])
+                         * (pv->pose.t[i] - pose.t[i]);
+                an.dwell = sqrt(d) < 0.01
+                           && an.t_host - pv->t_host < 5.0;
             }
+            c->anch[c->anhead] = an;
+            c->anhead = (c->anhead + 1) % MAXANCH;
+            if (c->nanch < MAXANCH)
+                c->nanch++;
+            try_extrinsics();
+            pthread_mutex_unlock(&mbx);
         }
     }
+}
+
+/* close connection ci and release any camid it owned, so a camera that
+ * reconnects (same or new id) is accepted rather than locked out */
+static void release_conn(int ci)
+{
+    int j;
+    close(conns[ci].sock);
+    conns[ci].sock = -1;
+    conns[ci].len = 0;
+    pthread_mutex_lock(&mbx);
+    for (j = 0; j < MAXCAMS; j++)
+        if (cams[j].used && cams[j].conn == ci)
+            cams[j].conn = -1;
+    pthread_mutex_unlock(&mbx);
 }
 
 /* decoder thread: the reader is non-reentrant (static buffers), so one
@@ -457,20 +506,30 @@ static void *decoder_main(void *arg)
 {
     int rr_next = 0;
     (void)arg;
-    for (;;) {
+    while (!g_stop) {
         cam_t *pick = NULL;
-        int i;
+        int i, dw = 0, dh = 0;
         pthread_mutex_lock(&mbx);
         for (i = 0; i < MAXCAMS; i++) {
             cam_t *c = &cams[(rr_next + i) % MAXCAMS];
             if (c->used && c->fresh && c->latest) {
                 size_t sz = (size_t)c->w * c->h;
-                if (!c->work)
-                    c->work = malloc(sz);
-                if (c->work) {
+                /* work is decoder-owned: grow it here (under the lock,
+                 * where c->w/c->h are stable) and never from the
+                 * network thread */
+                if (c->workcap < (int)sz) {
+                    unsigned char *nb = realloc(c->work, sz);
+                    if (nb) {
+                        c->work = nb;
+                        c->workcap = (int)sz;
+                    }
+                }
+                if (c->workcap >= (int)sz) {
                     memcpy(c->work, c->latest, sz);
                     c->fresh = 0;
                     c->busy = 1;
+                    dw = c->w;
+                    dh = c->h;
                     pick = c;
                     rr_next = ((rr_next + i) % MAXCAMS) + 1;
                 }
@@ -479,7 +538,9 @@ static void *decoder_main(void *arg)
         }
         pthread_mutex_unlock(&mbx);
         if (pick) {
-            process_cam(pick);
+            /* pick->work stays valid: busy blocks reclaim, and the
+             * network thread never frees/resizes work */
+            process_cam(pick, pick->work, dw, dh);
             pthread_mutex_lock(&mbx);
             pick->busy = 0;
             pthread_mutex_unlock(&mbx);
@@ -518,6 +579,7 @@ int main(int argc, char **argv)
     int port, lsock, i;
     struct sockaddr_in addr;
     double last_status = 0.0;
+    pthread_t decoder_th;
 
     setvbuf(stdout, NULL, _IOLBF, 0); /* live logs must survive kill */
     if (argc < 3 || argc > 4) {
@@ -537,6 +599,14 @@ int main(int argc, char **argv)
             mv_session_ver(reclog, MV_PAT_SPEC_VERSION, "hub");
     }
     signal(SIGPIPE, SIG_IGN);
+    {   /* clean shutdown on Ctrl-C / SIGTERM: no SA_RESTART so select
+         * returns EINTR and the loop notices g_stop */
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = on_signal;
+        sigaction(SIGINT, &sa, NULL);
+        sigaction(SIGTERM, &sa, NULL);
+    }
 
     lsock = socket(AF_INET, SOCK_STREAM, 0);
     {
@@ -555,8 +625,7 @@ int main(int argc, char **argv)
     for (i = 0; i < MAXCONN; i++)
         conns[i].sock = -1;
     {
-        pthread_t th;
-        if (pthread_create(&th, NULL, decoder_main, NULL) != 0) {
+        if (pthread_create(&decoder_th, NULL, decoder_main, NULL) != 0) {
             fprintf(stderr, "cannot start decoder thread\n");
             return 1;
         }
@@ -565,7 +634,7 @@ int main(int argc, char **argv)
            pitch * 1000.0, recdir ? ", recording to " : "",
            recdir ? recdir : "");
 
-    for (;;) {
+    while (!g_stop) {
         fd_set rd;
         struct timeval tv;
         int maxfd = lsock, n;
@@ -580,10 +649,14 @@ int main(int argc, char **argv)
         tv.tv_sec = 0;
         tv.tv_usec = 100000;
         n = select(maxfd + 1, &rd, NULL, NULL, &tv);
-        if (n < 0 && errno != EINTR) {
-            fprintf(stderr, "[hub] select failed: %s\n",
-                    strerror(errno));
-            return 1;
+        if (n < 0) {
+            /* EINTR is routine; other errors (EBADF from a raced fd,
+             * transient ENOMEM) must not tear the whole rig down --
+             * log and retry rather than exit mid-deployment */
+            if (errno != EINTR)
+                fprintf(stderr, "[hub] select: %s (continuing)\n",
+                        strerror(errno));
+            continue;
         }
 
         if (n > 0 && FD_ISSET(lsock, &rd)) {
@@ -591,17 +664,26 @@ int main(int argc, char **argv)
             if (s >= 0) {
                 for (i = 0; i < MAXCONN; i++)
                     if (conns[i].sock < 0) {
-                        conns[i].sock = s;
-                        conns[i].len = 0;
                         if (!conns[i].buf) {
                             conns[i].cap = 1 << 22;
                             conns[i].buf = malloc(conns[i].cap);
+                            if (!conns[i].buf) { /* refuse cleanly */
+                                printf("[hub] no memory for connection "
+                                       "buffer; refusing\n");
+                                close(s);
+                                break;
+                            }
                         }
+                        conns[i].sock = s;
+                        conns[i].len = 0;
                         printf("[hub] connection accepted\n");
                         break;
                     }
-                if (i == MAXCONN)
+                if (i == MAXCONN) {
+                    printf("[hub] all %d connection slots busy; "
+                           "refusing\n", MAXCONN);
                     close(s);
+                }
             }
         }
 
@@ -615,9 +697,7 @@ int main(int argc, char **argv)
                 if (!nb) { /* drop the connection, not the hub */
                     printf("[hub] out of buffer memory; dropping "
                            "connection\n");
-                    close(cn->sock);
-                    cn->sock = -1;
-                    cn->len = 0;
+                    release_conn(i);
                     continue;
                 }
                 cn->cap *= 2;
@@ -626,8 +706,7 @@ int main(int argc, char **argv)
             k = recv(cn->sock, cn->buf + cn->len, 65536, 0);
             if (k <= 0) {
                 printf("[hub] connection closed\n");
-                close(cn->sock);
-                cn->sock = -1;
+                release_conn(i);
                 continue;
             }
             cn->len += (size_t)k;
@@ -669,21 +748,21 @@ int main(int argc, char **argv)
                 if (cn->len < need)
                     break;
                 pthread_mutex_lock(&mbx);
-                c = cam_slot(camid);
+                c = cam_slot(camid, i);
                 if (c) {
+                    /* manage ONLY latest here; work is decoder-owned and
+                     * must never be freed/resized from this thread */
                     if (!c->latest || c->w != (int)w
                         || c->h != (int)h) {
                         unsigned char *nb = malloc((size_t)w * h);
                         if (nb) {
                             free(c->latest);
-                            free(c->work);
-                            c->work = NULL;
                             c->latest = nb;
                             c->w = (int)w;
                             c->h = (int)h;
                         }
                     }
-                    if (c->latest) {
+                    if (c->latest && c->w == (int)w && c->h == (int)h) {
                         memcpy(c->latest, cn->buf + 32,
                                (size_t)w * h);
                         c->t_latest = now_mono();
@@ -706,5 +785,24 @@ int main(int argc, char **argv)
                 fflush(reclog);
         }
     }
+
+    /* clean shutdown: stop the decoder, close everything, free all
+     * heap so Valgrind can distinguish real leaks from live state */
+    printf("\n[hub] shutting down\n");
+    pthread_join(decoder_th, NULL);
+    for (i = 0; i < MAXCONN; i++) {
+        if (conns[i].sock >= 0)
+            close(conns[i].sock);
+        free(conns[i].buf);
+    }
+    for (i = 0; i < MAXCAMS; i++) {
+        free(cams[i].latest);
+        free(cams[i].work);
+        free(cams[i].objs);
+        free(cams[i].imgs);
+    }
+    close(lsock);
+    if (reclog)
+        fclose(reclog);
     return 0;
 }

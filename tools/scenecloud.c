@@ -241,6 +241,11 @@ static void splat_view(const char *path, const mv_cloud *cl,
     for (j = 0; j < 3; j++)
         fw[j] = at[j] - eye[j];
     n = sqrt(fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2]);
+    if (!(n > 1e-9)) { /* degenerate framing (eye == center): skip */
+        free(img);
+        free(zb);
+        return;
+    }
     for (j = 0; j < 3; j++)
         fw[j] /= n;
     rt[0] = up0[1] * fw[2] - up0[2] * fw[1];
@@ -408,7 +413,7 @@ int main(int argc, char **argv)
                     if (d <= 0.0f)
                         continue;
                     Z = mv_disp_to_depth(fnew, Bnew, d);
-                    if (Z < ZMIN || Z > ZMAX)
+                    if (!(Z >= ZMIN && Z <= ZMAX)) /* also drops NaN */
                         continue;
                     pc[0] = (Kinv[0] * x + Kinv[1] * y + Kinv[2]) * Z;
                     pc[1] = (Kinv[4] * y + Kinv[5]) * Z;

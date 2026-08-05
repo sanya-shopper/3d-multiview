@@ -238,7 +238,27 @@ static void R_rodrigues(double r[3], const double R[9])
     th = acos(c);
     s = sin(th);
     if (fabs(s) < 1e-9) {
-        r[0] = r[1] = r[2] = 0.0;
+        /* theta ~ 0: no rotation. theta ~ pi: sin -> 0 but the rotation
+         * is a real half-turn -- recover the axis from the diagonal
+         * (R = 2 a a^T - I there), sign from the off-diagonal, rather
+         * than collapsing it to zero. */
+        if (c > 0.0) {
+            r[0] = r[1] = r[2] = 0.0;
+        } else {
+            double ax = sqrt((R[0] + 1.0) > 0.0 ? (R[0] + 1.0) / 2.0 : 0),
+                   ay = sqrt((R[4] + 1.0) > 0.0 ? (R[4] + 1.0) / 2.0 : 0),
+                   az = sqrt((R[8] + 1.0) > 0.0 ? (R[8] + 1.0) / 2.0 : 0);
+            double PI = 3.14159265358979323846;
+            if (R[1] + R[3] < 0.0) ay = -ay;
+            if (R[2] + R[6] < 0.0) az = -az;
+            /* pin the largest-magnitude axis positive for a stable sign */
+            if (ax >= ay && ax >= az) {
+                if (R[1] + R[3] < 0.0 && ay > 0.0) ay = -ay;
+            }
+            r[0] = PI * ax;
+            r[1] = PI * ay;
+            r[2] = PI * az;
+        }
         return;
     }
     r[0] = th * (R[7] - R[5]) / (2.0 * s);

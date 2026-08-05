@@ -237,12 +237,27 @@ int main(int argc, char **argv)
             printf("  too few simultaneous views -- cannot solve\n");
             continue;
         }
-        /* chordal mean rotation: project the summed matrix to SO(3) */
+        /* chordal mean rotation: project the summed matrix to SO(3).
+         * U*Vt is the nearest ORTHOGONAL matrix -- a rotation only when
+         * its determinant is +1; if det(Rsum) < 0 (inconsistent pairs)
+         * the bare product is a reflection, so flip the last column of
+         * U, exactly as the pose solver in src/calib.c guards. */
         memcpy(U, Rsum, sizeof(Rsum));
         if (mv_svd(U, S, V, 3, 3) != MV_OK)
             continue;
         mv_mat_transpose(Vt, V, 3, 3);
         mv_mat_mul(Racc, U, Vt, 3, 3, 3);
+        {
+            double det = Racc[0] * (Racc[4] * Racc[8] - Racc[5] * Racc[7])
+                       - Racc[1] * (Racc[3] * Racc[8] - Racc[5] * Racc[6])
+                       + Racc[2] * (Racc[3] * Racc[7] - Racc[4] * Racc[6]);
+            if (det < 0.0) {
+                int r;
+                for (r = 0; r < 3; r++)
+                    U[r * 3 + 2] = -U[r * 3 + 2];
+                mv_mat_mul(Racc, U, Vt, 3, 3, 3);
+            }
+        }
         /* median-trimmed translation: per-axis median */
         for (k = 0; k < 3; k++) {
             double col[256];

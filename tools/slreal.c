@@ -356,8 +356,9 @@ int main(int argc, char **argv)
                 continue;
             z2 = c2.R[6] * X[0] + c2.R[7] * X[1] + c2.R[8] * X[2]
                  + c2.t[2];
-            if (X[2] <= 0.0 || z2 <= 0.0)
-                continue;
+            if (!(X[2] > 0.0 && z2 > 0.0)
+                || !(isfinite(X[0]) && isfinite(X[1]) && isfinite(X[2])))
+                continue; /* drops behind-camera AND non-finite points */
             {
                 int px = (int)(uv1[2 * i] + 0.5),
                     py = (int)(uv1[2 * i + 1] + 0.5);

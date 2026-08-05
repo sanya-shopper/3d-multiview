@@ -25,6 +25,9 @@ static int next_int(FILE *f, int *out)
                 break;
             return MV_ERR;
         }
+        if (v > 100000000) /* cap before signed overflow (UB) on a
+                            * pathological digit run; real dims are small */
+            return MV_ERR;
         v = v * 10 + (c - '0');
         got = 1;
     }

@@ -52,3 +52,7 @@ nettest
 stream_cam_v4l2
 .claude/
 genframes
+fuzz_reader
+fuzz_pgm
+drv_reader
+drv_pgm

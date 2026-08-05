@@ -1,30 +1,17 @@
-multiview live test kit  (Apple Silicon)
-========================================
-macOS blocks DOUBLE-CLICKING tools copied between Macs (Gatekeeper), but
-never blocks the same command in Terminal. So: paste one line per Mac.
-Open Terminal: Cmd-Space, type "terminal", Return. Then Cmd-V, Return.
-(Full lines are in COMMANDS.txt, opened alongside this.)
+multiview live test kit  (Apple Silicon)  --  see COMMANDS.txt
+==============================================================
+Three Macs, one command each, run from Terminal.
 
-HUB MacBook -- ONE command runs the hub AND camera 1:
-    cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./mvhub
-  A preview window opens (camera 1); the Terminal shows the HUB IP in a
-  box and [cal]/[ext] progress. Close the window to finish.
+  HUB     :  cd ~/Desktop/multiview-live && ./mvhub
+             (hub + camera 1; preview window + hub IP in the Terminal)
+  CAMERA 2:  cd ~/Desktop/multiview-live && ./stream_cam HUBIP 9900 2 5
+  PATTERN :  open ~/Desktop/multiview-live/pattern.html   (click once)
 
-SECOND camera MacBook (use the hub IP from that box):
-    cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./stream_cam HUBIP 9900 2 5
-  A preview window opens; a green LIVE bar = frames flowing.
+Give the pattern motion where all cameras can see it (turntable / tilt);
+each camera needs several angles -- a flat screen can't fake that. The
+hub Terminal fills with [cal] then [ext]. The full session (frames,
+records.txt, camlog_<id>.txt, hub.log, summary.txt) collects in  rec/.
 
-PATTERN MacBook -- nothing to unblock:
-    open ~/Desktop/multiview-live/pattern.html   (click the page once)
-
-Then give the pattern MOTION where all cameras can see it (a $15
-turntable is ideal; tilt ~25 deg). Each camera needs several angles --
-pose diversity -- which a flat screen cannot fake. All cameras
-calibrate at once; the shared counter gives the geometry.
-
-Everything lands in  rec/  on the hub Mac: decoded frames, records.txt,
-camlog_<id>.txt (each camera's pushed log), hub.log, summary.txt.
-
-Distances need no ruler; 0.1133 is a MacBook Air 13.6"/15", others are
-one glance at the pattern page info (press i). Pitch only scales
-reported distances; intrinsics never need it.
+No ruler for distances; 0.1133 is a MacBook Air 13.6"/15" and only
+scales reported distances. If a binary "can't be verified" after
+AirDrop:  xattr -dr com.apple.quarantine ~/Desktop/multiview-live

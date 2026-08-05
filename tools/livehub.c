@@ -33,6 +33,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <ifaddrs.h>
 #include <math.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -116,6 +117,32 @@ static void on_signal(int s)
     g_stop = 1;
 }
 
+/* print this Mac's LAN IPv4 address(es) in a banner, so the operator
+ * knows exactly what to type on the other camera Mac */
+static void print_hub_ips(int port)
+{
+    struct ifaddrs *ifap, *p;
+    printf("\n");
+    printf("  +--------------------------------------------------+\n");
+    printf("  |  HUB READY -- on the OTHER camera Mac, enter:     |\n");
+    if (getifaddrs(&ifap) == 0) {
+        for (p = ifap; p; p = p->ifa_next) {
+            char ip[INET_ADDRSTRLEN];
+            struct sockaddr_in *sa;
+            if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET)
+                continue;
+            sa = (struct sockaddr_in *)p->ifa_addr;
+            inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip));
+            if (strcmp(ip, "127.0.0.1") == 0)
+                continue;
+            printf("  |    hub IP:  %-15s   port %-5d          |\n",
+                   ip, port);
+        }
+        freeifaddrs(ifap);
+    }
+    printf("  +--------------------------------------------------+\n\n");
+}
+
 static double now_mono(void)
 {
     struct timespec ts;
@@ -127,6 +154,26 @@ static unsigned get32(const unsigned char *p)
 {
     return (unsigned)p[0] | ((unsigned)p[1] << 8)
          | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+}
+
+/* append a camera's pushed log line to rec/camlog_<id>.txt (called from
+ * the network thread only). This is how remote cameras' diagnostics --
+ * fps, drops, errors -- reach the hub without any SSH or file transfer:
+ * they ride the same TCP connection as the frames (MVLG messages). */
+static void camlog(unsigned camid, const unsigned char *text, int len)
+{
+    char path[512];
+    FILE *f;
+    if (!recdir)
+        return;
+    snprintf(path, sizeof(path), "%s/camlog_%u.txt", recdir, camid);
+    f = fopen(path, "a");
+    if (!f)
+        return;
+    fprintf(f, "[%.3f] ", now_mono());
+    fwrite(text, 1, (size_t)len, f);
+    fputc('\n', f);
+    fclose(f);
 }
 
 /* called from the network thread with mbx HELD. ci = the connection
@@ -633,6 +680,8 @@ int main(int argc, char **argv)
     printf("[hub] listening on %d (pitch %.4f mm)%s%s\n", port,
            pitch * 1000.0, recdir ? ", recording to " : "",
            recdir ? recdir : "");
+    print_hub_ips(port);
+    fflush(stdout);
 
     while (!g_stop) {
         fd_set rd;
@@ -715,6 +764,28 @@ int main(int argc, char **argv)
                 unsigned camid, w, h;
                 size_t need;
                 cam_t *c;
+                if (cn->len < 12)
+                    break;
+                /* MVLG: a pushed camera log line -- camid, len, text */
+                if (memcmp(cn->buf, "MVLG", 4) == 0) {
+                    unsigned lc = get32(cn->buf + 4);
+                    unsigned ln = get32(cn->buf + 8);
+                    if (ln > 4096) { /* bogus: resync */
+                        unsigned char *m = memchr(cn->buf + 1, 'M',
+                                                  cn->len - 1);
+                        size_t sk = m ? (size_t)(m - cn->buf) : cn->len;
+                        memmove(cn->buf, cn->buf + sk, cn->len - sk);
+                        cn->len -= sk;
+                        continue;
+                    }
+                    if (cn->len < 12 + (size_t)ln)
+                        break;
+                    camlog(lc, cn->buf + 12, (int)ln);
+                    memmove(cn->buf, cn->buf + 12 + ln,
+                            cn->len - 12 - ln);
+                    cn->len -= 12 + ln;
+                    continue;
+                }
                 if (cn->len < 32)
                     break;
                 if (memcmp(cn->buf, "MVFR", 4) != 0) {
@@ -768,6 +839,10 @@ int main(int argc, char **argv)
                         c->t_latest = now_mono();
                         c->fresh = 1;
                         c->frames_rx++;
+                        if (c->frames_rx == 1)
+                            printf("[hub] >>> camera %u CONNECTED, "
+                                   "frames flowing (%ux%u) <<<\n",
+                                   camid, w, h);
                     }
                 }
                 pthread_mutex_unlock(&mbx);
@@ -790,6 +865,53 @@ int main(int argc, char **argv)
      * heap so Valgrind can distinguish real leaks from live state */
     printf("\n[hub] shutting down\n");
     pthread_join(decoder_th, NULL);
+
+    /* write a post-mortem summary into the recording dir: per-camera
+     * throughput, decode rates, calibration, and the extrinsics -- the
+     * one file to read to see what happened */
+    if (recdir) {
+        char path[512];
+        FILE *f;
+        snprintf(path, sizeof(path), "%s/summary.txt", recdir);
+        f = fopen(path, "w");
+        if (f) {
+            int a, b;
+            fprintf(f, "multiview live session summary\n");
+            fprintf(f, "pitch %.4f mm\n\n", pitch * 1000.0);
+            for (i = 0; i < MAXCAMS; i++) {
+                cam_t *c = &cams[i];
+                if (!c->used)
+                    continue;
+                fprintf(f, "camera %u: rx %ld frames, decoded %ld/%ld"
+                        " (%.0f%%), valid-counter %ld, views %d\n",
+                        c->camid, c->frames_rx, c->reads_ok, c->decodes,
+                        c->decodes ? 100.0 * c->reads_ok / c->decodes : 0,
+                        c->valid_ctr, c->nviews);
+                if (c->calibrated)
+                    fprintf(f, "  CALIBRATED fx %.1f fy %.1f cx %.1f "
+                            "cy %.1f k1 %+.3f k2 %+.3f | RMS %.3f px\n",
+                            c->K[0], c->K[4], c->K[2], c->K[5],
+                            c->kr[0], c->kr[1], c->rms);
+                else
+                    fprintf(f, "  NOT calibrated (need ~12+ views with "
+                            "pose diversity)\n");
+            }
+            fprintf(f, "\nextrinsics (camera pairs):\n");
+            for (a = 0; a < MAXCAMS; a++)
+                for (b = a + 1; b < MAXCAMS; b++)
+                    if (cams[a].used && cams[b].used
+                        && cams[a].calibrated && cams[b].calibrated)
+                        fprintf(f, "  cam %u<->%u: %d anchors each; see"
+                                " hub.log [ext] lines for the pose\n",
+                                cams[a].camid, cams[b].camid,
+                                cams[a].nanch < cams[b].nanch
+                                    ? cams[a].nanch : cams[b].nanch);
+            fclose(f);
+            printf("[hub] wrote %s -- collection is in %s/ (frames, "
+                   "records.txt, camlog_*.txt, hub.log, summary.txt)\n",
+                   path, recdir);
+        }
+    }
     for (i = 0; i < MAXCONN; i++) {
         if (conns[i].sock >= 0)
             close(conns[i].sock);

@@ -1,41 +1,30 @@
 multiview live test kit  (Apple Silicon)
 ========================================
-macOS blocks DOUBLE-CLICKING tools copied from another Mac (Gatekeeper).
-It does NOT block the same command run in Terminal. So the reliable way
-is: paste ONE line per Mac. Open Terminal first -- press Cmd-Space, type
-"terminal", Return -- then copy a line below, paste (Cmd-V), Return.
+macOS blocks DOUBLE-CLICKING tools copied between Macs (Gatekeeper), but
+never blocks the same command in Terminal. So: paste one line per Mac.
+Open Terminal: Cmd-Space, type "terminal", Return. Then Cmd-V, Return.
+(Full lines are in COMMANDS.txt, opened alongside this.)
 
-------------------------------------------------------------------
-HUB MacBook (this one also acts as camera 1) -- paste, Return:
+HUB MacBook -- ONE command runs the hub AND camera 1:
+    cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./mvhub
+  A preview window opens (camera 1); the Terminal shows the HUB IP in a
+  box and [cal]/[ext] progress. Close the window to finish.
 
-  cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./1-start-hub.command
+SECOND camera MacBook (use the hub IP from that box):
+    cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./stream_cam HUBIP 9900 2 5
+  A preview window opens; a green LIVE bar = frames flowing.
 
-  It prints a HUB IP and shows [cal]/[ext] progress. Leave it open.
-  Press Ctrl-C in that window when you are done.
-------------------------------------------------------------------
-SECOND camera MacBook -- paste, Return:
+PATTERN MacBook -- nothing to unblock:
+    open ~/Desktop/multiview-live/pattern.html   (click the page once)
 
-  cd ~/Desktop/multiview-live && xattr -dr com.apple.quarantine . && ./2-start-camera.command
+Then give the pattern MOTION where all cameras can see it (a $15
+turntable is ideal; tilt ~25 deg). Each camera needs several angles --
+pose diversity -- which a flat screen cannot fake. All cameras
+calibrate at once; the shared counter gives the geometry.
 
-  It asks once for the HUB IP (read it off the hub window).
-------------------------------------------------------------------
-PATTERN MacBook -- nothing to unblock, just double-click:
+Everything lands in  rec/  on the hub Mac: decoded frames, records.txt,
+camlog_<id>.txt (each camera's pushed log), hub.log, summary.txt.
 
-  pattern.html   (opens your browser)  ->  click the page once.
-
-  It goes fullscreen, already in calibration (mux) mode. Nothing to type.
-------------------------------------------------------------------
-
-After that first paste on a Mac, the block is cleared for good there --
-you can just double-click 1-start-hub / 2-start-camera next time.
-
-THEN: give the pattern MOTION where all cameras can see it (shared
-overlap). A $15 motorized turntable is ideal -- tilt it ~25 deg, walk
-away ~2 min. Or prop it at a few tilts, or slowly hand-rotate ~60 s.
-That is the one unavoidable manual step: each camera needs the pattern
-at several angles (pose diversity); a flat screen cannot fake that.
-All cameras calibrate at once; the shared counter gives the geometry.
-
-Distances: NO ruler. 0.1133 is exactly a MacBook Air 13.6"/15"; other
-Macs are one glance at the pattern page info (press i). Pitch only
-scales reported distances -- intrinsics never need it.
+Distances need no ruler; 0.1133 is a MacBook Air 13.6"/15", others are
+one glance at the pattern page info (press i). Pitch only scales
+reported distances; intrinsics never need it.

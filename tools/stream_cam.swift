@@ -11,6 +11,7 @@
 // camera is its own clock domain; the display counter is the shared
 // clock, per the paper's temporal model).
 import AVFoundation
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -56,6 +57,20 @@ func sendAll(_ s: Int32, _ data: [UInt8]) -> Bool {
     }
     return true
 }
+// Push a diagnostics line to the hub over the same socket (MVLG
+// message): the hub writes it to rec/camlog_<id>.txt so all logs end up
+// on the hub machine with no SSH or file transfer.
+func sendLog(_ s: Int32, _ camid: UInt32, _ text: String) {
+    let body = Array(text.utf8)
+    var msg: [UInt8] = [0x4D, 0x56, 0x4C, 0x47] // "MVLG"
+    func le32(_ v: UInt32) {
+        msg.append(UInt8(v & 255)); msg.append(UInt8((v >> 8) & 255))
+        msg.append(UInt8((v >> 16) & 255)); msg.append(UInt8((v >> 24) & 255))
+    }
+    le32(camid); le32(UInt32(body.count))
+    msg.append(contentsOf: body)
+    _ = sendAll(s, msg)
+}
 
 sock = connectHub(a[1], port)
 guard sock >= 0 else {
@@ -68,6 +83,8 @@ print("connected to \(a[1]):\(port) as camera \(camid), \(fps) fps")
 final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var seq: UInt64 = 0
     var lastSent = 0.0
+    var status = "starting"
+    var dims = "?"
     let minGap: Double
     let camid: UInt32
     let sock: Int32
@@ -117,11 +134,20 @@ final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         for _ in 0..<8 { msg.append(UInt8(t & 255)); t >>= 8 }
         msg.append(contentsOf: gray)
         if !sendAll(self.sock, msg) {
+            status = "HUB CONNECTION LOST"
             print("hub connection lost")
             exit(1)
         }
         seq += 1
-        if seq % 50 == 0 { print("sent \(seq) frames (\(w)x\(h))") }
+        dims = "\(w)x\(h)"
+        status = "streaming to hub"
+        if seq == 1 {
+            sendLog(sock, camid, "camera \(camid) connected, \(w)x\(h)")
+        }
+        if seq % 50 == 0 {
+            print("sent \(seq) frames (\(w)x\(h))")
+            sendLog(sock, camid, "sent \(seq) frames, \(w)x\(h)")
+        }
     }
 }
 
@@ -141,5 +167,47 @@ out.setSampleBufferDelegate(grabber,
                             queue: DispatchQueue(label: "grab"))
 session.addOutput(out)
 session.startRunning()
-print("streaming from \(dev.localizedName); Ctrl-C to stop")
-RunLoop.main.run()
+print("streaming from \(dev.localizedName); close the window or Ctrl-C to stop")
+
+// ---- live preview window so the operator can see what the camera
+//      sees and aim it correctly ----
+let app = NSApplication.shared
+app.setActivationPolicy(.regular)
+let win = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 720, height: 460),
+                   styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                   backing: .buffered, defer: false)
+win.title = "multiview camera \(camid)  ->  \(a[1]):\(port)"
+let preview = AVCaptureVideoPreviewLayer(session: session)
+preview.videoGravity = .resizeAspect
+let root = NSView(frame: win.contentRect(forFrameRect: win.frame))
+root.wantsLayer = true
+root.layer = preview
+root.autoresizingMask = [.width, .height]
+// status banner along the bottom
+let banner = NSTextField(labelWithString: "connecting…")
+banner.frame = NSRect(x: 0, y: 0, width: 720, height: 28)
+banner.alignment = .center
+banner.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+banner.textColor = .white
+banner.backgroundColor = NSColor.black.withAlphaComponent(0.65)
+banner.drawsBackground = true
+banner.autoresizingMask = [.width, .maxYMargin]
+root.addSubview(banner)
+win.contentView = root
+win.makeKeyAndOrderFront(nil)
+app.activate(ignoringOtherApps: true)
+
+// refresh the banner: green once frames are flowing, amber while waiting
+Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+    if grabber.seq > 0 {
+        banner.textColor = .green
+        banner.stringValue =
+            "● LIVE  camera \(camid)  \(grabber.dims)  ·  sent "
+            + "\(grabber.seq) frames  ·  aim so the pattern is fully in view"
+    } else {
+        banner.textColor = .yellow
+        banner.stringValue =
+            "waiting for frames… (grant camera permission if prompted)"
+    }
+}
+app.run()

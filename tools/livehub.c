@@ -61,6 +61,8 @@ typedef struct {
     int w, h;
     unsigned char *latest;  /* written by network thread (mutex) */
     unsigned char *work;    /* decoder-owned copy */
+    int busy;               /* decoder mid-decode: slot must not be
+                             * reclaimed (mutex-guarded flag) */
     double t_latest;
     int fresh;
     long frames_rx, decodes, reads_ok, valid_ctr;
@@ -111,6 +113,7 @@ static unsigned get32(const unsigned char *p)
          | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
 }
 
+/* called from the network thread with mbx HELD */
 static cam_t *cam_slot(unsigned camid)
 {
     int i;
@@ -143,7 +146,7 @@ static cam_t *cam_slot(unsigned camid)
         int stale = -1;
         double tnow = now_mono();
         for (i = 0; i < MAXCAMS; i++)
-            if (tnow - cams[i].t_latest > 60.0
+            if (!cams[i].busy && tnow - cams[i].t_latest > 60.0
                 && (stale < 0
                     || cams[i].t_latest < cams[stale].t_latest))
                 stale = i;
@@ -221,14 +224,17 @@ static void try_calibrate(cam_t *c)
             }
         if (m >= 6
             && mv_calib_refine(K, ie, kr, iv, m) == MV_OK) {
+            double rms = mv_calib_reproj_rms(ie, iv, m);
+            pthread_mutex_lock(&mbx);
             memcpy(c->K, K, sizeof(K));
             memcpy(c->kr, kr, sizeof(kr));
-            c->rms = mv_calib_reproj_rms(ie, iv, m);
+            c->rms = rms;
             c->calibrated = 1;
+            pthread_mutex_unlock(&mbx);
             printf("[cal] cam %u: fx %.1f fy %.1f cx %.1f cy %.1f "
                    "k1 %+.3f k2 %+.3f | RMS %.3f px over %d views\n",
                    c->camid, K[0], K[4], K[2], K[5], kr[0], kr[1],
-                   c->rms, m);
+                   rms, m);
         }
     }
 }
@@ -323,19 +329,25 @@ static void process_cam(cam_t *c)
     mv_read_result rr;
     int tier = 1, i;
 
-    c->decodes++;
-    if (mv_read_pattern(&rr, c->work, c->w, c->h) != MV_OK) {
-        if (mv_read_coarse(&rr, c->work, c->w, c->h) != MV_OK) {
-            c->last_tier = 0;
-            return;
-        }
+    int read_ok;
+    read_ok = mv_read_pattern(&rr, c->work, c->w, c->h) == MV_OK;
+    if (!read_ok && mv_read_coarse(&rr, c->work, c->w, c->h) == MV_OK) {
+        read_ok = 1;
         tier = 2;
+    }
+    pthread_mutex_lock(&mbx);
+    c->decodes++;
+    if (!read_ok) {
+        c->last_tier = 0;
+        pthread_mutex_unlock(&mbx);
+        return;
     }
     c->reads_ok++;
     c->last_tier = tier;
     c->last_counter = rr.counter_valid ? rr.counter : 0;
     if (rr.counter_valid)
         c->valid_ctr++;
+    pthread_mutex_unlock(&mbx);
 
     if (recdir && reclog) {
         char path[512], camname[32];
@@ -382,7 +394,9 @@ static void process_cam(cam_t *c)
             c->views[c->nviews].obj = c->objs[c->nviews];
             c->views[c->nviews].img = c->imgs[c->nviews];
             c->views[c->nviews].n = rr.n;
+            pthread_mutex_lock(&mbx);
             c->nviews++;
+            pthread_mutex_unlock(&mbx);
             try_calibrate(c);
         }
     }
@@ -408,7 +422,9 @@ static void process_cam(cam_t *c)
         if (mv_calib_plane_pose(&pose, c->K, obj, und, rr.n) == MV_OK) {
             double cx = MV_PAT_W / 2.0 * pitch;
             double cy = MV_PAT_H / 2.0 * pitch;
+            pthread_mutex_lock(&mbx);
             c->last_dist = pose.R[6] * cx + pose.R[7] * cy + pose.t[2];
+            pthread_mutex_unlock(&mbx);
             if (c->nanch < MAXANCH) {
                 struct anchor *an = &c->anch[c->nanch];
                 an->k = (double)rr.counter;
@@ -425,7 +441,9 @@ static void process_cam(cam_t *c)
                     an->dwell = sqrt(d) < 0.01
                                 && an->t_host - pv->t_host < 5.0;
                 }
+                pthread_mutex_lock(&mbx);
                 c->nanch++;
+                pthread_mutex_unlock(&mbx);
                 try_extrinsics();
             }
         }
@@ -452,6 +470,7 @@ static void *decoder_main(void *arg)
                 if (c->work) {
                     memcpy(c->work, c->latest, sz);
                     c->fresh = 0;
+                    c->busy = 1;
                     pick = c;
                     rr_next = ((rr_next + i) % MAXCAMS) + 1;
                 }
@@ -459,8 +478,12 @@ static void *decoder_main(void *arg)
             }
         }
         pthread_mutex_unlock(&mbx);
-        if (pick)
+        if (pick) {
             process_cam(pick);
+            pthread_mutex_lock(&mbx);
+            pick->busy = 0;
+            pthread_mutex_unlock(&mbx);
+        }
         else {
             struct timespec d = { 0, 50000000L };
             nanosleep(&d, NULL);
@@ -645,9 +668,9 @@ int main(int argc, char **argv)
                 need = 32 + (size_t)w * h;
                 if (cn->len < need)
                     break;
+                pthread_mutex_lock(&mbx);
                 c = cam_slot(camid);
                 if (c) {
-                    pthread_mutex_lock(&mbx);
                     if (!c->latest || c->w != (int)w
                         || c->h != (int)h) {
                         unsigned char *nb = malloc((size_t)w * h);
@@ -667,8 +690,8 @@ int main(int argc, char **argv)
                         c->fresh = 1;
                         c->frames_rx++;
                     }
-                    pthread_mutex_unlock(&mbx);
                 }
+                pthread_mutex_unlock(&mbx);
                 memmove(cn->buf, cn->buf + need, cn->len - need);
                 cn->len -= need;
             }

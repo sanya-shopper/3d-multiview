@@ -105,7 +105,11 @@ static void test_roundtrip(void)
     CHECK(f != NULL, "roundtrip: tmpfile");
     if (!f)
         return;
-    mv_session_ver(f, MV_PAT_SPEC_VERSION, "0");
+    /* deliberately NOT the reference pitch: VER must record the pitch
+     * of the display actually used (the live hub once stamped the
+     * 0.2745 reference constant while calibrating at 0.1133 -- a 2.4x
+     * metric-scale error for any replay) */
+    mv_session_ver(f, MV_PAT_SPEC_VERSION, 0.1133, "0");
     mv_session_frm(f, "0", t_mono, frame_idx);
     mv_session_read(f, "0", t_mono, &rr, phs);
     rewind(f);
@@ -123,7 +127,8 @@ static void test_roundtrip(void)
                 || x != (double)MV_PAT_SPEC_VERSION
                 || mv_session_num(&rec, "w", &y) != MV_OK
                 || y != (double)MV_PAT_W
-                || !mv_session_field(&rec, "pitch_mm")
+                || mv_session_num(&rec, "pitch_mm", &y) != MV_OK
+                || fabs(y - 0.1133) > 1e-9
                 || !mv_session_field(&rec, "Td_ms"))
                 ver_ok = 0;
         } else if (strcmp(rec.type, "FRM") == 0) {

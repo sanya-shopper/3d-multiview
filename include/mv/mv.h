@@ -23,5 +23,6 @@
 #include "mv/optimal.h"
 #include "mv/feat.h"
 #include "mv/session.h"
+#include "mv/photo.h"
 
 #endif /* MV_MV_H */

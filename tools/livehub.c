@@ -56,6 +56,9 @@
 
 #include "mv/mv.h"
 
+#include "hub_clock.h"
+#include "hub_solve.h"
+
 #define MAXCONN 8
 #define MAXCAMS 4
 #define MAXV 220
@@ -77,6 +80,7 @@ typedef struct {
     int busy;               /* decoder mid-decode: slot must not be
                              * reclaimed (mutex-guarded flag) */
     double t_latest;
+    double t_cam_latest; /* sender-clock capture time of `latest` */
     int fresh;
     long frames_rx, decodes, reads_ok, valid_ctr;
     /* calibration state */
@@ -94,6 +98,9 @@ typedef struct {
         int tier;
         int dwell;     /* display static vs previous anchor */
         double t_host; /* hub receive time */
+        double t_cam;  /* sender capture time (its own clock domain;
+                        * meaningful across cameras only through
+                        * hub_clock_map once clock sync is live) */
         mv_camera pose;
     } anch[MAXANCH];
     int nanch;         /* valid anchors, capped at MAXANCH */
@@ -458,21 +465,34 @@ static void try_extrinsics(void)
     for (a = 0; a < MAXCAMS; a++)
         for (b = a + 1; b < MAXCAMS; b++) {
             cam_t *A = &cams[a], *B = &cams[b];
-            double Rsum[9] = { 0 }, tacc[3][MAXPAIR];
+            static hub_obs obs[MAXPAIR];
             int npair = 0, i, j, k;
+            int synced;
             if (!A->used || !B->used || !A->calibrated
                 || !B->calibrated)
                 continue;
+            /* when the clock-sync module has both cameras mapped, gate
+             * on mapped capture times; identity fallback = hub receive
+             * times, i.e. the behavior before clock sync existed */
+            synced = hub_clock_err(A->camid) >= 0.0
+                     && hub_clock_err(B->camid) >= 0.0;
             for (i = 0; i < A->nanch && npair < MAXPAIR; i++) {
                 for (j = 0; j < B->nanch && npair < MAXPAIR; j++) {
                     struct anchor *pa = &A->anch[i], *pb = &B->anch[j];
-                    double dk;
+                    double dk, taT, tbT;
                     int relaxed = pa->dwell && pb->dwell;
+                    if (synced) {
+                        taT = hub_clock_map(A->camid, pa->t_cam);
+                        tbT = hub_clock_map(B->camid, pb->t_cam);
+                    }
+                    else {
+                        taT = pa->t_host;
+                        tbT = pb->t_host;
+                    }
                     /* both dwelling = display verified still: allow
                      * the slow decoder's 7-15 s anchor spacing to
                      * still produce cross-camera pairs */
-                    if (fabs(pa->t_host - pb->t_host)
-                        > (relaxed ? 15.0 : 4.0))
+                    if (fabs(taT - tbT) > (relaxed ? 15.0 : 4.0))
                         continue;
                     if (pa->tier == 1 && pb->tier == 1)
                         dk = fabs(pa->k - pb->k);
@@ -484,21 +504,18 @@ static void try_extrinsics(void)
                     }
                     if (dk > (relaxed ? 120.0 : 2.0))
                         continue;
-                    {
-                        double Rbt[9], R[9], t[3];
-                        mv_mat_transpose(Rbt, pb->pose.R, 3, 3);
-                        mv_mat_mul(R, pa->pose.R, Rbt, 3, 3, 3);
-                        mv_mat_mul(t, R, pb->pose.t, 3, 3, 1);
-                        for (k = 0; k < 3; k++)
-                            t[k] = pa->pose.t[k] - t[k];
-                        for (k = 0; k < 9; k++)
-                            Rsum[k] += R[k];
-                        for (k = 0; k < 3; k++)
-                            tacc[k][npair] = t[k];
-                        npair++;
-                    }
+                    memcpy(obs[npair].Ra, pa->pose.R,
+                           sizeof(obs[0].Ra));
+                    memcpy(obs[npair].ta, pa->pose.t,
+                           sizeof(obs[0].ta));
+                    memcpy(obs[npair].Rb, pb->pose.R,
+                           sizeof(obs[0].Rb));
+                    memcpy(obs[npair].tb, pb->pose.t,
+                           sizeof(obs[0].tb));
+                    npair++;
                 }
             }
+            (void)k;
             /* audible progress below the npair>=3 threshold: the
              * operator holding a dwell cannot see that matches are
              * (or are not) accumulating */
@@ -509,39 +526,15 @@ static void try_extrinsics(void)
                         A->camid, B->camid);
             }
             if (npair >= 3) {
-                double U[9], S[3], V[9], Vt[9], Rm[9], tm[3];
-                double dev = 0.0;
-                memcpy(U, Rsum, sizeof(Rsum));
-                if (mv_svd(U, S, V, 3, 3) != MV_OK)
+                double Rm[9], tm[3], devmm;
+                if (hub_solve_pair(Rm, tm, &devmm, obs, npair) != 0)
                     continue;
-                mv_mat_transpose(Vt, V, 3, 3);
-                mv_mat_mul(Rm, U, Vt, 3, 3, 3);
-                for (k = 0; k < 3; k++) {
-                    double col[MAXPAIR];
-                    int q, r;
-                    memcpy(col, tacc[k],
-                           (size_t)npair * sizeof(double));
-                    for (q = 1; q < npair; q++)
-                        for (r = q; r > 0 && col[r] < col[r - 1]; r--) {
-                            double tmp = col[r];
-                            col[r] = col[r - 1];
-                            col[r - 1] = tmp;
-                        }
-                    tm[k] = col[npair / 2];
-                }
-                for (i = 0; i < npair; i++) {
-                    double d = 0.0;
-                    for (k = 0; k < 3; k++)
-                        d += (tacc[k][i] - tm[k])
-                             * (tacc[k][i] - tm[k]);
-                    dev += sqrt(d);
-                }
                 hlog("[ext] cam %u <-> cam %u: baseline %.3f m  "
                        "t=(%+.3f %+.3f %+.3f)  %d pairs, mean |dt| "
                        "%.1f mm\n", A->camid, B->camid,
                        sqrt(tm[0] * tm[0] + tm[1] * tm[1]
                             + tm[2] * tm[2]), tm[0], tm[1], tm[2],
-                       npair, 1000.0 * dev / npair);
+                       npair, devmm);
                 /* latest solution becomes THE rig for scene mode */
                 memcpy(rig_R9, Rm, sizeof(rig_R9));
                 memcpy(rig_t3, tm, sizeof(rig_t3));
@@ -585,7 +578,8 @@ static void try_extrinsics(void)
  * shared c->work/c->w/c->h must never be read here -- the network
  * thread can resize them concurrently); results are published into c
  * under mbx. */
-static void process_cam(cam_t *c, const unsigned char *img, int w, int h)
+static void process_cam(cam_t *c, const unsigned char *img, int w, int h,
+                        double t_cam)
 {
     mv_read_result rr;
     int tier = 1, i;
@@ -699,6 +693,7 @@ static void process_cam(cam_t *c, const unsigned char *img, int w, int h)
             an.k = (double)rr.counter;
             an.tier = tier;
             an.t_host = now_mono();
+            an.t_cam = t_cam;
             an.pose = pose;
             an.dwell = 0;
             /* append to the ring under the lock; try_extrinsics reads
@@ -952,6 +947,7 @@ static void *decoder_main(void *arg)
     while (!g_stop) {
         cam_t *pick = NULL;
         int i, dw = 0, dh = 0;
+        double dtc = 0.0;
         /* rig solved and settled -> auto-flush and switch this thread
          * to live stereo; the pattern has done its job */
         if (!scene_mode) {
@@ -995,6 +991,7 @@ static void *decoder_main(void *arg)
                     memcpy(c->work, c->latest, sz);
                     c->fresh = 0;
                     c->busy = 1;
+                    dtc = c->t_cam_latest;
                     dw = c->w;
                     dh = c->h;
                     pick = c;
@@ -1007,7 +1004,7 @@ static void *decoder_main(void *arg)
         if (pick) {
             /* pick->work stays valid: busy blocks reclaim, and the
              * network thread never frees/resizes work */
-            process_cam(pick, pick->work, dw, dh);
+            process_cam(pick, pick->work, dw, dh, dtc);
             pthread_mutex_lock(&mbx);
             pick->busy = 0;
             pthread_mutex_unlock(&mbx);
@@ -1316,6 +1313,15 @@ int main(int argc, char **argv)
                 cam_t *c;
                 if (cn->len < 12)
                     break;
+                /* MVTS: clock-sync probe reply (see hub_clock.h) */
+                if (memcmp(cn->buf, "MVTS", 4) == 0) {
+                    if (cn->len < 24)
+                        break;
+                    hub_clock_on_msg(cn->buf + 4, now_mono());
+                    memmove(cn->buf, cn->buf + 24, cn->len - 24);
+                    cn->len -= 24;
+                    continue;
+                }
                 /* MVLG: a pushed camera log line -- camid, len, text */
                 if (memcmp(cn->buf, "MVLG", 4) == 0) {
                     unsigned lc = get32(cn->buf + 4);
@@ -1384,8 +1390,15 @@ int main(int argc, char **argv)
                         }
                     }
                     if (c->latest && c->w == (int)w && c->h == (int)h) {
+                        unsigned long long tb = 0;
+                        double tcam;
+                        int bi;
+                        for (bi = 7; bi >= 0; bi--)
+                            tb = (tb << 8) | cn->buf[24 + bi];
+                        memcpy(&tcam, &tb, 8);
                         memcpy(c->latest, cn->buf + 32,
                                (size_t)w * h);
+                        c->t_cam_latest = tcam;
                         c->t_latest = now_mono();
                         c->fresh = 1;
                         c->frames_rx++;
@@ -1419,6 +1432,7 @@ int main(int argc, char **argv)
                 put32_le(ak + 4, (unsigned)c->frames_rx);
                 put32_le(ak + 8, (unsigned)c->reads_ok);
                 send(conns[c->conn].sock, ak, 12, 0);
+                hub_clock_probe(conns[c->conn].sock);
             }
             pthread_mutex_unlock(&mbx);
         }

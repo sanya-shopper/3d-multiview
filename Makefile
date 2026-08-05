@@ -47,8 +47,9 @@ slreal: tools/slreal.o libmv.a
 replaycam: tools/replaycam.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/replaycam.o libmv.a $(LDLIBS)
 
-hubengine: tools/livehub.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/livehub.o libmv.a $(LDLIBS)
+hubengine: tools/livehub.o tools/hub_clock.o tools/hub_solve.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tools/livehub.o tools/hub_clock.o \
+	  tools/hub_solve.o libmv.a $(LDLIBS)
 
 nettest: tools/nettest.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/nettest.o libmv.a $(LDLIBS)
@@ -101,10 +102,19 @@ test_bundle: tests/test_bundle.o libmv.a
 test_mux: tests/test_mux.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tests/test_mux.o libmv.a $(LDLIBS)
 
+test_reader_speed: tests/test_reader_speed.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_reader_speed.o libmv.a $(LDLIBS)
+
+test_clock_sync: tests/test_clock_sync.o tools/hub_clock.o
+	$(CC) $(CFLAGS) -o $@ tests/test_clock_sync.o tools/hub_clock.o $(LDLIBS)
+
+test_hub_solve: tests/test_hub_solve.o tools/hub_solve.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_hub_solve.o tools/hub_solve.o libmv.a $(LDLIBS)
+
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-check: test_mv test_refine test_optimal test_feat test_session test_photo test_bundle test_mux
+check: test_mv test_refine test_optimal test_feat test_session test_photo test_bundle test_mux test_reader_speed test_clock_sync test_hub_solve
 	./test_mv
 	./test_refine
 	./test_optimal
@@ -113,6 +123,9 @@ check: test_mv test_refine test_optimal test_feat test_session test_photo test_b
 	./test_photo
 	./test_bundle
 	./test_mux
+	./test_reader_speed
+	./test_clock_sync
+	./test_hub_solve
 	python3 tests/check_bib.py
 
 checkbib:

@@ -3334,10 +3334,14 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         find the saddle lattice but not one identity dot.
         \emph{Unlocks}: rig calibration at room scale with commodity
         webcams --- the actual deployment scenario of
-        \autoref{sec:overview}. Remaining refinement: temporal
-        multiplexing of both tiers in one session (alternate
-        counter-parity blocks) so near and far cameras share a single
-        capture.
+        \autoref{sec:overview}. The temporal multiplexing refinement is
+        built: display mode M6 alternates the tiers in 64-refresh
+        blocks (\code{mv\_pattern\_mux\_tier},
+        \code{mv\_pattern\_mux\_render}; \code{tests/test\_mux.c}
+        round-trips both tiers from one stream), so near and far
+        cameras share a single capture on one counter timeline (fine
+        reads give $k$ in full, coarse reads $k \bmod 256$,
+        reconciled wrap-aware as \code{rigcalib} already does).
   \item \textbf{[done at sim tier] Projected structured light} ---
         \autoref{sec:slight}: display-app mode M5, cross-camera code
         matching (\code{mv\_graycode\_match}), robust 8-point +
@@ -3359,7 +3363,22 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         the pre-registered T5 acceptance passed (ensemble ratio
         $1.1087\to0.9990$, \autoref{sec:statrules}); exact at
         $\sigma=0$; never worse than the alternation initializer on
-        any ensemble member. (Later: bundle
+        any ensemble member. Bundle adjustment over registered views is
+        also built (\code{mv/bundle.h}: multi-camera $+$ points joint
+        LM, Schur complement over per-point blocks, gauge anchored by
+        flagged fixed cameras): residual ratio $1.012$ against the
+        predicted floor, and it tightens photo registration from
+        $77$\,mm to $6$\,mm while recovering the true principal point
+        that resection had to pin. A finding worth keeping: with the
+        v1 single-scale features, the rig's anchor bank came out
+        $100\%$ coplanar (all on the fronto-parallel wall; grazing
+        planes contributed zero anchors), and free-K bundle adjustment
+        over a coplanar set walks the focal--depth degeneracy to a
+        spurious lower-residual solution --- the same degeneracy that
+        justified pinning the principal point in
+        \autoref{sec:photos}, now measured a second way; depth relief
+        in the anchor set is a precondition, checked in the test.
+        (Earlier framing: bundle
         adjustment \cite{Triggs2000}). Joint nonlinear minimization of
         reprojection error over intrinsics, poses, and distortion.
         \emph{Pitch}: the single most attractive item on the list ---

@@ -21,4 +21,19 @@ typedef struct {
 int hub_solve_pair(double R[9], double t[3], double *dev_mm,
                    const hub_obs *obs, int n);
 
+/* Per-observation diagnostics from the robust solve (additive API;
+ * hub_solve_pair keeps its frozen signature and behavior). */
+typedef struct {
+    double weight;  /* final trim weight: 1 = kept, 0 = rejected     */
+    double rot_err; /* geodesic rotation residual vs estimate, rad   */
+    double t_err;   /* translation residual |t_i - t|, m             */
+} hub_solve_diag;
+
+/* Same estimate as hub_solve_pair; additionally fills diag[i] for the
+ * first min(n, 256) observations when diag is non-NULL (the caller
+ * provides at least that many entries).  Intended for logging which
+ * anchor pairs the robust estimator distrusted. */
+int hub_solve_pair_diag(double R[9], double t[3], double *dev_mm,
+                        hub_solve_diag *diag, const hub_obs *obs, int n);
+
 #endif /* HUB_SOLVE_H */

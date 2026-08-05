@@ -37,6 +37,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <stdarg.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -89,6 +90,28 @@ static double now_mono(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + 1e-9 * ts.tv_nsec;
+}
+
+/* Spoken feedback, matching the Swift twin: during the live session
+ * this laptop's screen faces the volume, so the state changes are
+ * announced aloud (speech-dispatcher, falling back to espeak; silent
+ * if neither is installed). Text is program-authored only. MV_MUTE=1
+ * disables. */
+static void say(const char *fmt, ...)
+{
+    char msg[200], cmd[480];
+    int rc;
+    va_list ap;
+    if (getenv("MV_MUTE"))
+        return;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    snprintf(cmd, sizeof(cmd),
+             "{ spd-say \"%s\" 2>/dev/null || espeak \"%s\"; } "
+             ">/dev/null 2>&1 &", msg, msg);
+    rc = system(cmd);
+    (void)rc;
 }
 
 static void put32(unsigned char *p, unsigned v)
@@ -279,8 +302,10 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
 
     sock = connect_hub(argv[1], argv[2]);
-    if (sock < 0)
+    if (sock < 0) {
+        say("camera %u cannot reach the hub", camid);
         return 1;
+    }
     printf("connected to %s:%s as camera %u, %.1f fps\n", argv[1],
            argv[2], camid, fps);
 
@@ -431,6 +456,7 @@ int main(int argc, char **argv)
     }
     printf("streaming from %s (%ux%u YUYV, stride %u); Ctrl-C to "
            "stop\n", device, w, h, bpl);
+    say("camera %u streaming to the hub", camid);
 
     /* ---- capture / pace / convert / send loop --------------------- */
     while (!g_stop) {
@@ -457,6 +483,8 @@ int main(int argc, char **argv)
             if (idle >= IDLE_MAX) {
                 fprintf(stderr, "no frames from %s for %d s; giving "
                                 "up\n", device, idle * IDLE_TIMEOUT_S);
+                say("camera %u gets no frames from its device",
+                    camid);
                 break;
             }
             fprintf(stderr, "waiting for frames from %s...\n", device);
@@ -555,6 +583,7 @@ int main(int argc, char **argv)
         r = send_frame(sock, msg, msglen, &backlogged);
         if (r < 0) {
             fprintf(stderr, "hub connection lost\n");
+            say("camera %u lost the hub", camid);
             teardown();
             free(msg);
             close(sock);

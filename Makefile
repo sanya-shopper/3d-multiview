@@ -1,7 +1,7 @@
 CC      ?= cc
 CFLAGS  ?= -std=c99 -pedantic -Wall -Wextra -O2
 CPPFLAGS += -Iinclude
-LDLIBS   = -lm
+LDLIBS   = -lm -lpthread
 
 SRC = src/mat.c src/cam.c src/epipolar.c src/triangulate.c src/rectify.c \
       src/stereo.c src/img.c src/cloud.c src/target.c src/graycode.c \

@@ -91,15 +91,25 @@ jobs:
           CFLAGS: -std=c99 -pedantic -Wall -Wextra -O0 -g --coverage
         run: sh deploy/build-linux.sh
       - name: coverage report
+        # suspicious_hits.warn: the full-HD reader tests legitimately
+        # run src/reader.c's innermost pixel loop ~5.2e9 times, over
+        # gcovr's 2^32 "suspicious hit" threshold, so it aborts the
+        # report assuming gcov bug 68080. That bug yields counts in the
+        # SAME range as our real ones, so no threshold can separate
+        # them -- downgrade to a warning rather than pretend otherwise.
+        # Coverage is a report, not a gate; the correctness gates are
+        # the sanitizer, valgrind and fuzz jobs.
         run: |
           pip install gcovr >/dev/null
           mkdir -p covhtml
-          gcovr -r . --filter 'src/' --filter 'include/' \
+          GCOVR_FLAGS="--gcov-ignore-parse-errors suspicious_hits.warn"
+          gcovr -r . $GCOVR_FLAGS --filter 'src/' --filter 'include/' \
                 --html-details covhtml/index.html \
                 --print-summary
           echo '## Coverage (src/, line/branch)' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          gcovr -r . --filter 'src/' >> "$GITHUB_STEP_SUMMARY"
+          gcovr -r . $GCOVR_FLAGS --filter 'src/' \
+                >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:

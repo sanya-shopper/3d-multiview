@@ -209,7 +209,7 @@ int main(int argc, char **argv)
     for (c = 1; c < ncam; c++) {
         double Rsum[9] = { 0 }, Racc[9], U[9], S[3], V[9], Vt[9];
         double R[9], t[3], tacc[3][256], tmean[3] = { 0, 0, 0 };
-        double angdev[256], tdev[256];
+        double angdev[256] = { 0 }, tdev[256] = { 0 };
         int npair = 0, i, j, k, n2 = 0;
 
         for (i = 0; i < cams[0].nobs && npair < 256; i++) {

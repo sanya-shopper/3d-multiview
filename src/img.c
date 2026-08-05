@@ -49,6 +49,11 @@ int mv_pgm_read(const char *path, unsigned char **data, int *w, int *h)
         goto fail;
     if (*w <= 0 || *h <= 0 || maxval <= 0 || maxval > 255)
         goto fail;
+    /* bound total pixels before allocating: a crafted/corrupt header
+     * (e.g. 66350x66350) would otherwise malloc gigabytes -- a DoS on
+     * any tool reading files. 100 Mpx covers any real camera frame. */
+    if ((double)(*w) * (double)(*h) > 100.0e6)
+        goto fail;
     sz = (size_t)(*w) * (size_t)(*h);
     *data = (unsigned char *)malloc(sz);
     if (!*data)

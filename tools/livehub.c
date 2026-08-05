@@ -105,6 +105,7 @@ typedef struct {
                         * never): drives the spoken guidance */
     int stall_said;    /* spoken-stall latch: announce each stall and
                         * each recovery once, not every status tick */
+    int badcal_said;   /* implausible-calibration voice latch */
 } cam_t;
 
 typedef struct {
@@ -315,6 +316,7 @@ static cam_t *cam_slot(unsigned camid, int ci)
             cams[stale].last_tier = 0;
             cams[stale].stall_said = 0;
             cams[stale].t_ctr = 0.0;
+            cams[stale].badcal_said = 0;
             return &cams[stale];
         }
     }
@@ -374,7 +376,33 @@ static void try_calibrate(cam_t *c)
         if (m >= 6
             && mv_calib_refine(K, ie, kr, iv, m) == MV_OK) {
             double rms = mv_calib_reproj_rms(ie, iv, m);
-            int first;
+            int first, cw, ch;
+            pthread_mutex_lock(&mbx);
+            cw = c->w;
+            ch = c->h;
+            pthread_mutex_unlock(&mbx);
+            /* sanity-gate the fit before it becomes the camera's K:
+             * two live sessions produced degenerate 6-inlier refits
+             * (fx/fy split 10%+, principal point off the sensor) that
+             * the flag accepted and that would poison every anchor
+             * pose.  Reject, keep the previous solution, say so. */
+            if (!(K[0] > 0.0 && K[4] > 0.0
+                  && K[0] / K[4] < 1.05 && K[4] / K[0] < 1.05
+                  && K[2] > 0.2 * cw && K[2] < 0.8 * cw
+                  && K[5] > 0.2 * ch && K[5] < 0.8 * ch)) {
+                hlog("[cal] cam %u: REJECTED implausible fit fx %.1f "
+                     "fy %.1f cx %.1f cy %.1f | RMS %.3f px over %d "
+                     "views\n", c->camid, K[0], K[4], K[2], K[5],
+                     rms, m);
+                if (!c->badcal_said) {
+                    c->badcal_said = 1;
+                    say("camera %u calibration failed a sanity check."
+                        " show it the pattern up close at more "
+                        "angles", c->camid);
+                }
+                return;
+            }
+            c->badcal_said = 0;
             pthread_mutex_lock(&mbx);
             first = !c->calibrated;
             memcpy(c->K, K, sizeof(K));

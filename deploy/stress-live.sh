@@ -25,6 +25,8 @@ grep "BOTTOM LINE" "$NLOG" || true
 if [ $NS -ne 0 ]; then
     echo "STRESS FAIL: hub dead after fuzz battery"
     cat "$NLOG"
+    echo "--- hub log (sanitizer reports live here) ---"
+    cat "$HLOG"
     kill $HUB 2>/dev/null
     exit 1
 fi

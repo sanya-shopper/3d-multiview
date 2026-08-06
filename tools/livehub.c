@@ -451,11 +451,27 @@ static double last_pose_say;
 #define SCENE_ZMIN 0.2       /* m, in camera-A frame */
 #define SCENE_ZMAX 6.0
 #define SCENE_MAXPTS 300000
-#define SCENE_SETTLE_S 30.0  /* extra refinement time after solve */
+/* Scene mode waits for the rig to STOP MOVING, not for a fixed delay
+ * after the first solve.  The first [ext] can land on very few
+ * anchors -- measured: a 48 s solve on 13 anchors with the fast
+ * reader -- and entering scene mode permanently stops pattern
+ * decoding, freezing whatever estimate existed at that instant.
+ * Requiring successive solves to agree makes the trigger track rig
+ * maturity instead of decoder speed, so it does not need retuning
+ * when the decoder gets faster.  Removing the pattern also satisfies
+ * it (no new solves = no change), which is the natural operator
+ * gesture.  MAX_WAIT bounds the wait so an unstable rig cannot leave
+ * the hub stuck forever; that path says so out loud. */
+#define SCENE_SETTLE_S 30.0    /* rig unchanged this long => mature */
+#define SCENE_STABLE_M 0.005   /* successive |t| agreement, metres */
+#define SCENE_MAX_WAIT_S 300.0 /* upper bound after the first solve */
 static double rig_R9[9], rig_t3[3]; /* x_a = R x_b + t (solved pair) */
 static int rig_a = -1, rig_b = -1;  /* cam table indices of the pair */
 static int rig_have;
 static double t_solved;
+static double rig_prev_t[3];   /* previous solved translation */
+static int rig_prev_have;
+static double t_rig_stable;    /* when the rig last stopped changing */
 static int scene_mode;
 static long scene_pairs, scene_npts;
 
@@ -535,6 +551,22 @@ static void try_extrinsics(void)
                        sqrt(tm[0] * tm[0] + tm[1] * tm[1]
                             + tm[2] * tm[2]), tm[0], tm[1], tm[2],
                        npair, devmm);
+                /* rig maturity: has this solve moved the estimate?
+                 * (translation only -- it carries the scale error
+                 * that matters downstream, and a rotation drift large
+                 * enough to matter moves t too through the anchors) */
+                if (rig_prev_have) {
+                    double d = 0.0;
+                    for (k = 0; k < 3; k++)
+                        d += (tm[k] - rig_prev_t[k])
+                             * (tm[k] - rig_prev_t[k]);
+                    if (sqrt(d) > SCENE_STABLE_M)
+                        t_rig_stable = 0.0;      /* still moving */
+                    else if (t_rig_stable == 0.0)
+                        t_rig_stable = now_mono(); /* settled now */
+                }
+                memcpy(rig_prev_t, tm, sizeof(rig_prev_t));
+                rig_prev_have = 1;
                 /* latest solution becomes THE rig for scene mode */
                 memcpy(rig_R9, Rm, sizeof(rig_R9));
                 memcpy(rig_t3, tm, sizeof(rig_t3));
@@ -951,19 +983,32 @@ static void *decoder_main(void *arg)
         /* rig solved and settled -> auto-flush and switch this thread
          * to live stereo; the pattern has done its job */
         if (!scene_mode) {
-            int enter;
+            int enter, timed_out = 0;
             pthread_mutex_lock(&mbx);
             enter = rig_have && pair_said[rig_a][rig_b]
-                    && now_mono() - t_solved > SCENE_SETTLE_S;
+                    && t_rig_stable > 0.0
+                    && now_mono() - t_rig_stable > SCENE_SETTLE_S;
+            if (!enter && rig_have && pair_said[rig_a][rig_b]
+                && now_mono() - t_solved > SCENE_MAX_WAIT_S) {
+                enter = 1;
+                timed_out = 1; /* never settled: proceed, but say so */
+            }
             pthread_mutex_unlock(&mbx);
+            if (timed_out)
+                hlog("[hub] rig never settled within %.0f s; entering "
+                     "scene mode on the latest estimate\n",
+                     SCENE_MAX_WAIT_S);
             if (enter) {
                 write_summary();
                 if (reclog)
                     fflush(reclog);
-                hlog("[hub] >>> RIG SOLVED -- entering SCENE MODE "
-                     "(live stereo on cams %u and %u) <<<\n",
-                     cams[rig_a].camid, cams[rig_b].camid);
-                say("rig saved. scene mode. remove the pattern, "
+                hlog("[hub] >>> RIG SOLVED and STABLE -- entering "
+                     "SCENE MODE (live stereo on cams %u and %u), "
+                     "baseline %.3f m <<<\n",
+                     cams[rig_a].camid, cams[rig_b].camid,
+                     sqrt(rig_t3[0] * rig_t3[0] + rig_t3[1] * rig_t3[1]
+                          + rig_t3[2] * rig_t3[2]));
+                say("rig settled. scene mode. remove the pattern, "
                     "stereo is live");
                 scene_mode = 1;
             }

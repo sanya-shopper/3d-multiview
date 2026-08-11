@@ -12,7 +12,9 @@
   <p class="lede">
     The <a href="index.html">molecule page</a> hands you a solved rig; this
     page makes you earn it. Two static cameras watch a parallelepiped of
-    known dimensions (1.20 × 0.80 × 0.50 m), carrying 20 printed marks (8 corners, 12 edge midpoints). Phase 1 solves the rig from
+    known dimensions (1.20 × 0.80 × 0.50 m), carrying 20 printed marks (8 corners, 12 edge midpoints); each of its
+    six faces wears its own color, so you can tell at a glance which side
+    the cameras are seeing. Phase 1 solves the rig from
     the box's mark pixels alone — normalized 8-point (§6), essential-matrix
     decomposition, and the known 1200 mm edge to anchor the metre (§1) —
     and shows how the solved baseline, rotation, and the box's <em>other</em>
@@ -31,7 +33,11 @@
       (R, t) candidates with the chirality test picking the one that puts
       the box in front of both cameras, then triangulation of the known
       1200 mm edges to convert the unit baseline into metres. Bank several
-      varied poses and watch the baseline error fall in the graph; toggle
+      varied poses and watch the baseline error fall <em>on average</em> —
+      any single bank can push it up, because each pose contributes its own
+      random draw of pixel-quantization noise and the estimate wanders as
+      it converges (the status line explains this whenever it happens);
+      toggle
       subpixel corners to remove quantization and the solve snaps to
       (numerically) exact — the box's 800 and 500 mm dimensions, which the
       solve never sees, are the honest test. In phase 2 the orange ghost
@@ -88,6 +94,9 @@
         <button type="button" id="clearmodel">clear model</button>
         <button type="button" id="resetsolve">reset everything</button>
       </p>
+      <canvas id="facecov" width="190" height="96"></canvas>
+      <p class="covnote">face coverage: one bar per colored face — full =
+      that side has been captured frontally enough (phase 2)</p>
       <label class="check"><input type="checkbox" id="autobank" checked>
         auto-bank when the box is released in a novel pose</label>
       <label class="check"><input type="checkbox" id="subpixel">

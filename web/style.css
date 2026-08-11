@@ -127,3 +127,20 @@ footer {
   font-size: 0.85rem;
   color: #4a5563;
 }
+
+/* rig page: solve-status badge, next-step button, coverage note */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 3px;
+  background: #e4e8ee;
+}
+.badge-rough { background: #fdf0d4; color: #7a5210; }
+.badge-solved { background: #d9efdb; color: #1d5e23; }
+.btn-next {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}
+#facecov { border: none; background: transparent; }
+.covnote { font-size: 0.75rem; color: #4a5563; margin: 0.1rem 0 0.4rem; }

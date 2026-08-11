@@ -36,6 +36,30 @@
 
   /* ---- the box of known dimensions ------------------------------------ */
   var box = MV.makeBox(1.20, 0.80, 0.50);
+
+  /* six faces, each its own color so every view shows which side is
+   * which; corner indices wind around each face quad */
+  var FACES = [
+    { name: 'orange', color: '230,85,13',  axis: 0, sign: 1,  bit: 1 },
+    { name: 'purple', color: '117,107,177', axis: 0, sign: -1, bit: 1 },
+    { name: 'green',  color: '49,163,84',  axis: 1, sign: 1,  bit: 2 },
+    { name: 'red',    color: '214,39,40',  axis: 1, sign: -1, bit: 2 },
+    { name: 'blue',   color: '31,120,180', axis: 2, sign: 1,  bit: 4 },
+    { name: 'gold',   color: '181,137,0',  axis: 2, sign: -1, bit: 4 }
+  ];
+  FACES.forEach(function (f) {
+    var others = [1, 2, 4].filter(function (b) { return b !== f.bit; });
+    var base = f.sign > 0 ? f.bit : 0;
+    f.corners = [base, base | others[0], base | others[0] | others[1],
+                 base | others[1]];
+  });
+  function faceGeom(f, atoms) {
+    var c = [0, 0, 0];
+    f.corners.forEach(function (i) { c = MV.add(c, atoms[i]); });
+    c = MV.scale(c, 0.25);
+    var n = [0, 0, 0]; n[f.axis] = f.sign;
+    return { center: c, normal: MV.matVec(poseR(state.pose), n) };
+  }
   var state = {
     pose: { yaw: 25 * DEG, pitch: 15 * DEG, roll: 0, x: 0, y: 0, z: 0 },
     phase: 'solve',                           /* 'solve' | 'measure' */
@@ -45,6 +69,9 @@
     banks: [],                                /* each: {obs, pose, R} */
     solved: null,                             /* {F, R, t, s, camS1, camS2} */
     baselineHist: [],                         /* % error per bank */
+    faceCov: [0, 0, 0, 0, 0, 0],              /* measure-phase coverage */
+    prevS: null, stableCount: 0,
+    solveStatus: 'none',                      /* none | rough | solved */
     cloud: [],                                /* world-frame points */
     tsdf: null,
     sliceK: 16,
@@ -120,7 +147,14 @@
                        pose: JSON.parse(JSON.stringify(state.pose)),
                        R: poseR(state.pose) });
     runSolve();
-    state.bankMsg = (auto ? 'auto-' : '') + 'banked pose ' + state.banks.length;
+    var msg = (auto ? 'auto-' : '') + 'banked pose ' + state.banks.length;
+    var h = state.baselineHist;
+    if (h.length >= 2 && h[h.length - 1] > h[h.length - 2]) {
+      msg += ' — error ticked UP: that pose\'s pixel noise pulled the fit; ' +
+        'normal, it falls on average (best so far ' +
+        Math.min.apply(null, h).toFixed(2) + '%)';
+    }
+    state.bankMsg = msg;
     return true;
   }
 
@@ -164,6 +198,15 @@
       rms: MV.epipolarRMS(F, all), npts: all.length
     };
     state.baselineHist.push(Math.abs(s - Btrue) / Btrue * 100);
+    /* IN-SYSTEM convergence: the solver cannot see the truth, so
+     * "solved" is declared from solve-to-solve stability */
+    if (state.prevS !== null && Math.abs(s - state.prevS) / state.prevS < 0.01)
+      state.stableCount++;
+    else
+      state.stableCount = 0;
+    state.prevS = s;
+    state.solveStatus =
+      (state.banks.length >= 4 && state.stableCount >= 2) ? 'solved' : 'rough';
   }
 
   /* triangulate the currently visible corners with the SOLVED metric rig */
@@ -211,6 +254,18 @@
     buf.width = DISP_W; buf.height = DISP_H;
     var bx = buf.getContext('2d');
     bx.fillStyle = '#10141a'; bx.fillRect(0, 0, DISP_W, DISP_H);
+    FACES.forEach(function (f) {
+      var g = faceGeom(f, atoms);
+      if (MV.dot(g.normal, MV.sub(g.center, cam.C)) >= 0) return; /* back */
+      var pts = f.corners.map(function (i) { return MV.project(cam, atoms[i]); });
+      if (pts.some(function (p) { return !p; })) return;
+      bx.fillStyle = 'rgba(' + f.color + ',0.50)';
+      bx.beginPath();
+      pts.forEach(function (p, k) {
+        if (k === 0) bx.moveTo(p.u, p.v); else bx.lineTo(p.u, p.v);
+      });
+      bx.closePath(); bx.fill();
+    });
     bx.strokeStyle = '#9aa3ad'; bx.lineWidth = 1;
     box.bonds.forEach(function (b) {
       var p = MV.project(cam, atoms[b[0]]), q = MV.project(cam, atoms[b[1]]);
@@ -268,7 +323,19 @@
       var p = oproj(X);
       cx.fillRect(p[0] - 1, p[1] - 1, 2, 2);
     });
-    /* the box, true pose */
+    /* the box, true pose: front faces filled in their colors */
+    var VDIR = MV.unit([0.45, 1, -0.311]);    /* oblique-view kernel */
+    FACES.forEach(function (f) {
+      var g = faceGeom(f, atoms);
+      if (MV.dot(g.normal, VDIR) >= 0) return;
+      var pts = f.corners.map(function (i) { return oproj(atoms[i]); });
+      cx.fillStyle = 'rgba(' + f.color + ',0.30)';
+      cx.beginPath();
+      pts.forEach(function (p, k) {
+        if (k === 0) cx.moveTo(p[0], p[1]); else cx.lineTo(p[0], p[1]);
+      });
+      cx.closePath(); cx.fill();
+    });
     cx.strokeStyle = '#6b7280'; cx.lineWidth = 2;
     box.bonds.forEach(function (b) {
       var p = oproj(atoms[b[0]]), q = oproj(atoms[b[1]]);
@@ -315,12 +382,13 @@
       var C2s = toWorld(MV.scale(MV.matVec(MV.transpose(state.solved.R),
                                            MV.scale(state.solved.t, state.solved.s)), -1));
       var pg = oproj(C2s), pt = oproj(cam2.C);
-      cx.strokeStyle = '#b45309'; cx.lineWidth = 1.5;
+      var ghostCol = state.solveStatus === 'solved' ? '#2e7d32' : '#b45309';
+      cx.strokeStyle = ghostCol; cx.lineWidth = 1.5;
       cx.beginPath(); cx.arc(pg[0], pg[1], 6, 0, 2 * Math.PI); cx.stroke();
       cx.setLineDash([3, 3]);
       cx.beginPath(); cx.moveTo(pg[0], pg[1]); cx.lineTo(pt[0], pt[1]); cx.stroke();
       cx.setLineDash([]);
-      cx.fillStyle = '#b45309'; cx.font = '10px system-ui, sans-serif';
+      cx.fillStyle = ghostCol; cx.font = '10px system-ui, sans-serif';
       cx.fillText('solved cam 2', pg[0] + 8, pg[1] - 6);
     }
     drawWorldAxes(cx, cv);
@@ -368,6 +436,33 @@
     }
     document.getElementById('slicelabel').textContent =
       'z = ' + (t.min[2] + (state.sliceK + 0.5) * t.cell).toFixed(2) + ' m';
+  }
+
+  /* face-coverage meter: how clearly each colored side has been seen */
+  var COV_TARGET = 8;                         /* ~8 frontal observations */
+  function drawFaceCov() {
+    var cv = document.getElementById('facecov'), cx = cv.getContext('2d');
+    cx.clearRect(0, 0, cv.width, cv.height);
+    if (state.phase !== 'measure') {
+      cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText('face coverage appears in phase 2', 6, cv.height / 2);
+      return;
+    }
+    var rowH = cv.height / 6;
+    FACES.forEach(function (f, i) {
+      var y = i * rowH + 2;
+      cx.fillStyle = 'rgb(' + f.color + ')';
+      cx.fillRect(2, y, 10, rowH - 4);
+      var frac = Math.min(1, state.faceCov[i] / COV_TARGET);
+      cx.fillStyle = '#eceff3';
+      cx.fillRect(16, y, cv.width - 20, rowH - 4);
+      cx.fillStyle = 'rgba(' + f.color + ',0.75)';
+      cx.fillRect(16, y, (cv.width - 20) * frac, rowH - 4);
+      if (frac >= 1) {
+        cx.fillStyle = '#1c2733'; cx.font = '9px system-ui, sans-serif';
+        cx.fillText('✓', cv.width - 12, y + rowH - 7);
+      }
+    });
   }
 
   /* convergence graph: baseline error % after each banked pose */
@@ -481,9 +576,18 @@
         lines.push('model accumulation (§9): cloud ' + state.cloud.length +
           ' points; TSDF ' + (state.tsdf ? state.tsdf.observed() : 0) +
           ' observed voxels (scatter/ray updates, §3.5)');
-        lines.push('move the box and the model accumulates; hold it still and');
-        lines.push('quantization noise averages down (§9.2); a moving box smears —');
-        lines.push('the reason the doc separates background from movers (§9.3–9.4).');
+        var unseen = [];
+        FACES.forEach(function (f, i) {
+          if (state.faceCov[i] < COV_TARGET * 0.5) unseen.push(f.name);
+        });
+        if (unseen.length)
+          lines.push('faces not yet seen clearly: ' + unseen.join(', ') +
+            ' — rotate the box to front them toward a camera');
+        else
+          lines.push('all six faces covered — the model has seen the whole box');
+        lines.push('hold the box still and quantization noise averages down (§9.2);');
+        lines.push('a moving box smears the TSDF — the reason the doc separates');
+        lines.push('background from movers (§9.3–9.4).');
       }
     }
     out.textContent = lines.join('\n');
@@ -571,6 +675,15 @@
           state.tsdf.integrate(Xw, C1w);
           state.tsdf.integrate(Xw, C2w);
         });
+        /* per-face scan coverage: a face is being captured when it
+         * fronts a camera; frontal views count more than grazing ones */
+        FACES.forEach(function (f, fi) {
+          var g = faceGeom(f, atoms);
+          [cam1.C, cam2.C].forEach(function (C) {
+            var cos = MV.dot(g.normal, MV.unit(MV.sub(C, g.center)));
+            if (cos > 0.25) state.faceCov[fi] += cos;
+          });
+        });
         while (state.cloud.length > 4000) state.cloud.shift();
       }
     }
@@ -579,6 +692,7 @@
     drawView('view2', cam2, atoms, obs, 'p2', reproj2);
     drawSlice();
     drawGraph();
+    drawFaceCov();
     updateReadout(obs);
     syncButtons();
   }
@@ -603,10 +717,14 @@
   document.getElementById('resetsolve').addEventListener('click', function () {
     state.banks = []; state.solved = null; state.baselineHist = [];
     state.cloud = []; state.tsdf = null; state.phase = 'solve';
+    state.faceCov = [0, 0, 0, 0, 0, 0];
+    state.prevS = null; state.stableCount = 0; state.solveStatus = 'none';
+    state.bankMsg = 'drag the box, release to auto-bank';
     render();
   });
   document.getElementById('clearmodel').addEventListener('click', function () {
     state.cloud = []; state.tsdf = null; state.lastPoseKey = '';
+    state.faceCov = [0, 0, 0, 0, 0, 0];
     render();
   });
   document.getElementById('subpixel').addEventListener('change', function (e) {
@@ -622,10 +740,27 @@
     document.getElementById('bank').disabled = observe().length < 8;
     document.getElementById('tomeasure').disabled = !state.solved || state.phase === 'measure';
     document.getElementById('tosolve').disabled = state.phase === 'solve';
-    document.getElementById('phasebadge').textContent =
-      state.phase === 'solve' ? 'phase 1: solve' : 'phase 2: measure';
-    document.getElementById('bankmsg').textContent =
-      state.phase === 'solve' ? state.bankMsg : '';
+    var badge = document.getElementById('phasebadge');
+    var toMeasureBtn = document.getElementById('tomeasure');
+    if (state.phase === 'measure') {
+      badge.textContent = 'phase 2: measure';
+      badge.className = 'badge badge-solved';
+      toMeasureBtn.classList.remove('btn-next');
+      document.getElementById('bankmsg').textContent =
+        'rotate the box so every colored face fills its coverage bar';
+    } else if (state.solveStatus === 'solved') {
+      badge.textContent = '✓ RIG SOLVED (stable to <1%)';
+      badge.className = 'badge badge-solved';
+      toMeasureBtn.classList.add('btn-next');
+      document.getElementById('bankmsg').textContent =
+        'next: accept solve → measure (more banks still refine it)';
+    } else {
+      badge.textContent = state.solved
+        ? 'phase 1: solving — not yet stable' : 'phase 1: solve';
+      badge.className = 'badge' + (state.solved ? ' badge-rough' : '');
+      toMeasureBtn.classList.remove('btn-next');
+      document.getElementById('bankmsg').textContent = state.bankMsg;
+    }
   }
 
   /* drag the box in the world view: translate / shift-rotate / alt-depth */

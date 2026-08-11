@@ -163,6 +163,7 @@
       }
     }
     bx.putImageData(dst, 0, 0);
+    bufs.xfer = buf;                          /* raw warp, for the diff panel */
     cx.imageSmoothingEnabled = false;
     cx.drawImage(buf, 0, 0, cv.width, cv.height);
     pixelGrid(cx, cv);
@@ -207,6 +208,43 @@
       stats.planeN++;
     });
     if (stats.planeN) stats.planeMean /= stats.planeN;
+    return stats;
+  }
+
+  /* ---------------- diff panel: |actual - predicted|, amplified ---------- */
+
+  function drawDiff() {
+    var cv = document.getElementById('diff'), cx = cv.getContext('2d');
+    var stats = { mean: NaN, max: 0 };
+    cx.clearRect(0, 0, cv.width, cv.height);
+    if (!bufs.view2 || !bufs.xfer) {
+      cx.fillStyle = '#10141a'; cx.fillRect(0, 0, cv.width, cv.height);
+      return stats;
+    }
+    var a = bufs.view2.getContext('2d').getImageData(0, 0, DISP_W, DISP_H);
+    var b = bufs.xfer.getContext('2d').getImageData(0, 0, DISP_W, DISP_H);
+    var buf = document.createElement('canvas');
+    buf.width = DISP_W; buf.height = DISP_H;
+    var bx = buf.getContext('2d');
+    var dst = bx.createImageData(DISP_W, DISP_H);
+    var i, d, amp, sum = 0, n = DISP_W * DISP_H;
+    for (i = 0; i < n; i++) {
+      d = (Math.abs(a.data[4 * i] - b.data[4 * i]) +
+           Math.abs(a.data[4 * i + 1] - b.data[4 * i + 1]) +
+           Math.abs(a.data[4 * i + 2] - b.data[4 * i + 2])) / 3;
+      sum += d;
+      if (d > stats.max) stats.max = d;
+      amp = Math.min(255, d * 2);             /* x2 gain for visibility */
+      dst.data[4 * i] = amp;
+      dst.data[4 * i + 1] = amp * 0.55;
+      dst.data[4 * i + 2] = amp * 0.12;
+      dst.data[4 * i + 3] = 255;
+    }
+    stats.mean = sum / n;
+    bx.putImageData(dst, 0, 0);
+    cx.imageSmoothingEnabled = false;
+    cx.drawImage(buf, 0, 0, cv.width, cv.height);
+    pixelGrid(cx, cv);
     return stats;
   }
 
@@ -362,6 +400,11 @@
       '  depth-true transfer of ' + name + ' (back-project at z₁, reproject): ' +
         (isNaN(xstats.depthSel) ? 'n/a' :
           xstats.depthSel.toFixed(2) + ' px — only quantization remains') + '\n' +
+      '  display diff |actual − predicted| (diff panel): mean ' +
+        (xstats.diff && !isNaN(xstats.diff.mean) ?
+          xstats.diff.mean.toFixed(1) + ' / max ' +
+          xstats.diff.max.toFixed(0) + '  (of 255)' : 'n/a') +
+        ' — bright pixels are the homography’s failures\n' +
       '\n' +
       'DLT triangulation from the two display pixels (doc §7):\n' +
       (Xhat ?
@@ -387,6 +430,7 @@
     drawDisplay('view1', cam1, atoms, F21, cam2, atoms);
     drawDisplay('view2', cam2, atoms, F, cam1, atoms);
     var xstats = drawTransfer(cam1, cam2, atoms);
+    xstats.diff = drawDiff();
     updateReadout(cam1, cam2, atoms, F, xstats);
   }
 

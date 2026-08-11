@@ -59,6 +59,14 @@
         homography (§5.1); rings = actual, cross = depth-true transfer</figcaption>
       </figure>
     </section>
+    <section class="row">
+      <figure>
+        <canvas id="diff" width="320" height="240"></canvas>
+        <figcaption>pixel diff |actual − predicted| (×2 gain): dark =
+        transfer correct; glowing = parallax and resampling error, the
+        depth signal the homography cannot model</figcaption>
+      </figure>
+    </section>
     <section>
       <h2>The computations, live</h2>
       <pre id="readout"></pre>

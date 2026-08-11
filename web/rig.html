@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>multiview — earn the rig</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Earn the rig: solving two cameras from a known box</h1>
+  <p class="lede">
+    The <a href="index.html">molecule page</a> hands you a solved rig; this
+    page makes you earn it. Two static cameras watch a parallelepiped of
+    known dimensions (1.20 × 0.80 × 0.50 m), carrying 20 printed marks (8 corners, 12 edge midpoints). Phase 1 solves the rig from
+    the box's mark pixels alone — normalized 8-point (§6), essential-matrix
+    decomposition, and the known 1200 mm edge to anchor the metre (§1) —
+    and shows how the solved baseline, rotation, and the box's <em>other</em>
+    dimensions differ from ground truth. Phase 2 measures with the solved
+    rig: move the box and triangulated corners (§7) accumulate a point
+    cloud and a scatter-updated TSDF (§3.5, §9.2).
+  </p>
+  <details class="explain">
+    <summary>How the solve works, and what to try</summary>
+    <p>
+      Each time you <em>bank</em> a pose, the 20 mark pixels seen by both
+      cameras join the correspondence set (corners are detected at display
+      resolution, so they carry quantization noise — the σ<sub>d</sub> of
+      §8). The solve runs the document's §6 pipeline: normalized 8-point
+      for F with rank-2 enforcement, E = K₂ᵀFK₁, decomposition into four
+      (R, t) candidates with the chirality test picking the one that puts
+      the box in front of both cameras, then triangulation of the known
+      1200 mm edges to convert the unit baseline into metres. Bank several
+      varied poses and watch the baseline error fall in the graph; toggle
+      subpixel corners to remove quantization and the solve snaps to
+      (numerically) exact — the box's 800 and 500 mm dimensions, which the
+      solve never sees, are the honest test. In phase 2 the orange ghost
+      marks where the solved rig believes camera 2 stands; the cloud and
+      TSDF are built through the solved cameras only, so every millimetre
+      of model error is inherited rig error plus quantization. Hold the box
+      still to watch noise average down (§9.2); move it and the TSDF
+      smears — the reason the document separates the static background
+      from movers (§9.3–9.4).
+    </p>
+  </details>
+</header>
+
+<main>
+  <section class="row">
+    <figure>
+      <canvas id="overview" width="340" height="280"></canvas>
+      <figcaption>world view — <b>drag the box</b>
+      (shift&nbsp;=&nbsp;rotate, alt&nbsp;=&nbsp;depth); orange ghost =
+      solved camera 2</figcaption>
+    </figure>
+    <figure>
+      <canvas id="view1" width="320" height="240"></canvas>
+      <figcaption>camera 1 — yellow = detected corner pixels</figcaption>
+    </figure>
+    <figure>
+      <canvas id="view2" width="320" height="240"></canvas>
+      <figcaption>camera 2 — cyan crosses (phase 2) = solved-rig
+      reprojections</figcaption>
+    </figure>
+  </section>
+  <section class="row">
+    <figure>
+      <canvas id="tsdfslice" width="224" height="224"></canvas>
+      <figcaption>TSDF horizontal slice, <span id="slicelabel">z</span>
+      <input type="range" id="slicek" min="0" max="31" value="16"
+        style="width: 100%"><br>
+      blue = measured empty (carved), orange = behind surface, dark
+      boundary = the zero crossing; gray = never observed</figcaption>
+    </figure>
+    <figure>
+      <canvas id="convgraph" width="320" height="120"></canvas>
+      <figcaption>solved-baseline error vs banked poses</figcaption>
+    </figure>
+    <div class="quickhelp">
+      <p><b id="phasebadge">phase 1: solve</b></p>
+      <p>
+        <button type="button" id="bank">bank this pose</button>
+        <button type="button" id="tomeasure">accept solve → measure</button>
+        <button type="button" id="tosolve">back to solving</button>
+      </p>
+      <p>
+        <button type="button" id="clearmodel">clear model</button>
+        <button type="button" id="resetsolve">reset everything</button>
+      </p>
+      <label class="check"><input type="checkbox" id="subpixel">
+        subpixel corners (remove quantization noise)</label>
+      <p>Bank several <em>varied</em> box poses, accept the solve, then
+      move the box and watch the cloud and TSDF grow through the solved
+      cameras.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>The numbers, live</h2>
+    <pre id="readout"></pre>
+  </section>
+</main>
+
+<footer>
+  <p>Part of the <code>multiview</code> learning repo — companion to
+  <code>doc/multiview.pdf</code> §1, §6, §7, §9. The math lives in
+  <code>model.js</code> (shared with the <a href="index.html">molecule
+  page</a>) and is unit-tested by <code>make check</code>;
+  <code>rigapp.js</code> only draws and routes input.</p>
+</footer>
+
+<script src="model.js"></script>
+<script src="rigapp.js"></script>
+</body>
+</html>

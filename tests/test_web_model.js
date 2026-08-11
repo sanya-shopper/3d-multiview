@@ -140,6 +140,75 @@ var F = MV.fundamental(cam1, cam2);
      'roll of 90 degrees rotates the image plane as expected');
 })();
 
+/* --- svd3 reconstructs and is orthonormal ------------------------------ */
+(function () {
+  var M = [[2, -1, 0.5], [0.3, 1.7, -2.2], [1.1, 0.4, 0.9]];
+  var s = MV.svd3(M), i, j, k, worst = 0;
+  for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) {
+    var m = 0;
+    for (k = 0; k < 3; k++) m += s.S[k] * s.U[k][i] * s.V[k][j];
+    worst = Math.max(worst, Math.abs(m - M[i][j]));
+  }
+  ok(worst < 1e-9, 'svd3: U S V\' reconstructs the matrix');
+  ok(s.S[0] >= s.S[1] && s.S[1] >= s.S[2], 'svd3: singular values descending');
+})();
+
+/* --- rig solving: 8-point + E decomposition + chirality ---------------- */
+(function () {
+  /* synthesize exact correspondences of a box seen by the two cameras */
+  var box = MV.makeBox(0.8, 0.5, 0.3);
+  var pairs = [];
+  [{ yaw: 0.4, pitch: 0.2, roll: 0.1, x: 0, y: 0, z: 0 },
+   { yaw: -0.7, pitch: -0.3, roll: 0.9, x: 0.3, y: -0.2, z: 0.2 },
+   { yaw: 1.4, pitch: 0.5, roll: -0.5, x: -0.3, y: 0.3, z: -0.2 }]
+    .forEach(function (pose) {
+      MV.poseMolecule(box, pose).forEach(function (X) {
+        var p1 = MV.project(cam1, X), p2 = MV.project(cam2, X);
+        if (p1 && p2) pairs.push({ p1: p1, p2: p2 });
+      });
+    });
+  var F = MV.eightPoint(pairs);
+  ok(F && MV.epipolarRMS(F, pairs) < 1e-6,
+     '8-point: epipolar RMS ~ 0 on exact correspondences');
+  var Fe = MV.essentialFromPairs(pairs, cam1.K, cam2.K);
+  ok(Fe && MV.epipolarRMS(Fe, pairs) < 1e-6,
+     'calibrated E solve: epipolar RMS ~ 0 on exact correspondences');
+  F = Fe;                                    /* downstream uses the E path */
+  var rel = MV.relativePose(F, cam1.K, cam2.K, pairs, 64, 48);
+  var Rtrue = MV.matMul(cam2.R, MV.transpose(cam1.R));
+  var ttrue = MV.sub(cam2.t, MV.matVec(Rtrue, cam1.t));
+  ok(MV.rotationAngle(rel.R, Rtrue) < 1e-6,
+     'E decomposition recovers the relative rotation');
+  ok(Math.abs(MV.dot(rel.t, MV.unit(ttrue))) > 1 - 1e-9,
+     'E decomposition recovers the baseline direction (unit scale)');
+  /* scale anchoring: triangulate in the unit-baseline rig, measure one
+   * known edge, and the recovered scale is the true baseline length */
+  var camS1 = MV.camFromRt(cam1.K, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0], 64, 48);
+  var camS2 = MV.camFromRt(cam2.K, rel.R, rel.t, 64, 48);
+  var X0 = MV.triangulate(camS1, pairs[0].p1, camS2, pairs[0].p2);
+  var X1 = MV.triangulate(camS1, pairs[1].p1, camS2, pairs[1].p2);
+  var estEdge = MV.norm(MV.sub(X1, X0));      /* corners 0-1: the a edge */
+  var scale = 0.8 / estEdge;
+  ok(Math.abs(scale - MV.norm(ttrue)) < 1e-6,
+     'known edge anchors the metric scale to the true baseline');
+})();
+
+/* --- TSDF scatter integration ------------------------------------------ */
+(function () {
+  var t = MV.makeTSDF({ center: [0, 0, 0], size: 2, n: 20, tau: 0.15 });
+  var X = [0.4, 0.1, 0], C = [-0.9, 0.1, 0];
+  t.integrate(X, C);
+  var k = Math.floor((0 - t.min[2]) / t.cell);
+  var s = t.slice(k);
+  function at(x, y) {
+    return s[Math.floor((y - t.min[1]) / t.cell)][Math.floor((x - t.min[0]) / t.cell)];
+  }
+  ok(Math.abs(at(0.4, 0.1)) < t.tau, 'TSDF: band voxel holds a small signed distance');
+  ok(at(-0.4, 0.1) === t.tau, 'TSDF: free-space voxel carved at +tau');
+  ok(isNaN(at(0.8, 0.1)), 'TSDF: voxel behind the surface untouched');
+  ok(t.observed() > 0, 'TSDF: observed-voxel count positive');
+})();
+
 /* --- molecule/pose plumbing -------------------------------------------- */
 (function () {
   var mol = MV.makeMolecule();

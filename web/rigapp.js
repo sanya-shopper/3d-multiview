@@ -1,0 +1,549 @@
+/* rigapp.js -- UI for "earn the rig": solve two static cameras from a
+ * parallelepiped of known dimensions, then measure with the solved rig.
+ * All mathematics lives in model.js; this file draws and routes input.
+ *
+ * Phase 1 (solve): the box is posed in the volume; each banked pose adds
+ * its 20 mark correspondences (8 corners + 12 edge midpoints); the rig
+ * is solved from ALL banked, deduplicated correspondences (calibrated
+ * 8-point on normalized coordinates -> essential matrix -> chirality ->
+ * R,t at unit baseline) and the known 1.20 m edge anchors the scale. The
+ * readout compares solved baseline/rotation and the OTHER box dimensions
+ * against ground truth.
+ *
+ * Phase 2 (measure): the box moves freely; its corners are triangulated
+ * with the SOLVED rig (never the true one), accumulating a point cloud
+ * and a scatter-updated TSDF (doc sections 3.5, 9.2).
+ */
+'use strict';
+
+(function () {
+  var DISP_W = 160, DISP_H = 120, ZOOM = 2;
+  var FOCAL = 130;
+  var DEG = Math.PI / 180;
+  var OSCALE = 36;
+  var I3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+  /* ---- the true rig (static; the page's "reality") -------------------- */
+  function fixedCam(pos) {
+    var a = MV.aimAngles(pos, [0, 0, 0]);
+    return MV.makeCameraPose({ pos: pos, pan: a.pan, tilt: a.tilt, roll: 0,
+                               f: FOCAL, W: DISP_W, H: DISP_H });
+  }
+  var cam1 = fixedCam([3.72, -1.80, 0.75]);
+  var cam2 = fixedCam([3.76, 1.82, 0.42]);
+  var Btrue = MV.norm(MV.sub(cam2.C, cam1.C));
+  var RtrueRel = MV.matMul(cam2.R, MV.transpose(cam1.R));
+
+  /* ---- the box of known dimensions ------------------------------------ */
+  var box = MV.makeBox(1.20, 0.80, 0.50);
+  var state = {
+    pose: { yaw: 25 * DEG, pitch: 15 * DEG, roll: 0, x: 0, y: 0, z: 0 },
+    phase: 'solve',                           /* 'solve' | 'measure' */
+    subpixel: false,
+    banks: [],                                /* each: [{i, p1, p2}, ...] */
+    solved: null,                             /* {F, R, t, s, camS1, camS2} */
+    baselineHist: [],                         /* % error per bank */
+    cloud: [],                                /* world-frame points */
+    tsdf: null,
+    sliceK: 16,
+    lastPoseKey: ''
+  };
+
+  /* solved-frame (camera-1 frame) -> true world, for display only */
+  function toWorld(X) {
+    return MV.add(MV.matVec(MV.transpose(cam1.R), X), cam1.C);
+  }
+
+  /* the box's detectable marks: 8 corners + 12 printed edge-midpoint
+   * dots (the midpoints break the near-degenerate configuration that
+   * bare parallelepiped corners present to the two-view solve) */
+  function markers(atoms) {
+    var pts = atoms.slice();
+    box.bonds.forEach(function (b) {
+      pts.push(MV.scale(MV.add(atoms[b[0]], atoms[b[1]]), 0.5));
+    });
+    return pts;
+  }
+
+  /* detect the box marks on both displays under the current pose */
+  function observe() {
+    var atoms = MV.poseMolecule(box, state.pose);
+    var out = [];
+    markers(atoms).forEach(function (X, i) {
+      var p1 = MV.project(cam1, X), p2 = MV.project(cam2, X);
+      if (!p1 || !p2) return;
+      if (p1.u < 0 || p1.u >= DISP_W || p1.v < 0 || p1.v >= DISP_H) return;
+      if (p2.u < 0 || p2.u >= DISP_W || p2.v < 0 || p2.v >= DISP_H) return;
+      if (!state.subpixel) { p1 = MV.quantize(p1); p2 = MV.quantize(p2); }
+      out.push({ i: i, p1: { u: p1.u, v: p1.v }, p2: { u: p2.u, v: p2.v } });
+    });
+    return out;
+  }
+
+  /* ---- the solve ------------------------------------------------------- */
+
+  function runSolve() {
+    var all = [], seen = {};
+    state.banks.forEach(function (b) { b.forEach(function (c) {
+      var key = c.p1.u + ',' + c.p1.v + '|' + c.p2.u + ',' + c.p2.v;
+      if (seen[key]) return;                  /* quantization duplicates */
+      seen[key] = 1;
+      all.push(c);
+    }); });
+    if (all.length < 8) { state.solved = null; return; }
+    var F = MV.essentialFromPairs(all, cam1.K, cam2.K);
+    if (!F) { state.solved = null; return; }
+    var rel = MV.relativePose(F, cam1.K, cam2.K, all, DISP_W, DISP_H);
+    if (!rel) { state.solved = null; return; }
+    var camU1 = MV.camFromRt(cam1.K, I3, [0, 0, 0], DISP_W, DISP_H);
+    var camU2 = MV.camFromRt(cam2.K, rel.R, rel.t, DISP_W, DISP_H);
+    /* metric scale from the KNOWN 1.20 m edges (bit-1 corner pairs) of
+     * every banked pose, in the unit-baseline reconstruction */
+    var ratios = [];
+    state.banks.forEach(function (b) {
+      var X = {};
+      b.forEach(function (c) {
+        X[c.i] = MV.triangulate(camU1, c.p1, camU2, c.p2);
+      });
+      b.forEach(function (c) {
+        var j = c.i ^ 1;                      /* corner pairs only */
+        if (c.i < 8 && j > c.i && X[c.i] && X[j])
+          ratios.push(box.dims[0] / MV.norm(MV.sub(X[j], X[c.i])));
+      });
+    });
+    if (!ratios.length) { state.solved = null; return; }
+    var s = ratios.reduce(function (a, b) { return a + b; }, 0) / ratios.length;
+    state.solved = {
+      F: F, R: rel.R, t: rel.t, s: s,
+      camS1: camU1,
+      camS2: MV.camFromRt(cam2.K, rel.R, MV.scale(rel.t, s), DISP_W, DISP_H),
+      rms: MV.epipolarRMS(F, all), npts: all.length
+    };
+    state.baselineHist.push(Math.abs(s - Btrue) / Btrue * 100);
+  }
+
+  /* triangulate the currently visible corners with the SOLVED metric rig */
+  function measureCorners(obs) {
+    if (!state.solved) return {};
+    var X = {};
+    obs.forEach(function (c) {
+      var p = MV.triangulate(state.solved.camS1, c.p1, state.solved.camS2, c.p2);
+      if (p) X[c.i] = p;                      /* solved frame = cam1 frame */
+    });
+    return X;
+  }
+
+  /* mean measured edge length per box axis, from solved-frame corners */
+  function measureDims(X) {
+    var dims = [NaN, NaN, NaN];
+    [1, 2, 4].forEach(function (bit, axis) {
+      var acc = 0, n = 0, i;
+      for (i = 0; i < 8; i++) {
+        var j = i ^ bit;
+        if (j > i && X[i] && X[j]) { acc += MV.norm(MV.sub(X[j], X[i])); n++; }
+      }
+      if (n) dims[axis] = acc / n;
+    });
+    return dims;
+  }
+
+  /* ---- drawing --------------------------------------------------------- */
+
+  function pixelGrid(cx, cv) {
+    cx.strokeStyle = 'rgba(255,255,255,0.07)';
+    cx.lineWidth = 1;
+    var i;
+    for (i = 0; i <= DISP_W; i++) {
+      cx.beginPath(); cx.moveTo(i * ZOOM, 0); cx.lineTo(i * ZOOM, cv.height); cx.stroke();
+    }
+    for (i = 0; i <= DISP_H; i++) {
+      cx.beginPath(); cx.moveTo(0, i * ZOOM); cx.lineTo(cv.width, i * ZOOM); cx.stroke();
+    }
+  }
+
+  function drawView(canvasId, cam, atoms, obs, obsKey, reproj) {
+    var cv = document.getElementById(canvasId), cx = cv.getContext('2d');
+    var buf = document.createElement('canvas');
+    buf.width = DISP_W; buf.height = DISP_H;
+    var bx = buf.getContext('2d');
+    bx.fillStyle = '#10141a'; bx.fillRect(0, 0, DISP_W, DISP_H);
+    bx.strokeStyle = '#9aa3ad'; bx.lineWidth = 1;
+    box.bonds.forEach(function (b) {
+      var p = MV.project(cam, atoms[b[0]]), q = MV.project(cam, atoms[b[1]]);
+      if (!p || !q) return;
+      bx.beginPath(); bx.moveTo(p.u, p.v); bx.lineTo(q.u, q.v); bx.stroke();
+    });
+    markers(atoms).forEach(function (X, i) {
+      var p = MV.project(cam, X);
+      if (!p) return;
+      bx.fillStyle = i < 8 ? '#2d6cdf' : '#7aa2e8';
+      bx.beginPath(); bx.arc(p.u, p.v, i < 8 ? 2.4 : 1.4, 0, 2 * Math.PI);
+      bx.fill();
+    });
+    cx.imageSmoothingEnabled = false;
+    cx.clearRect(0, 0, cv.width, cv.height);
+    cx.drawImage(buf, 0, 0, cv.width, cv.height);
+    /* detected mark pixels */
+    obs.forEach(function (c) {
+      var p = c[obsKey];
+      cx.strokeStyle = '#ffd75e'; cx.lineWidth = 1;
+      cx.strokeRect((p.u - 1) * ZOOM, (p.v - 1) * ZOOM, ZOOM * 2, ZOOM * 2);
+    });
+    /* measure phase: reprojections of the solved-rig triangulations */
+    if (reproj) reproj.forEach(function (p) {
+      cx.strokeStyle = '#5ec8ff'; cx.lineWidth = 1.5;
+      cx.beginPath();
+      cx.moveTo((p.u - 1) * ZOOM, p.v * ZOOM); cx.lineTo((p.u + 1) * ZOOM, p.v * ZOOM);
+      cx.moveTo(p.u * ZOOM, (p.v - 1) * ZOOM); cx.lineTo(p.u * ZOOM, (p.v + 1) * ZOOM);
+      cx.stroke();
+    });
+  }
+
+  function oproj(X) {
+    var cv = document.getElementById('overview');
+    return [cv.width / 2 + OSCALE * (X[0] - 0.45 * X[1]),
+            cv.height / 2 - OSCALE * (X[2] * 0.9 + 0.28 * X[1])];
+  }
+
+  function drawOverview(atoms) {
+    var cv = document.getElementById('overview'), cx = cv.getContext('2d');
+    cx.clearRect(0, 0, cv.width, cv.height);
+    cx.strokeStyle = '#c3cad2'; cx.lineWidth = 1;
+    var s = 1.1, k, corners = [], edges = [
+      [0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4],
+      [0, 4], [1, 5], [2, 6], [3, 7]];
+    for (k = 0; k < 8; k++)
+      corners.push([(k & 1 ? s : -s), (k & 2 ? s : -s), (k & 4 ? s : -s)]);
+    edges.forEach(function (e) {
+      var p = oproj(corners[e[0]]), q = oproj(corners[e[1]]);
+      cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
+    });
+    /* accumulated cloud (measure phase), under the live geometry */
+    cx.fillStyle = 'rgba(15,118,110,0.55)';
+    state.cloud.forEach(function (X) {
+      var p = oproj(X);
+      cx.fillRect(p[0] - 1, p[1] - 1, 2, 2);
+    });
+    /* the box, true pose */
+    cx.strokeStyle = '#6b7280'; cx.lineWidth = 2;
+    box.bonds.forEach(function (b) {
+      var p = oproj(atoms[b[0]]), q = oproj(atoms[b[1]]);
+      cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
+    });
+    atoms.forEach(function (X) {
+      var p = oproj(X);
+      cx.fillStyle = '#2d6cdf';
+      cx.beginPath(); cx.arc(p[0], p[1], 3.5, 0, 2 * Math.PI); cx.fill();
+    });
+    /* cameras with frusta */
+    [[cam1, 'cam 1'], [cam2, 'cam 2']].forEach(function (cc) {
+      var cam = cc[0], p = oproj(cam.C);
+      var Ki = MV.inv3(cam.K), depth = 1.3;
+      var far = [[0, 0], [DISP_W, 0], [DISP_W, DISP_H], [0, DISP_H]]
+        .map(function (uv) {
+          var dc = MV.matVec(Ki, [uv[0], uv[1], 1]);
+          return oproj(MV.add(cam.C,
+            MV.matVec(MV.transpose(cam.R), MV.scale(dc, depth))));
+        });
+      var i, j;
+      for (i = 0; i < 4; i++) {
+        j = (i + 1) % 4;
+        cx.fillStyle = 'rgba(45,108,223,0.07)';
+        cx.beginPath(); cx.moveTo(p[0], p[1]);
+        cx.lineTo(far[i][0], far[i][1]); cx.lineTo(far[j][0], far[j][1]);
+        cx.closePath(); cx.fill();
+      }
+      cx.strokeStyle = 'rgba(45,108,223,0.55)'; cx.lineWidth = 1;
+      for (i = 0; i < 4; i++) {
+        j = (i + 1) % 4;
+        cx.beginPath(); cx.moveTo(p[0], p[1]);
+        cx.lineTo(far[i][0], far[i][1]); cx.stroke();
+        cx.beginPath(); cx.moveTo(far[i][0], far[i][1]);
+        cx.lineTo(far[j][0], far[j][1]); cx.stroke();
+      }
+      cx.fillStyle = '#1c2733';
+      cx.beginPath(); cx.arc(p[0], p[1], 5, 0, 2 * Math.PI); cx.fill();
+      cx.font = '12px system-ui, sans-serif';
+      cx.fillText(cc[1], p[0] + 8, p[1] + 14);
+    });
+    /* the SOLVED camera 2, ghosted, with its offset from truth */
+    if (state.solved) {
+      var C2s = toWorld(MV.scale(MV.matVec(MV.transpose(state.solved.R),
+                                           MV.scale(state.solved.t, state.solved.s)), -1));
+      var pg = oproj(C2s), pt = oproj(cam2.C);
+      cx.strokeStyle = '#b45309'; cx.lineWidth = 1.5;
+      cx.beginPath(); cx.arc(pg[0], pg[1], 6, 0, 2 * Math.PI); cx.stroke();
+      cx.setLineDash([3, 3]);
+      cx.beginPath(); cx.moveTo(pg[0], pg[1]); cx.lineTo(pt[0], pt[1]); cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle = '#b45309'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText('solved cam 2', pg[0] + 8, pg[1] - 6);
+    }
+    drawWorldAxes(cx, cv);
+  }
+
+  function drawWorldAxes(cx, cv) {
+    var ax = 34, ay = cv.height - 30, len = 0.55;
+    function dir(X) {
+      return [OSCALE * (X[0] - 0.45 * X[1]) * len,
+              -OSCALE * (X[2] * 0.9 + 0.28 * X[1]) * len];
+    }
+    [[[1, 0, 0], 'x'], [[0, 1, 0], 'y'], [[0, 0, 1], 'z']].forEach(function (a) {
+      var d = dir(a[0]);
+      cx.strokeStyle = '#4a5563'; cx.lineWidth = 1.5;
+      cx.beginPath(); cx.moveTo(ax, ay); cx.lineTo(ax + d[0], ay + d[1]); cx.stroke();
+      cx.fillStyle = '#4a5563'; cx.font = 'italic 12px Georgia, serif';
+      cx.fillText(a[1], ax + d[0] * 1.25 - 3, ay + d[1] * 1.25 + 4);
+    });
+  }
+
+  /* TSDF slice: diverging map, dark at the zero crossing (the surface) */
+  function drawSlice() {
+    var cv = document.getElementById('tsdfslice'), cx = cv.getContext('2d');
+    cx.clearRect(0, 0, cv.width, cv.height);
+    if (!state.tsdf) {
+      cx.fillStyle = '#4a5563'; cx.font = '11px system-ui, sans-serif';
+      cx.fillText('solve the rig, then move the box to fuse', 12, cv.height / 2);
+      return;
+    }
+    var t = state.tsdf, n = t.n, px = cv.width / n;
+    var s = t.slice(state.sliceK), i, j;
+    function lerp(a, b, f) { return Math.round(a + (b - a) * f); }
+    for (j = 0; j < n; j++) for (i = 0; i < n; i++) {
+      var v = s[j][i], col;
+      if (isNaN(v)) col = '#eceff3';
+      else {
+        var f = Math.max(-1, Math.min(1, v / t.tau));
+        col = f >= 0
+          ? 'rgb(' + lerp(30, 219, f) + ',' + lerp(70, 231, f) + ',' + lerp(160, 248, f) + ')'
+          : 'rgb(' + lerp(150, 248, -f) + ',' + lerp(85, 227, -f) + ',' + lerp(20, 207, -f) + ')';
+      }
+      cx.fillStyle = col;
+      /* screen y up = world +y: flip rows */
+      cx.fillRect(i * px, (n - 1 - j) * px, Math.ceil(px), Math.ceil(px));
+    }
+    document.getElementById('slicelabel').textContent =
+      'z = ' + (t.min[2] + (state.sliceK + 0.5) * t.cell).toFixed(2) + ' m';
+  }
+
+  /* convergence graph: baseline error % after each banked pose */
+  function drawGraph() {
+    var cv = document.getElementById('convgraph'), cx = cv.getContext('2d');
+    var W = cv.width, H = cv.height;
+    var padL = 6, padR = 40, padT = 12, padB = 14;
+    cx.clearRect(0, 0, W, H);
+    var h = state.baselineHist;
+    if (!h.length) {
+      cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText('bank poses to accumulate solves', padL + 2, H / 2);
+      return;
+    }
+    var top = Math.max(2, Math.max.apply(null, h) * 1.15);
+    function px(i) { return padL + (W - padL - padR) * i / Math.max(9, h.length - 1); }
+    function py(v) { return padT + (H - padT - padB) * (1 - v / top); }
+    cx.strokeStyle = '#d7dce2'; cx.lineWidth = 1;
+    cx.fillStyle = '#4a5563'; cx.font = '9px system-ui, sans-serif';
+    [top, top / 2].forEach(function (v) {
+      cx.beginPath(); cx.moveTo(padL, py(v)); cx.lineTo(W - padR, py(v)); cx.stroke();
+      cx.fillText(v.toFixed(1) + '%', padL + 1, py(v) - 2);
+    });
+    cx.strokeStyle = '#2d6cdf'; cx.lineWidth = 2; cx.lineJoin = 'round';
+    cx.beginPath();
+    h.forEach(function (v, i) {
+      if (i === 0) cx.moveTo(px(i), py(v)); else cx.lineTo(px(i), py(v));
+    });
+    cx.stroke();
+    cx.fillStyle = '#2d6cdf';
+    h.forEach(function (v, i) {
+      cx.beginPath(); cx.arc(px(i), py(v), 3, 0, 2 * Math.PI); cx.fill();
+    });
+    var last = h[h.length - 1];
+    cx.fillStyle = '#1c2733'; cx.font = '11px system-ui, sans-serif';
+    cx.fillText('baseline err ' + last.toFixed(2) + '%',
+                Math.min(px(h.length - 1) + 6, W - padR - 60),
+                Math.max(padT + 8, py(last) - 6));
+    cx.fillStyle = '#4a5563'; cx.font = '9px system-ui, sans-serif';
+    cx.fillText('solves (one per banked pose)', padL, H - 3);
+  }
+
+  /* ---- readout ---------------------------------------------------------- */
+
+  function fmtDims(d) {
+    return d.map(function (x) { return isNaN(x) ? '—' : (x * 1000).toFixed(0); })
+      .join(' × ') + ' mm';
+  }
+
+  function updateReadout(obs) {
+    var out = document.getElementById('readout');
+    var lines = [];
+    var trueDims = 'true box: ' + fmtDims(box.dims) +
+      '   (the 1200 mm edge is the known anchor)';
+    if (!state.solved) {
+      lines.push('phase 1 — SOLVE THE RIG (doc §6, §1: a known object anchors the unit)');
+      lines.push('');
+      lines.push(trueDims);
+      lines.push('');
+      lines.push('banked poses: ' + state.banks.length +
+        '   correspondences: ' + state.banks.reduce(function (a, b) { return a + b.length; }, 0));
+      lines.push('');
+      lines.push('bank a pose to run the first solve: the 8-point machinery on');
+      lines.push('the 20 mark correspondences (§6) → essential matrix → (R, t) at');
+      lines.push('unit baseline →');
+      lines.push('the known edge sets the metre. Vary the box pose between banks;');
+      lines.push('more and more-varied poses average the pixel-quantization noise.');
+    } else {
+      var sol = state.solved;
+      var rotErr = MV.rotationAngle(sol.R, RtrueRel) / DEG;
+      var X = measureCorners(obs);
+      var dims = measureDims(X);
+      var rmsPts = [], rms = NaN;
+      Object.keys(X).forEach(function (i) {
+        var Xw = toWorld(X[i]);
+        var Xt = MV.poseMolecule(box, state.pose)[i];
+        rmsPts.push(MV.norm(MV.sub(Xw, Xt)));
+      });
+      if (rmsPts.length)
+        rms = Math.sqrt(rmsPts.reduce(function (a, b) { return a + b * b; }, 0) / rmsPts.length);
+      lines.push('phase ' + (state.phase === 'solve' ? '1 — SOLVE THE RIG' : '2 — MEASURE WITH THE SOLVED RIG'));
+      lines.push('');
+      lines.push(trueDims);
+      lines.push('');
+      lines.push('rig solve from ' + sol.npts + ' correspondences over ' +
+        state.banks.length + ' pose(s)  (epipolar RMS ' + sol.rms.toFixed(2) + ' px):');
+      lines.push('  baseline: solved ' + (sol.s * 1000).toFixed(0) + ' mm   true ' +
+        (Btrue * 1000).toFixed(0) + ' mm   (' +
+        (Math.abs(sol.s - Btrue) / Btrue * 100).toFixed(2) + '% off)');
+      lines.push('  relative rotation error: ' + rotErr.toFixed(3) + '°');
+      lines.push('');
+      lines.push('box measured through the solved rig (triangulated corners, §7):');
+      lines.push('  estimated ' + fmtDims(dims) + '   vs true ' + fmtDims(box.dims));
+      lines.push('  (the 1200 mm edge is the anchor — its agreement is by');
+      lines.push('   construction; the other two dimensions are honest tests)');
+      if (!isNaN(rms))
+        lines.push('  corner position RMS vs truth: ' + (rms * 1000).toFixed(1) + ' mm');
+      if (state.phase === 'measure') {
+        lines.push('');
+        lines.push('model accumulation (§9): cloud ' + state.cloud.length +
+          ' points; TSDF ' + (state.tsdf ? state.tsdf.observed() : 0) +
+          ' observed voxels (scatter/ray updates, §3.5)');
+        lines.push('move the box and the model accumulates; hold it still and');
+        lines.push('quantization noise averages down (§9.2); a moving box smears —');
+        lines.push('the reason the doc separates background from movers (§9.3–9.4).');
+      }
+    }
+    out.textContent = lines.join('\n');
+  }
+
+  /* ---- main render ------------------------------------------------------ */
+
+  function render() {
+    var atoms = MV.poseMolecule(box, state.pose);
+    var obs = observe();
+    var reproj1 = null, reproj2 = null;
+    if (state.solved && state.phase === 'measure') {
+      var X = measureCorners(obs);
+      reproj1 = []; reproj2 = [];
+      Object.keys(X).forEach(function (i) {
+        var p1 = MV.project(state.solved.camS1, X[i]);
+        var p2 = MV.project(state.solved.camS2, X[i]);
+        if (p1) reproj1.push(p1);
+        if (p2) reproj2.push(p2);
+      });
+      /* accumulate the model only when the pose actually changed */
+      var key = JSON.stringify(state.pose);
+      if (key !== state.lastPoseKey) {
+        state.lastPoseKey = key;
+        if (!state.tsdf)
+          state.tsdf = MV.makeTSDF({ center: [0, 0, 0], size: 2.4, n: 32, tau: 0.09 });
+        var C1w = toWorld([0, 0, 0]);
+        var C2w = toWorld(MV.scale(MV.matVec(MV.transpose(state.solved.R),
+          MV.scale(state.solved.t, state.solved.s)), -1));
+        Object.keys(X).forEach(function (i) {
+          var Xw = toWorld(X[i]);
+          state.cloud.push(Xw);
+          state.tsdf.integrate(Xw, C1w);
+          state.tsdf.integrate(Xw, C2w);
+        });
+        while (state.cloud.length > 4000) state.cloud.shift();
+      }
+    }
+    drawOverview(atoms);
+    drawView('view1', cam1, atoms, obs, 'p1', reproj1);
+    drawView('view2', cam2, atoms, obs, 'p2', reproj2);
+    drawSlice();
+    drawGraph();
+    updateReadout(obs);
+    syncButtons();
+  }
+
+  /* ---- controls --------------------------------------------------------- */
+
+  var clamp = function (x, lo, hi) { return Math.max(lo, Math.min(hi, x)); };
+
+  document.getElementById('bank').addEventListener('click', function () {
+    var obs = observe();
+    if (obs.length < 8) return;               /* need all corners this once */
+    state.banks.push(obs);
+    runSolve();
+    render();
+  });
+  document.getElementById('tomeasure').addEventListener('click', function () {
+    if (state.solved) { state.phase = 'measure'; render(); }
+  });
+  document.getElementById('tosolve').addEventListener('click', function () {
+    state.phase = 'solve'; render();
+  });
+  document.getElementById('resetsolve').addEventListener('click', function () {
+    state.banks = []; state.solved = null; state.baselineHist = [];
+    state.cloud = []; state.tsdf = null; state.phase = 'solve';
+    render();
+  });
+  document.getElementById('clearmodel').addEventListener('click', function () {
+    state.cloud = []; state.tsdf = null; state.lastPoseKey = '';
+    render();
+  });
+  document.getElementById('subpixel').addEventListener('change', function (e) {
+    state.subpixel = e.target.checked;
+    render();
+  });
+  document.getElementById('slicek').addEventListener('input', function (e) {
+    state.sliceK = parseInt(e.target.value, 10);
+    drawSlice();
+  });
+
+  function syncButtons() {
+    document.getElementById('bank').disabled = observe().length < 8;
+    document.getElementById('tomeasure').disabled = !state.solved || state.phase === 'measure';
+    document.getElementById('tosolve').disabled = state.phase === 'solve';
+    document.getElementById('phasebadge').textContent =
+      state.phase === 'solve' ? 'phase 1: solve' : 'phase 2: measure';
+  }
+
+  /* drag the box in the world view: translate / shift-rotate / alt-depth */
+  (function () {
+    var cv = document.getElementById('overview'), drag = null;
+    cv.addEventListener('mousedown', function (e) {
+      drag = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      var p = state.pose;
+      if (e.shiftKey) {
+        p.yaw += dx * 0.01;
+        p.pitch = clamp(p.pitch + dy * 0.01, -Math.PI / 2, Math.PI / 2);
+      } else if (e.altKey) {
+        p.y = clamp(p.y + dx / OSCALE / -0.45, -0.7, 0.7);
+      } else {
+        p.x = clamp(p.x + dx / OSCALE, -0.7, 0.7);
+        p.z = clamp(p.z - dy / OSCALE / 0.9, -0.7, 0.7);
+      }
+      drag = { x: e.clientX, y: e.clientY };
+      render();
+    });
+    window.addEventListener('mouseup', function () { drag = null; });
+  })();
+
+  render();
+})();

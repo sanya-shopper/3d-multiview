@@ -190,7 +190,17 @@ nearly together (plane transfer becomes exact while triangulation
 degrades --- the two faces of \eqref{eq:parallax} and
 \eqref{eq:deptherr}), and \code{?scene=roll} rolls camera 2 to slant
 its epipolar lines; any hand-arranged scene can be copied as a link
-from the page and pasted into notes. The page is dependency-free
+from the page and pasted into notes. A second page,
+\code{web/rig.html}, inverts the premise: instead of a rig handed over
+solved, two static cameras must be \emph{earned} from a parallelepiped
+of known dimensions --- corner and edge-mark correspondences are banked
+over poses, the rig is solved by the calibrated two-view pipeline of
+\autoref{sec:epipolar} with the known edge anchoring the metre, the
+solved baseline, rotation, and the box's remaining dimensions are
+compared against ground truth, and the solved (never the true) rig then
+triangulates the moving box into a point cloud and a scatter-updated
+TSDF (\autoref{sec:gatherscatter}, \autoref{sec:tsdf}). Both pages are
+dependency-free
 (hand-written HTML/JS; the math lives in \code{web/model.js} and is
 unit-tested against this document's worked examples by
 \code{make check}).

@@ -62,9 +62,9 @@ var MV = (function () {
             [-v[1], v[0], 0]];
   }
 
-  /* smallest eigenvector of a symmetric NxN matrix by cyclic Jacobi --
-   * used for the homogeneous least-squares solves (doc section 3.4) */
-  function smallestEigvec(S) {
+  /* full eigendecomposition of a symmetric NxN matrix by cyclic Jacobi:
+   * returns {d: eigenvalues, V: matrix whose COLUMN j is eigenvector j} */
+  function eigSym(S) {
     var n = S.length, V = [], A = [], i, j, p, q, sweep;
     for (i = 0; i < n; i++) {
       V.push([]); A.push([]);
@@ -96,11 +96,56 @@ var MV = (function () {
         }
       }
     }
+    var d = [];
+    for (i = 0; i < n; i++) d.push(A[i][i]);
+    return { d: d, V: V };
+  }
+
+  /* smallest eigenvector of a symmetric NxN matrix -- the homogeneous
+   * least-squares solver (doc section 3.4) */
+  function smallestEigvec(S) {
+    var e = eigSym(S), n = S.length, i;
     var best = 0;
-    for (i = 1; i < n; i++) if (A[i][i] < A[best][best]) best = i;
+    for (i = 1; i < n; i++) if (e.d[i] < e.d[best]) best = i;
     var v = [];
-    for (i = 0; i < n; i++) v.push(V[i][best]);
+    for (i = 0; i < n; i++) v.push(e.V[i][best]);
     return v;
+  }
+
+  /* SVD of a 3x3 matrix via the eigendecomposition of M'M:
+   * returns {U, S, V} with U, V arrays of COLUMN vectors, S descending. */
+  function svd3(M) {
+    var e = eigSym(matMul(transpose(M), M));
+    var order = [0, 1, 2].sort(function (a, b) { return e.d[b] - e.d[a]; });
+    var S = [], V = [], U = [null, null, null], k;
+    for (k = 0; k < 3; k++) {
+      var oi = order[k];
+      V.push([e.V[0][oi], e.V[1][oi], e.V[2][oi]]);
+      S.push(Math.sqrt(Math.max(0, e.d[oi])));
+    }
+    /* left vectors: u = M v / s where s is significant RELATIVE to s1;
+     * a tiny s makes M v pure noise, so complete the basis instead */
+    var floor = 1e-6 * (S[0] || 1);
+    for (k = 0; k < 3; k++)
+      if (S[k] > floor) U[k] = unit(matVec(M, V[k]));
+    if (!U[0]) return { U: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], S: S, V: V };
+    if (!U[1]) {
+      var any = Math.abs(U[0][0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      U[1] = unit(cross(U[0], any));
+    }
+    if (!U[2]) U[2] = unit(cross(U[0], U[1]));
+    return { U: U, S: S, V: V };
+  }
+
+  function colsToMat(c) {
+    return [[c[0][0], c[1][0], c[2][0]],
+            [c[0][1], c[1][1], c[2][1]],
+            [c[0][2], c[1][2], c[2][2]]];
+  }
+  function det3(M) {
+    return M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
+         - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0])
+         + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
   }
 
   /* ---------------- the molecule: a stylized 3D graph ------------------- */
@@ -317,6 +362,212 @@ var MV = (function () {
   /* predicted depth uncertainty sigma_Z = Z^2/(f B) sigma_d (doc eq. 14) */
   function depthSigma(Z, f, B, sigmaD) { return Z * Z * sigmaD / (f * B); }
 
+  /* ---------------- solving a rig from correspondences ------------------ */
+
+  /* camera object from explicit K, R, t (same shape as makeCamera) */
+  function camFromRt(K, R, t, W, H) {
+    var C = scale(matVec(transpose(R), t), -1);
+    var P = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], i, j;
+    for (i = 0; i < 3; i++) {
+      for (j = 0; j < 3; j++)
+        P[i][j] = K[i][0] * R[0][j] + K[i][1] * R[1][j] + K[i][2] * R[2][j];
+      P[i][3] = K[i][0] * t[0] + K[i][1] * t[1] + K[i][2] * t[2];
+    }
+    return { K: K, R: R, t: t, C: C, P: P, f: K[0][0], W: W, H: H };
+  }
+
+  /* Hartley normalization: translate to centroid, scale mean dist to
+   * sqrt(2); returns {T, pts} (doc section 6, the "normalized" in the
+   * normalized 8-point algorithm) */
+  function hartley(pts) {
+    var n = pts.length, cx = 0, cy = 0, i;
+    for (i = 0; i < n; i++) { cx += pts[i].u; cy += pts[i].v; }
+    cx /= n; cy /= n;
+    var md = 0;
+    for (i = 0; i < n; i++) md += Math.hypot(pts[i].u - cx, pts[i].v - cy);
+    md /= n;
+    var s = Math.SQRT2 / (md || 1);
+    var out = pts.map(function (p) {
+      return { u: s * (p.u - cx), v: s * (p.v - cy) };
+    });
+    return { T: [[s, 0, -s * cx], [0, s, -s * cy], [0, 0, 1]], pts: out };
+  }
+
+  /* Normalized 8-point algorithm (doc section 6): pairs of pixel points
+   * [{p1:{u,v}, p2:{u,v}}, ...], n >= 8 -> fundamental matrix with rank-2
+   * enforcement, unit Frobenius norm. */
+  function eightPoint(pairs) {
+    if (pairs.length < 8) return null;
+    var n1 = hartley(pairs.map(function (c) { return c.p1; }));
+    var n2 = hartley(pairs.map(function (c) { return c.p2; }));
+    var A = [], i, j, k;
+    for (i = 0; i < 9; i++) { A.push([]); for (j = 0; j < 9; j++) A[i].push(0); }
+    for (k = 0; k < pairs.length; k++) {
+      var a = n1.pts[k], b = n2.pts[k];
+      var r = [b.u * a.u, b.u * a.v, b.u, b.v * a.u, b.v * a.v, b.v, a.u, a.v, 1];
+      for (i = 0; i < 9; i++) for (j = 0; j < 9; j++) A[i][j] += r[i] * r[j];
+    }
+    var f = smallestEigvec(A);
+    var Fn = [[f[0], f[1], f[2]], [f[3], f[4], f[5]], [f[6], f[7], f[8]]];
+    /* rank-2 enforcement: drop the smallest singular value */
+    var sv = svd3(Fn), F2 = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (k = 0; k < 2; k++)
+      for (i = 0; i < 3; i++) for (j = 0; j < 3; j++)
+        F2[i][j] += sv.S[k] * sv.U[k][i] * sv.V[k][j];
+    var F = matMul(transpose(n2.T), matMul(F2, n1.T));
+    var fr = 0;
+    for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) fr += F[i][j] * F[i][j];
+    fr = Math.sqrt(fr);
+    for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) F[i][j] /= fr;
+    return F;
+  }
+
+  /* mean point-to-epipolar-line distance in pixels (solve quality) */
+  function epipolarRMS(F, pairs) {
+    var s = 0, n = 0;
+    pairs.forEach(function (c) {
+      var l = matVec(F, [c.p1.u, c.p1.v, 1]);
+      var d = (l[0] * c.p2.u + l[1] * c.p2.v + l[2]) / Math.hypot(l[0], l[1]);
+      s += d * d; n++;
+    });
+    return n ? Math.sqrt(s / n) : NaN;
+  }
+
+  /* Decompose E = K2' F K1 into the relative pose (R, t) of camera 2 in
+   * camera 1's frame, unit baseline; the 4-fold ambiguity is resolved by
+   * the chirality test -- triangulated points must be in front of both
+   * cameras (doc section 6). */
+  function relativePose(F, K1, K2, pairs, W, H) {
+    var E = matMul(transpose(K2), matMul(F, K1));
+    var sv = svd3(E);
+    var U = sv.U.slice(), V = sv.V.slice(), i;
+    if (det3(colsToMat(U)) < 0) U = U.map(function (c) { return scale(c, -1); });
+    if (det3(colsToMat(V)) < 0) V = V.map(function (c) { return scale(c, -1); });
+    var Um = colsToMat(U), Vm = colsToMat(V);
+    var Wm = [[0, -1, 0], [1, 0, 0], [0, 0, 1]];
+    var Ra = matMul(Um, matMul(Wm, transpose(Vm)));
+    var Rb = matMul(Um, matMul(transpose(Wm), transpose(Vm)));
+    var tv = U[2];
+    var best = null;
+    [[Ra, tv], [Ra, scale(tv, -1)], [Rb, tv], [Rb, scale(tv, -1)]]
+      .forEach(function (cand) {
+        var R = cand[0], t = cand[1];
+        var cam1 = camFromRt(K1, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0], W, H);
+        var cam2 = camFromRt(K2, R, t, W, H);
+        var good = 0, tried = 0;
+        for (i = 0; i < pairs.length && tried < 24; i += Math.max(1, Math.floor(pairs.length / 24))) {
+          tried++;
+          var X = triangulate(cam1, pairs[i].p1, cam2, pairs[i].p2);
+          if (!X) continue;
+          if (X[2] > 0 && (add(matVec(R, X), t))[2] > 0) good++;
+        }
+        if (!best || good > best.good) best = { R: R, t: t, good: good };
+      });
+    return best;
+  }
+
+  /* Calibrated two-view solve: run the 8-point machinery on K-normalized
+   * coordinates and project the result onto the essential manifold
+   * (sigma1 = sigma2, sigma3 = 0) -- much better conditioned than
+   * estimating F in raw pixels when the correspondences cluster in a
+   * small part of the image. Returns F (pixels) for downstream reuse. */
+  function essentialFromPairs(pairs, K1, K2) {
+    var K1i = inv3(K1), K2i = inv3(K2);
+    var norm = pairs.map(function (c) {
+      var a = matVec(K1i, [c.p1.u, c.p1.v, 1]);
+      var b = matVec(K2i, [c.p2.u, c.p2.v, 1]);
+      return { p1: { u: a[0] / a[2], v: a[1] / a[2] },
+               p2: { u: b[0] / b[2], v: b[1] / b[2] } };
+    });
+    var Fn = eightPoint(norm);
+    if (!Fn) return null;
+    var sv = svd3(Fn);
+    var s = (sv.S[0] + sv.S[1]) / 2;
+    var E = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], i, j, k;
+    for (k = 0; k < 2; k++)
+      for (i = 0; i < 3; i++) for (j = 0; j < 3; j++)
+        E[i][j] += s * sv.U[k][i] * sv.V[k][j];
+    return matMul(transpose(K2i), matMul(E, K1i));
+  }
+
+  /* geodesic angle between two rotations, radians */
+  function rotationAngle(Ra, Rb) {
+    var M = matMul(transpose(Ra), Rb);
+    var c = (M[0][0] + M[1][1] + M[2][2] - 1) / 2;
+    return Math.acos(Math.max(-1, Math.min(1, c)));
+  }
+
+  /* ---------------- a parallelepiped of known dimensions ---------------- */
+  /* Same shape as makeMolecule so poseMolecule works on it: corner i has
+   * bit0/1/2 of i selecting the +x/+y/+z face; edges connect indices
+   * differing in one bit, and an edge's axis is that bit. */
+  function makeBox(a, b, c) {
+    var atoms = [], bonds = [], i;
+    for (i = 0; i < 8; i++) {
+      atoms.push({ el: 'corner', color: '#2d6cdf',
+                   p: v3((i & 1 ? a : -a) / 2, (i & 2 ? b : -b) / 2,
+                         (i & 4 ? c : -c) / 2) });
+    }
+    for (i = 0; i < 8; i++) [1, 2, 4].forEach(function (bit) {
+      if ((i ^ bit) > i) bonds.push([i, i ^ bit]);
+    });
+    return { atoms: atoms, bonds: bonds, dims: [a, b, c] };
+  }
+
+  /* ---------------- a small TSDF (doc section 9.2), scatter form -------- */
+  /* Cubic grid over [center - size/2, center + size/2]^3, n^3 voxels.
+   * integrate(X, C) marches the ray C -> X (the scatter update of doc
+   * section 3.5): voxels along the free segment get the clamped +tau,
+   * voxels in the band get the signed offset, nothing behind X + tau is
+   * touched. Weighted running average per voxel (doc eq. tsdf). */
+  function makeTSDF(opts) {
+    var n = opts.n, size = opts.size, tau = opts.tau;
+    var min = [opts.center[0] - size / 2, opts.center[1] - size / 2,
+               opts.center[2] - size / 2];
+    var cell = size / n;
+    var D = new Float64Array(n * n * n);
+    var Wt = new Float64Array(n * n * n);
+    function update(p, d) {
+      var i = Math.floor((p[0] - min[0]) / cell);
+      var j = Math.floor((p[1] - min[1]) / cell);
+      var k = Math.floor((p[2] - min[2]) / cell);
+      if (i < 0 || j < 0 || k < 0 || i >= n || j >= n || k >= n) return;
+      var x = (k * n + j) * n + i;
+      D[x] = (Wt[x] * D[x] + d) / (Wt[x] + 1);
+      Wt[x] += 1;
+    }
+    function integrate(X, C) {
+      var dir = sub(X, C), L = norm(dir);
+      if (L < 1e-9) return;
+      dir = scale(dir, 1 / L);
+      var s;
+      for (s = 0; s <= L + tau; s += cell / 2) {
+        var eta = L - s;                      /* + in front of X, - behind */
+        if (eta < -tau) break;
+        update(add(C, scale(dir, s)), Math.min(tau, eta));
+      }
+    }
+    function slice(k) {
+      var out = [], i, j;
+      for (j = 0; j < n; j++) {
+        var row = [];
+        for (i = 0; i < n; i++) {
+          var x = (k * n + j) * n + i;
+          row.push(Wt[x] > 0 ? D[x] : NaN);
+        }
+        out.push(row);
+      }
+      return out;
+    }
+    function observed() {
+      var c = 0, i;
+      for (i = 0; i < Wt.length; i++) if (Wt[i] > 0) c++;
+      return c;
+    }
+    return { integrate: integrate, slice: slice, observed: observed,
+             n: n, cell: cell, min: min, tau: tau };
+  }
+
   return {
     v3: v3, add: add, sub: sub, scale: scale, dot: dot, cross: cross,
     norm: norm, unit: unit, matVec: matVec, matMul: matMul,
@@ -329,7 +580,11 @@ var MV = (function () {
     fundamental: fundamental, epipolarResidual: epipolarResidual,
     epipolarLine: epipolarLine, triangulate: triangulate,
     planeHomography: planeHomography, applyH: applyH,
-    reprojError: reprojError, depthSigma: depthSigma
+    reprojError: reprojError, depthSigma: depthSigma,
+    svd3: svd3, camFromRt: camFromRt, eightPoint: eightPoint,
+    essentialFromPairs: essentialFromPairs,
+    epipolarRMS: epipolarRMS, relativePose: relativePose,
+    rotationAngle: rotationAngle, makeBox: makeBox, makeTSDF: makeTSDF
   };
 })();
 

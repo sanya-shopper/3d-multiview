@@ -665,10 +665,43 @@
       lines.push('');
       lines.push('rig solve from ' + sol.npts + ' correspondences over ' +
         state.banks.length + ' pose(s)  (epipolar RMS ' + sol.rms.toFixed(2) + ' px):');
-      lines.push('  baseline: solved ' + (sol.s * 1000).toFixed(0) + ' mm   true ' +
-        (Btrue * 1000).toFixed(0) + ' mm   (' +
+      /* computed vs actual poses and distances, world frame; camera 1
+       * anchors the solved frame so its pose is identity by construction */
+      var C2s = toWorld(MV.scale(MV.matVec(MV.transpose(sol.R),
+        MV.scale(sol.t, sol.s)), -1));
+      var posErr = MV.norm(MV.sub(C2s, cam2.C));
+      var R2sW = MV.matMul(sol.R, cam1.R);
+      function ptr(R) {
+        var zc = R[2], xc = R[0];
+        var pan = Math.atan2(zc[1], zc[0]) / DEG;
+        var tilt = Math.asin(Math.max(-1, Math.min(1, zc[2]))) / DEG;
+        var xc0 = MV.unit(MV.cross(zc, [0, 0, 1]));
+        var yc0 = MV.cross(zc, xc0);
+        var roll = Math.atan2(MV.dot(xc, yc0), MV.dot(xc, xc0)) / DEG;
+        return pan.toFixed(1) + '/' + tilt.toFixed(1) + '/' + roll.toFixed(1) + '°';
+      }
+      function fmtVec(v) {
+        return '(' + v.map(function (x) { return x.toFixed(2); }).join(', ') + ')';
+      }
+      lines.push('computed vs actual (camera 1 anchors the solved frame):');
+      lines.push('  baseline |C₂−C₁|:  solved ' + (sol.s * 1000).toFixed(0) +
+        ' mm   true ' + (Btrue * 1000).toFixed(0) + ' mm   (' +
         (Math.abs(sol.s - Btrue) / Btrue * 100).toFixed(2) + '% off)');
-      lines.push('  relative rotation error: ' + rotErr.toFixed(3) + '°');
+      lines.push('  camera 2 position: solved ' + fmtVec(C2s) + '   true ' +
+        fmtVec(cam2.C) + ' m   off ' + (posErr * 1000).toFixed(0) + ' mm');
+      lines.push('  camera 2 pan/tilt/roll: solved ' + ptr(R2sW) +
+        '   true ' + ptr(cam2.R) + '   (3D error ' + rotErr.toFixed(2) + '°)');
+      var cKeys = Object.keys(X).filter(function (i) { return +i < 8; });
+      if (cKeys.length >= 4) {
+        var cS = [0, 0, 0];
+        cKeys.forEach(function (i) { cS = MV.add(cS, X[i]); });
+        cS = MV.scale(cS, 1 / cKeys.length);
+        var d1s = MV.norm(cS);                 /* cam 1 at solved origin */
+        var d1t = MV.norm(MV.sub(
+          [state.pose.x, state.pose.y, state.pose.z], cam1.C));
+        lines.push('  camera 1 → box centre: solved ' + d1s.toFixed(3) +
+          ' m   true ' + d1t.toFixed(3) + ' m');
+      }
       lines.push('');
       lines.push('box measured through the solved rig (triangulated corners, §7):');
       lines.push('  estimated ' + fmtDims(dims) + '   vs true ' + fmtDims(box.dims));

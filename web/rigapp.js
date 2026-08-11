@@ -740,6 +740,8 @@
     document.getElementById('bank').disabled = observe().length < 8;
     document.getElementById('tomeasure').disabled = !state.solved || state.phase === 'measure';
     document.getElementById('tosolve').disabled = state.phase === 'solve';
+    document.getElementById('bankcount').textContent =
+      state.banks.length + ' pose' + (state.banks.length === 1 ? '' : 's') + ' banked';
     var badge = document.getElementById('phasebadge');
     var toMeasureBtn = document.getElementById('tomeasure');
     if (state.phase === 'measure') {
@@ -770,8 +772,18 @@
       drag = { x: e.clientX, y: e.clientY };
       e.preventDefault();
     });
+    function endDrag() {
+      if (drag && state.autoBank && state.phase === 'solve') {
+        bankPose(true);
+        render();
+      }
+      drag = null;
+    }
     window.addEventListener('mousemove', function (e) {
       if (!drag) return;
+      /* releases outside the window never deliver mouseup: treat a
+       * button-up move as the release, or the box sticks to the cursor */
+      if (e.buttons === 0) { endDrag(); return; }
       var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       var p = state.pose;
       if (e.shiftKey) {
@@ -786,13 +798,7 @@
       drag = { x: e.clientX, y: e.clientY };
       render();
     });
-    window.addEventListener('mouseup', function () {
-      if (drag && state.autoBank && state.phase === 'solve') {
-        bankPose(true);
-        render();
-      }
-      drag = null;
-    });
+    window.addEventListener('mouseup', endDrag);
   })();
 
   render();

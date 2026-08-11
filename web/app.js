@@ -569,6 +569,7 @@
     });
     window.addEventListener('mousemove', function (e) {
       if (!drag) return;
+      if (e.buttons === 0) { drag = null; return; }  /* lost mouseup */
       var c = state['cam' + n];
       state.autoAim[n] = false;               /* manual look = tracking off */
       document.getElementById('aimauto' + n).checked = false;
@@ -604,6 +605,7 @@
     });
     window.addEventListener('mousemove', function (e) {
       if (!drag) return;
+      if (e.buttons === 0) { drag = null; return; }  /* lost mouseup */
       var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (drag.target === 'mol') {
         var p = state.pose;

@@ -9,11 +9,23 @@
 * { box-sizing: border-box; }
 body {
   margin: 0 auto;
-  max-width: 62rem;
+  max-width: 68rem;
   padding: 1.2rem;
   font: 16px/1.5 Georgia, 'Times New Roman', serif;
   color: var(--ink);
   background: var(--paper);
+}
+
+/* two-column app: panels on the left, positioning controls tucked along
+ * the right-hand side so world view and camera views stay visible at once */
+.app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15.5rem;
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 66rem) {
+  .app { grid-template-columns: 1fr; }
 }
 header h1 { margin: 0.2rem 0 0.6rem; font-size: 1.7rem; }
 header p { margin: 0.4rem 0; }

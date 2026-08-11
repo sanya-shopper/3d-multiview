@@ -9,24 +9,31 @@
  *   - the molecule has yaw/pitch/roll + x/y/z sliders, and can be dragged
  *     directly in the world view (drag = translate in the view plane,
  *     shift-drag = rotate, alt-drag = translate in depth y).
+ *
+ * Panels: world overview; camera 1 display; camera 2 display; and the
+ * transfer panel -- camera 1's display warped into camera 2's frame by
+ * the plane-induced homography (doc section 5.1), compared against where
+ * camera 2 actually sees the atoms (yellow rings). The mismatch is
+ * parallax: what no single 2D matrix can transfer, and what depth is
+ * made of.
  */
 'use strict';
 
 (function () {
-  var DISP_W = 64, DISP_H = 48, ZOOM = 6;   /* coarse displays, magnified */
+  var DISP_W = 64, DISP_H = 48, ZOOM = 5;   /* coarse displays, magnified */
   var FOCAL = 52;                            /* pixels, on the 64x48 sensor */
   var BASE_SIGMA_D = Math.sqrt(2) * (1 / Math.sqrt(12)); /* quantization */
   var DEG = Math.PI / 180;
+  var OSCALE = 36;                           /* world-view px per metre */
 
   var mol = MV.makeMolecule();
   var state = {
-    /* poses chosen to match the old defaults: both cameras ~4.2 m out,
-     * aimed at the origin */
     cam1: { x: 3.72, y: -1.80, z: 0.75, pan: 154 * DEG, tilt: -10 * DEG, roll: 0 },
     cam2: { x: 3.76, y: 1.82, z: 0.42, pan: -154 * DEG, tilt: -6 * DEG, roll: 0 },
     pose: { yaw: 0.5, pitch: 0.3, roll: 0, x: 0, y: 0, z: 0 },
     selected: 6                               /* the O atom */
   };
+  var bufs = {};                              /* low-res buffers per view */
 
   function camera(c) {
     return MV.makeCameraPose({ pos: [c.x, c.y, c.z],
@@ -38,6 +45,18 @@
   }
 
   /* ---------------- coarse pixel displays ------------------------------- */
+
+  function pixelGrid(cx, cv) {
+    cx.strokeStyle = 'rgba(255,255,255,0.07)';
+    cx.lineWidth = 1;
+    var i;
+    for (i = 0; i <= DISP_W; i++) {
+      cx.beginPath(); cx.moveTo(i * ZOOM, 0); cx.lineTo(i * ZOOM, cv.height); cx.stroke();
+    }
+    for (i = 0; i <= DISP_H; i++) {
+      cx.beginPath(); cx.moveTo(0, i * ZOOM); cx.lineTo(cv.width, i * ZOOM); cx.stroke();
+    }
+  }
 
   function drawDisplay(canvasId, cam, atoms, F, otherCam, otherAtoms) {
     var cv = document.getElementById(canvasId), cx = cv.getContext('2d');
@@ -60,22 +79,13 @@
       bx.fillStyle = mol.atoms[i].color;
       bx.beginPath(); bx.arc(p.u, p.v, r, 0, 2 * Math.PI); bx.fill();
     });
+    bufs[canvasId] = buf;
 
     /* magnify with hard pixel edges: the display, at the pixel level */
     cx.imageSmoothingEnabled = false;
     cx.clearRect(0, 0, cv.width, cv.height);
     cx.drawImage(buf, 0, 0, cv.width, cv.height);
-
-    /* faint pixel grid so the quantization is visible */
-    cx.strokeStyle = 'rgba(255,255,255,0.07)';
-    cx.lineWidth = 1;
-    var i;
-    for (i = 0; i <= DISP_W; i++) {
-      cx.beginPath(); cx.moveTo(i * ZOOM, 0); cx.lineTo(i * ZOOM, cv.height); cx.stroke();
-    }
-    for (i = 0; i <= DISP_H; i++) {
-      cx.beginPath(); cx.moveTo(0, i * ZOOM); cx.lineTo(cv.width, i * ZOOM); cx.stroke();
-    }
+    pixelGrid(cx, cv);
 
     /* overlay: selected atom's own pixel + epipolar line from other view */
     var sel = state.selected;
@@ -88,12 +98,12 @@
     var po = MV.project(otherCam, otherAtoms[sel]);
     if (po) {
       var l = MV.epipolarLine(F, MV.quantize(po)); /* line here from other pixel */
-      drawLine(cx, l, cv.width, cv.height);
+      drawEpiLine(cx, l);
     }
   }
 
   /* draw a u + b v + c = 0 clipped to the display, in display pixels */
-  function drawLine(cx, l, w, h) {
+  function drawEpiLine(cx, l) {
     var pts = [], a = l[0], b = l[1], c = l[2];
     function tryPt(u, v) {
       if (u >= -1e-6 && u <= DISP_W + 1e-6 && v >= -1e-6 && v <= DISP_H + 1e-6)
@@ -111,9 +121,97 @@
     cx.setLineDash([]);
   }
 
+  /* ---------------- transfer panel: view 1 warped into camera 2 --------- */
+
+  function drawTransfer(cam1, cam2, atoms) {
+    var cv = document.getElementById('xfer'), cx = cv.getContext('2d');
+    var pc = MV.project(cam1, molCenter());
+    var stats = { d: NaN, planeMean: 0, planeN: 0, depthSel: NaN };
+    cx.clearRect(0, 0, cv.width, cv.height);
+    if (!pc || !bufs.view1) {
+      cx.fillStyle = '#10141a'; cx.fillRect(0, 0, cv.width, cv.height);
+      cx.fillStyle = '#9aa3ad'; cx.font = '13px system-ui, sans-serif';
+      cx.fillText('molecule center is behind camera 1', 14, 20);
+      return stats;
+    }
+    var d = pc.z;                             /* assumed scene-plane depth */
+    stats.d = d;
+    var H = MV.planeHomography(cam1, cam2, d);
+    var Hinv = MV.inv3(H);
+
+    /* inverse-warp view 1's low-res buffer into camera 2's frame */
+    var src = bufs.view1.getContext('2d').getImageData(0, 0, DISP_W, DISP_H);
+    var buf = document.createElement('canvas');
+    buf.width = DISP_W; buf.height = DISP_H;
+    var bx = buf.getContext('2d');
+    var dst = bx.createImageData(DISP_W, DISP_H);
+    var x, y, p1, sx, sy, si, di;
+    for (y = 0; y < DISP_H; y++) {
+      for (x = 0; x < DISP_W; x++) {
+        di = 4 * (y * DISP_W + x);
+        p1 = MV.applyH(Hinv, { u: x + 0.5, v: y + 0.5 });
+        if (p1 && p1.u >= 0 && p1.u < DISP_W && p1.v >= 0 && p1.v < DISP_H) {
+          sx = Math.floor(p1.u); sy = Math.floor(p1.v);
+          si = 4 * (sy * DISP_W + sx);
+          dst.data[di] = src.data[si];
+          dst.data[di + 1] = src.data[si + 1];
+          dst.data[di + 2] = src.data[si + 2];
+        } else {                              /* outside view 1: darker */
+          dst.data[di] = 8; dst.data[di + 1] = 9; dst.data[di + 2] = 11;
+        }
+        dst.data[di + 3] = 255;
+      }
+    }
+    bx.putImageData(dst, 0, 0);
+    cx.imageSmoothingEnabled = false;
+    cx.drawImage(buf, 0, 0, cv.width, cv.height);
+    pixelGrid(cx, cv);
+
+    /* where camera 2 ACTUALLY sees each atom: yellow rings to compare */
+    atoms.forEach(function (X, i) {
+      var p2 = MV.project(cam2, X);
+      if (!p2) return;
+      var r = Math.max(1.2, 5.5 / p2.z) * ZOOM;
+      cx.strokeStyle = i === state.selected ? '#ffd75e' : 'rgba(255,215,94,0.45)';
+      cx.lineWidth = i === state.selected ? 2 : 1;
+      cx.beginPath(); cx.arc(p2.u * ZOOM, p2.v * ZOOM, r, 0, 2 * Math.PI); cx.stroke();
+    });
+
+    /* depth-true transfer of the selected atom's quantized pixel:
+     * back-project at its camera-1 depth, reproject into camera 2 */
+    var sel = state.selected;
+    var p1sel = MV.project(cam1, atoms[sel]);
+    var p2sel = MV.project(cam2, atoms[sel]);
+    if (p1sel && p2sel) {
+      var Xd = MV.backproject(cam1, MV.quantize(p1sel), p1sel.z);
+      var pd = MV.project(cam2, Xd);
+      if (pd) {
+        cx.strokeStyle = '#5ec8ff'; cx.lineWidth = 2;
+        cx.beginPath();
+        cx.moveTo((pd.u - 1.2) * ZOOM, pd.v * ZOOM);
+        cx.lineTo((pd.u + 1.2) * ZOOM, pd.v * ZOOM);
+        cx.moveTo(pd.u * ZOOM, (pd.v - 1.2) * ZOOM);
+        cx.lineTo(pd.u * ZOOM, (pd.v + 1.2) * ZOOM);
+        cx.stroke();
+        stats.depthSel = Math.hypot(pd.u - p2sel.u, pd.v - p2sel.v);
+      }
+    }
+
+    /* plane-transfer error over the atoms seen by both cameras */
+    atoms.forEach(function (X) {
+      var p1 = MV.project(cam1, X), p2 = MV.project(cam2, X);
+      if (!p1 || !p2) return;
+      var ph = MV.applyH(H, p1);
+      if (!ph) return;
+      stats.planeMean += Math.hypot(ph.u - p2.u, ph.v - p2.v);
+      stats.planeN++;
+    });
+    if (stats.planeN) stats.planeMean /= stats.planeN;
+    return stats;
+  }
+
   /* ---------------- world overview -------------------------------------- */
 
-  var OSCALE = 52;
   function oproj(X) {
     var cv = document.getElementById('overview');
     return [cv.width / 2 + OSCALE * (X[0] - 0.45 * X[1]),
@@ -144,23 +242,65 @@
       var p = oproj(X);
       cx.fillStyle = mol.atoms[i].color;
       cx.beginPath();
-      cx.arc(p[0], p[1], i === state.selected ? 7 : 5, 0, 2 * Math.PI);
+      cx.arc(p[0], p[1], i === state.selected ? 6 : 4, 0, 2 * Math.PI);
       cx.fill();
       if (i === state.selected) {
         cx.strokeStyle = '#ffd75e'; cx.lineWidth = 2;
         cx.stroke();
       }
     });
-    /* cameras: center dot, true optical axis (row 3 of R), label */
-    [[cam1, 'camera 1'], [cam2, 'camera 2']].forEach(function (cc) {
+    /* cameras: center dot, viewing frustum out to 1.3 m, label */
+    [[cam1, 'cam 1'], [cam2, 'cam 2']].forEach(function (cc) {
       var cam = cc[0], p = oproj(cam.C);
-      var tip = oproj(MV.add(cam.C, MV.scale(cam.R[2], 0.9)));
-      cx.strokeStyle = '#2d6cdf'; cx.lineWidth = 1.5;
-      cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(tip[0], tip[1]); cx.stroke();
+      /* frustum: rays through the four sensor corners (K^-1 corners),
+       * so the funnel is the camera's true field of view */
+      var Ki = MV.inv3(cam.K), depth = 1.3;
+      var far = [[0, 0], [DISP_W, 0], [DISP_W, DISP_H], [0, DISP_H]]
+        .map(function (uv) {
+          var dc = MV.matVec(Ki, [uv[0], uv[1], 1]);
+          return oproj(MV.add(cam.C,
+            MV.matVec(MV.transpose(cam.R), MV.scale(dc, depth))));
+        });
+      var i, j;
+      for (i = 0; i < 4; i++) {              /* side faces, faintly filled */
+        j = (i + 1) % 4;
+        cx.fillStyle = 'rgba(45,108,223,0.07)';
+        cx.beginPath();
+        cx.moveTo(p[0], p[1]);
+        cx.lineTo(far[i][0], far[i][1]);
+        cx.lineTo(far[j][0], far[j][1]);
+        cx.closePath(); cx.fill();
+      }
+      cx.strokeStyle = 'rgba(45,108,223,0.55)'; cx.lineWidth = 1;
+      for (i = 0; i < 4; i++) {              /* funnel edges + far rim */
+        j = (i + 1) % 4;
+        cx.beginPath(); cx.moveTo(p[0], p[1]);
+        cx.lineTo(far[i][0], far[i][1]); cx.stroke();
+        cx.beginPath(); cx.moveTo(far[i][0], far[i][1]);
+        cx.lineTo(far[j][0], far[j][1]); cx.stroke();
+      }
       cx.fillStyle = '#1c2733';
       cx.beginPath(); cx.arc(p[0], p[1], 5, 0, 2 * Math.PI); cx.fill();
       cx.font = '12px system-ui, sans-serif';
-      cx.fillText(cc[1], p[0] + 8, p[1] + 4);
+      cx.fillText(cc[1], p[0] + 8, p[1] + 14);
+    });
+    drawWorldAxes(cx, cv);
+  }
+
+  /* labeled world-frame axis triad, anchored in the lower-left corner */
+  function drawWorldAxes(cx, cv) {
+    var ax = 34, ay = cv.height - 30, len = 0.55;
+    /* screen direction of a world unit vector, from the oproj mapping */
+    function dir(X) {
+      return [OSCALE * (X[0] - 0.45 * X[1]) * len,
+              -OSCALE * (X[2] * 0.9 + 0.28 * X[1]) * len];
+    }
+    [[[1, 0, 0], 'x'], [[0, 1, 0], 'y'], [[0, 0, 1], 'z']].forEach(function (a) {
+      var d = dir(a[0]);
+      cx.strokeStyle = '#4a5563'; cx.lineWidth = 1.5;
+      cx.beginPath(); cx.moveTo(ax, ay); cx.lineTo(ax + d[0], ay + d[1]); cx.stroke();
+      cx.fillStyle = '#4a5563'; cx.font = 'italic 12px Georgia, serif';
+      cx.fillText(a[1], ax + d[0] * 1.25 - 3, ay + d[1] * 1.25 + 4);
     });
   }
 
@@ -173,7 +313,7 @@
     }).join('\n');
   }
 
-  function updateReadout(cam1, cam2, atoms, F) {
+  function updateReadout(cam1, cam2, atoms, F, xstats) {
     var sel = state.selected;
     var name = mol.atoms[sel].el + '(' + sel + ')';
     var p1 = MV.project(cam1, atoms[sel]);
@@ -215,6 +355,14 @@
       '  epipolar residual x₂ᵀF x₁ = ' + res.toExponential(2) +
         '   (0 exactly for the continuous pixels; nonzero = quantization)\n' +
       '\n' +
+      'view transfer 1 → 2 (predicted panel; doc §5.1, eq. planehom):\n' +
+      '  plane homography at camera-1 depth d = ' + xstats.d.toFixed(2) + ' m:  ' +
+        'mean atom error ' + xstats.planeMean.toFixed(2) + ' px over ' +
+        xstats.planeN + ' atoms — parallax no 2D matrix can transfer\n' +
+      '  depth-true transfer of ' + name + ' (back-project at z₁, reproject): ' +
+        (isNaN(xstats.depthSel) ? 'n/a' :
+          xstats.depthSel.toFixed(2) + ' px — only quantization remains') + '\n' +
+      '\n' +
       'DLT triangulation from the two display pixels (doc §7):\n' +
       (Xhat ?
         '  X̂ = (' + Xhat.map(function (x) { return x.toFixed(3); }).join(', ') +
@@ -238,7 +386,8 @@
     drawOverview(atoms, cam1, cam2);
     drawDisplay('view1', cam1, atoms, F21, cam2, atoms);
     drawDisplay('view2', cam2, atoms, F, cam1, atoms);
-    updateReadout(cam1, cam2, atoms, F);
+    var xstats = drawTransfer(cam1, cam2, atoms);
+    updateReadout(cam1, cam2, atoms, F, xstats);
   }
 
   /* ---------------- controls --------------------------------------------- */

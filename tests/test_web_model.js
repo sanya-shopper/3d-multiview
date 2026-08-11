@@ -82,6 +82,33 @@ var F = MV.fundamental(cam1, cam2);
      'depth error law reproduces doc ex. deptherr (23 mm)');
 })();
 
+/* --- back-projection round trip ---------------------------------------- */
+(function () {
+  var X = [0.4, -0.15, 0.22];
+  var p = MV.project(cam1, X);
+  var Xb = MV.backproject(cam1, p, p.z);
+  ok(MV.norm(MV.sub(Xb, X)) < 1e-12,
+     'backproject inverts project at the observed depth (doc section 4)');
+})();
+
+/* --- plane-induced homography (doc eq. planehom) ----------------------- */
+(function () {
+  var d = 3.8;                       /* plane depth in camera-1 frame */
+  var H = MV.planeHomography(cam1, cam2, d);
+  /* a point ON the plane transfers exactly */
+  var Xon = MV.backproject(cam1, { u: 21.3, v: 30.1 }, d);
+  var ph = MV.applyH(H, MV.project(cam1, Xon));
+  var p2 = MV.project(cam2, Xon);
+  ok(Math.hypot(ph.u - p2.u, ph.v - p2.v) < 1e-9,
+     'plane homography transfers on-plane points exactly');
+  /* a point OFF the plane misses by parallax */
+  var Xoff = MV.backproject(cam1, { u: 21.3, v: 30.1 }, d - 0.8);
+  var ph2 = MV.applyH(H, MV.project(cam1, Xoff));
+  var p22 = MV.project(cam2, Xoff);
+  ok(Math.hypot(ph2.u - p22.u, ph2.v - p22.v) > 0.5,
+     'off-plane points miss by parallax (what depth is made of)');
+})();
+
 /* --- explicit 6-DOF camera pose ---------------------------------------- */
 (function () {
   var pos = [3.1, -1.4, 0.8], target = [0.2, 0.3, -0.1];

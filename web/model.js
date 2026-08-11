@@ -121,6 +121,16 @@ var MV = (function () {
     bonds.push([0, 6]);
     atoms.push({ el: 'N', color: '#2d6cdf', p: v3(-0.55, -0.75, -0.5) }); /* 7 */
     bonds.push([4, 7]);
+    /* more colored substituents: distinct landmarks to watch while the
+     * cameras and the molecule move */
+    atoms.push({ el: 'S', color: '#b8860b', p: v3(-0.50, 1.00, 0.15) });  /* 8 */
+    bonds.push([2, 8]);
+    atoms.push({ el: 'F', color: '#27ae60', p: v3(0.55, 0.95, 0.62) });   /* 9 */
+    bonds.push([1, 9]);
+    atoms.push({ el: 'P', color: '#8e44ad', p: v3(0.50, -0.95, 0.62) });  /* 10 */
+    bonds.push([5, 10]);
+    atoms.push({ el: 'Mg', color: '#d81b60', p: v3(-1.05, 0.15, 0.62) }); /* 11 */
+    bonds.push([3, 11]);
     return { atoms: atoms, bonds: bonds };
   }
 
@@ -211,6 +221,15 @@ var MV = (function () {
     return { u: Math.floor(p.u) + 0.5, v: Math.floor(p.v) + 0.5 };
   }
 
+  /* back-project pixel {u,v} at camera depth z to the world point on that
+   * ray (doc section 4: the ray C + s d, here with the depth known) */
+  function backproject(cam, p, z) {
+    var Ki = inv3(cam.K);
+    var dc = matVec(Ki, [p.u, p.v, 1]);       /* camera-frame dir, dc[2]=1 */
+    var Xc = scale(dc, z);
+    return matVec(transpose(cam.R), sub(Xc, cam.t));
+  }
+
   /* ---------------- two-view relations ---------------------------------- */
 
   /* F = K2^-T [t21]x R21 K1^-1 with R21 = R2 R1', t21 = t2 - R21 t1
@@ -230,6 +249,34 @@ var MV = (function () {
 
   /* the epipolar line l2 = F x1 as [a,b,c], a u + b v + c = 0 */
   function epipolarLine(F, p1) { return matVec(F, [p1.u, p1.v, 1]); }
+
+  /* Plane-induced homography from camera 1 pixels to camera 2 pixels
+   * for the fronto-parallel (to camera 1) plane at camera-1 depth d:
+   * H = K2 (R21 - t21 n' / d) K1^-1 with n = camera-1 optical axis
+   * (doc eq. planehom, section 5.1 -- there induced by the target plane,
+   * here by an assumed scene plane). Exact only for points ON the plane;
+   * everything off it misses by parallax, which is the information
+   * stereo depth is made of. */
+  function planeHomography(cam1, cam2, d) {
+    var R21 = matMul(cam2.R, transpose(cam1.R));
+    var t21 = sub(cam2.t, matVec(R21, cam1.t));
+    /* on the plane n.Xc1 = d (n = (0,0,1)):
+     * Xc2 = R21 Xc1 + t21 (n.Xc1 / d) = (R21 + t21 n'/d) Xc1,
+     * so the n'/d term adds t21/d to column 3 of R21 */
+    var M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], i, j;
+    for (i = 0; i < 3; i++) {
+      for (j = 0; j < 3; j++) M[i][j] = R21[i][j];
+      M[i][2] += t21[i] / d;
+    }
+    return matMul(cam2.K, matMul(M, inv3(cam1.K)));
+  }
+
+  /* apply a homography to a pixel point */
+  function applyH(H, p) {
+    var x = matVec(H, [p.u, p.v, 1]);
+    if (Math.abs(x[2]) < 1e-12) return null;
+    return { u: x[0] / x[2], v: x[1] / x[2] };
+  }
 
   /* DLT triangulation from two views (doc eq. "dlt", section 7):
    * rows u P3 - P1, v P3 - P2 per view; smallest right singular vector. */
@@ -278,8 +325,10 @@ var MV = (function () {
     makeMolecule: makeMolecule, poseMolecule: poseMolecule,
     makeCamera: makeCamera, makeCameraPose: makeCameraPose,
     aimAngles: aimAngles, project: project, quantize: quantize,
+    backproject: backproject,
     fundamental: fundamental, epipolarResidual: epipolarResidual,
     epipolarLine: epipolarLine, triangulate: triangulate,
+    planeHomography: planeHomography, applyH: applyH,
     reprojError: reprojError, depthSigma: depthSigma
   };
 })();

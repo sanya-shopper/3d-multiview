@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>multiview — two cameras watching a molecule</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Two cameras watching a molecule</h1>
+  <p>
+    An interactive companion to <code>doc/multiview.pdf</code>: a stylized
+    molecule graph floats in the working volume, observed by the two cameras
+    of a stationary rig. Everything the page computes is a calculation the
+    document derives — pinhole projection (§4), the fundamental matrix and
+    epipolar lines (§6), DLT triangulation (§7), and the depth-error law
+    (§8) — recomputed live as you move the cameras or the molecule.
+  </p>
+  <p class="hint">
+    Drag a camera view to orbit that camera. Click an atom in either view to
+    select it (yellow). The dashed cyan line in each view is the epipolar
+    line of the selected atom's pixel in the <em>other</em> view: the 1D
+    locus where its match must lie.
+  </p>
+</header>
+
+<main>
+  <section class="row">
+    <figure>
+      <canvas id="overview" width="420" height="360"></canvas>
+      <figcaption>world view: volume, molecule, cameras</figcaption>
+    </figure>
+    <div class="controls">
+      <fieldset>
+        <legend>camera 1</legend>
+        <label>azimuth <input type="range" id="cam1az" min="-180" max="180" step="1" value="-26"></label>
+        <label>elevation <input type="range" id="cam1el" min="-80" max="80" step="1" value="10"></label>
+        <label>distance <input type="range" id="cam1dist" min="2.5" max="8" step="0.1" value="4.2"></label>
+      </fieldset>
+      <fieldset>
+        <legend>camera 2</legend>
+        <label>azimuth <input type="range" id="cam2az" min="-180" max="180" step="1" value="26"></label>
+        <label>elevation <input type="range" id="cam2el" min="-80" max="80" step="1" value="6"></label>
+        <label>distance <input type="range" id="cam2dist" min="2.5" max="8" step="0.1" value="4.2"></label>
+      </fieldset>
+      <fieldset>
+        <legend>molecule</legend>
+        <label>yaw <input type="range" id="molyaw" min="-180" max="180" step="1" value="29"></label>
+        <label>pitch <input type="range" id="molpitch" min="-90" max="90" step="1" value="17"></label>
+        <label>x <input type="range" id="molx" min="-0.8" max="0.8" step="0.02" value="0"></label>
+        <label>y <input type="range" id="moly" min="-0.8" max="0.8" step="0.02" value="0"></label>
+        <label>z <input type="range" id="molz" min="-0.8" max="0.8" step="0.02" value="0"></label>
+      </fieldset>
+    </div>
+  </section>
+
+  <section class="row">
+    <figure>
+      <canvas id="view1" width="384" height="288"></canvas>
+      <figcaption>camera 1 display — 64×48 pixels (§3.1: each pixel is a ray)</figcaption>
+    </figure>
+    <figure>
+      <canvas id="view2" width="384" height="288"></canvas>
+      <figcaption>camera 2 display — 64×48 pixels</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>The computations, live</h2>
+    <pre id="readout"></pre>
+    <p class="note">
+      The displays are deliberately coarse (64×48) so quantization is
+      visible: the epipolar residual and the triangulation error shown above
+      come entirely from snapping the continuous projections to pixel
+      centers, exactly the σ<sub>d</sub> that §8's error law propagates
+      to depth. Make the baseline small (both azimuths similar) and watch
+      the triangulation error grow as the rays intersect at grazing angles
+      (§10 of the document).
+    </p>
+  </section>
+</main>
+
+<footer>
+  <p>Part of the <code>multiview</code> learning repo. The page is static:
+  <code>model.js</code> holds the math (mirroring the document's equations),
+  <code>app.js</code> only draws and routes input.</p>
+</footer>
+
+<script src="model.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

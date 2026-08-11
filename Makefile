@@ -129,9 +129,21 @@ check: test_mv test_refine test_optimal test_feat test_session test_photo test_b
 	python3 tests/check_targets.py
 	$(MAKE) doc/multiview.aux
 	python3 tests/check_bib.py
+	$(MAKE) checkweb
 
 checkbib:
 	python3 tests/check_bib.py
+
+# The web companion's math layer (web/model.js) is unit-tested headlessly.
+# node is present on the GitHub CI runners and dev machines; if it is
+# genuinely absent the check reports the skip loudly rather than passing
+# silently.
+checkweb:
+	@if command -v node >/dev/null 2>&1; then \
+	  node tests/test_web_model.js; \
+	else \
+	  echo "SKIPPED: web-model tests (node not installed)"; \
+	fi
 
 # libFuzzer targets (clang, Linux CI has the runtime; macOS Xcode may not)
 FUZZ_SRC = $(filter-out src/%.o,$(SRC))

@@ -166,7 +166,34 @@ wider reconstruction literature.
 system: camera model, calibration, two-view geometry, triangulation, dense
 stereo. Every section ends in a worked example with numbers chosen so the
 computation fits on paper; doing them by hand \emph{is} the intended
-self-study exercise, and each can then be checked against the library.
+self-study exercise, and each can then be checked against the library
+--- or watched live in the interactive companion
+(\autoref{sec:webcompanion}).
+
+\subsection{The interactive companion}
+\label{sec:webcompanion}
+
+The repository ships a static web page, \code{web/index.html}, that
+animates the core of this document: a stylized molecule floats in the
+working volume, watched by two freely positionable cameras whose coarse
+$64\times48$ displays are rendered at the pixel level. As the cameras
+or the molecule move, the page recomputes live exactly what the
+following sections derive --- projection (\autoref{sec:camera}),
+plane-homography view transfer and its per-pixel difference from the
+actual view (\autoref{sec:parallax}), epipolar lines
+(\autoref{sec:epipolar}), DLT triangulation with its millimetre error
+(\autoref{sec:triangulation}), and the depth-error prediction
+(\autoref{sec:stereo}). Scenes are addressable by URL, so the text can
+point at a configuration and mean it: \code{?scene=default} is the
+wide-baseline reference rig, \code{?scene=narrow} moves the cameras
+nearly together (plane transfer becomes exact while triangulation
+degrades --- the two faces of \eqref{eq:parallax} and
+\eqref{eq:deptherr}), and \code{?scene=roll} rolls camera 2 to slant
+its epipolar lines; any hand-arranged scene can be copied as a link
+from the page and pasted into notes. The page is dependency-free
+(hand-written HTML/JS; the math lives in \code{web/model.js} and is
+unit-tested against this document's worked examples by
+\code{make check}).
 
 \paragraph{Design constraints.} The library is strict C99 with no
 dependencies beyond \code{libm}, row-major \code{double} arrays throughout,
@@ -239,7 +266,8 @@ a nonzero scale. \autoref{fig:homogpixels} shows what the convention means
 physically for our cameras: a homogeneous triple is best read as the name
 of a \emph{viewing ray}, and a pixel on a camera's display is exactly one
 such ray --- which is why every rescaling of the triple addresses the same
-pixel.
+pixel. (The companion page, \autoref{sec:webcompanion}, renders this
+figure live: its camera displays are exactly such coarse pixel grids.)
 
 \begin{figure}[t]
 \centering
@@ -1412,6 +1440,63 @@ on the \emph{same image row}. This is precisely the situation rectification
 (\autoref{sec:stereo}) manufactures for arbitrary rigs.
 \end{example}
 
+\subsection{Plane transfer and parallax: why one matrix cannot map view
+to view}
+\label{sec:parallax}
+
+The epipolar constraint answers ``where \emph{could} the match be'' (a
+line); it is natural to ask for more --- a formula sending each pixel of
+view 1 to its partner in view 2. No such 2D map exists, and the way it
+fails is worth quantifying, because the failure \emph{is} the depth
+signal.
+
+The best available single matrix is the plane-induced homography of
+\eqref{eq:planehom}: pick a reference plane --- say the fronto-parallel
+plane at depth $d$ in camera 1 --- and
+\begin{equation}
+\mat H \;=\; \K_2\!\left(\R_{21} + \tv_{21}\,\vect n^{\!\top}\!/d\right)\K_1^{-1}
+\label{eq:planetransfer}
+\end{equation}
+transfers \emph{exactly} the pixels of scene points lying on that plane.
+A point at true depth $Z\neq d$ instead lands displaced from
+$\mat H\x_1$ --- along the epipolar line of $\x_1$, because both the
+transferred and the true pixel must lie on it --- by the \emph{parallax}
+\begin{equation}
+\delta \;\approx\; f\,B\,\Bigl|\frac1Z-\frac1d\Bigr|,
+\label{eq:parallax}
+\end{equation}
+with $B$ the baseline and $f$ in pixels (the small-angle form; it is the
+disparity law \eqref{eq:depth} measured relative to the plane instead of
+relative to infinity \cite{HartleyZisserman2004}). Two readings of
+\eqref{eq:parallax}: transfer error grows with the \emph{depth relief}
+of the scene about the chosen plane; and shrinking the baseline drives
+the two views toward a single viewpoint, where the homography becomes
+exact and, by the same token, depth becomes unrecoverable ---
+\eqref{eq:parallax} and the depth-error law \eqref{eq:deptherr} are the
+two faces of one trade.
+
+\begin{example}[why the companion's diff panel glows]
+\label{ex:parallax}
+The interactive companion (\autoref{sec:webcompanion}) warps camera 1's
+display into camera 2's frame by \eqref{eq:planetransfer} and shows the
+per-pixel $|$actual$-$predicted$|$; in its default scene
+(\code{?scene=default}) the difference is strikingly large, and
+\eqref{eq:parallax} says it must be. The default rig is strongly
+converged: $B\approx3.6$\,m at $d\approx4.2$\,m with $f=52$\,px on a
+64-pixel-wide display. A molecule atom $0.7$\,m in front of the
+reference plane sits at $Z=3.5$\,m, so
+$\delta \approx 52\cdot3.6\cdot(1/3.5-1/4.2)\approx9$\,px --- about
+$14\%$ of the display width. Two amplifiers make the \emph{panel} read
+even larger than the geometry: the scene is drawn in thin strokes
+(1--2\,px bonds and small discs), and a thin stroke displaced by more
+than its own width overlaps its counterpart nowhere, so the absolute
+difference saturates rather than growing gracefully; and the warp
+resamples an already-coarse $64\times48$ grid by nearest neighbor,
+adding up to a pixel of edge misregistration everywhere. Watching the
+panel while shrinking the baseline (\code{?scene=narrow}) shows the
+whole effect collapse, exactly as \eqref{eq:parallax} predicts.
+\end{example}
+
 %----------------------------------------------------------------------
 \section{Triangulation}
 \label{sec:triangulation}
@@ -1425,7 +1510,9 @@ The output is a single 3D point $\X$, in metres in the world frame,
 that best explains the observed pixels, accompanied by its RMS
 reprojection error as a per-point quality report. This is the moment 2D
 becomes 3D: everything before this section produces matched pixels,
-everything after consumes 3D points.
+everything after consumes 3D points. (The companion,
+\autoref{sec:webcompanion}, runs this section's DLT on the selected
+atom's quantized pixels and reports the millimetre error live.)
 
 Given observations $\x^{(v)} = (u_v, w_v)$ of the same point in $N\ge2$ views
 with projection matrices $\PP^{(v)}$, each view contributes two linear
@@ -1622,6 +1709,13 @@ $\sigma_Z = 4.7^2\cdot 0.42/(800\cdot0.5) \approx 0.023$\,m: about
 2.3\,cm of depth uncertainty --- compare the measured 2.65\,cm RMS
 3D error in \autoref{tab:results}.
 \end{example}
+
+The companion's \code{?scene=narrow} configuration
+(\autoref{sec:webcompanion}) makes \eqref{eq:deptherr} tangible: with
+the cameras moved nearly together the triangulation error explodes
+while the plane-transfer prediction of \autoref{sec:parallax} becomes
+nearly perfect --- small baseline trades depth information for
+transferability.
 
 %----------------------------------------------------------------------
 \section{From depth to models}
@@ -4217,6 +4311,81 @@ interfaces (USB3 Vision/GenICam via vendor SDKs) deliver raw pixels,
 physical-unit controls, per-frame hardware timestamps and trigger I/O.
 Rule of thumb: UVC is acceptable exactly where rolling shutter is
 acceptable --- static bring-up.
+
+\subsection{Self-description: what a camera will tell you about itself}
+\label{sec:selfdesc}
+
+A natural hope is that the camera can be \emph{asked} for its physical
+characteristics --- pixel size, sensor dimensions, focal length. It
+mostly cannot. What a UVC device advertises in its descriptors is
+operational, not physical: the list of frame sizes and rates it will
+stream, and the ranges of its exposure/gain/white-balance controls.
+There is no field for pixel pitch, sensor format, lens focal length, or
+even the sensor part number. Phone cameras do embed focal length and a
+35\,mm-equivalent in the EXIF of still photos, but a UVC video stream
+carries no EXIF at all; machine-vision cameras (\autoref{sec:uvc}) are
+the honorable exception, exposing sensor model and physical-unit
+controls through GenICam, with a real sensor datasheet behind them.
+For webcam-class hardware the physical numbers must come from the
+\emph{datasheet culture} instead --- and consumer datasheets are
+marketing documents, reliable only after cross-examination.
+
+\begin{example}[how big is a pixel on a Logitech C270?]
+\label{ex:c270}
+Logitech's specification page for the C270 gives: optical resolution
+$1280\times960$ (1.2\,MP), field of view $60^\circ$, focal length
+$4.0$\,mm, focus fixed, and --- for sensor type --- the single word
+``plastic.'' Retail listings advertise ``3\,MP,'' which is software
+interpolation of stills. Pixel size appears nowhere. The number
+exists, but comes from the community: the OpenFlexure microscope
+project, which re-lenses this exact webcam, reports $2.8\,\mu$m pixels
+and a $3.58\times2.02$\,mm active area in 720p
+mode.\footnote{Logitech, ``HD Webcam C270 Technical Specifications,''
+\url{https://support.logi.com/hc/en-us/articles/360023462093}; OpenFlexure
+Microscope project wiki, ``Camera Options,''
+\url{https://github.com/rwb27/openflexure_microscope/wiki/Camera-Options}.
+Both retrieved 2026-08-11.} The numbers cross-check into a consistent
+story: $1280\times2.8\,\mu\text{m}=3.58$\,mm and
+$960\times2.8\,\mu\text{m}=2.69$\,mm, so the native chip is
+$3.58\times2.69$\,mm --- the standard $1/4$-inch optical format --- and
+720p is a row crop of it ($720\times2.8=2.02$\,mm~\checkmark). The
+advertised $60^\circ$ is then the \emph{diagonal} of the native $4{:}3$
+frame ($2\arctan(2.24/4.0)=58.5^\circ\approx60^\circ$); the horizontal
+field is only $2\arctan(1.79/4.0)=48^\circ$ --- planning rig coverage
+(\autoref{sec:scaling}) with the headline $60^\circ$ would overestimate
+width by a quarter.
+\end{example}
+
+What does the pixel size buy, given that calibration
+(\autoref{sec:calib}) never asks for it? Calibration measures
+$f_x = f_{\text{mm}}/\text{pitch}$ --- for the C270,
+$4.0\,\text{mm}/2.8\,\mu\text{m} \approx 1430$\,px --- and every
+geometric quantity in this document (rays, triangulation, the
+ground-sampling floor $Z/f_x$ of \autoref{sec:resolution}) consumes
+only that ratio. The physical factorization is still worth having,
+four ways. \emph{Prediction}: before the hardware arrives, pitch and
+focal length forecast the field of view and the sampling density ---
+at our $4.7$\,m working depth the C270 samples the scene at
+$Z\cdot\text{pitch}/f_{\text{mm}}\approx3.3$\,mm per pixel.
+\emph{Cross-examination}: measured $f_x$ times claimed pitch must
+reproduce the claimed focal length; a mode that secretly crops, bins,
+or interpolates (the ``3\,MP'' stills) breaks the identity and is
+caught --- as is a non-square pixel, since calibration separately
+reports $f_x$ and $f_y$. \emph{Radiometry}: photon capture scales with
+pixel \emph{area}, so the C270's $(2.8\,\mu\text{m})^2=7.8\,\mu\text{m}^2$
+cell collects $\sim$$2/3$ of the photons of a
+$3.45\,\mu$m machine-vision pixel at equal exposure --- a shot-noise
+penalty the photon-transfer procedure of \autoref{sec:radiometry}
+measures directly. \emph{Diffraction sanity}: at f/2.8 the Airy-disk
+diameter $2.44\lambda N\approx3.8\,\mu$m at $\lambda=0.55\,\mu$m
+already exceeds the pitch, so the plastic lens and diffraction, not
+the pixel grid, set the resolution floor (cf.\ the MTF discussion of
+\autoref{sec:lenses}). The general rule: the camera's trustworthy
+self-description is its \emph{data} --- calibration and the
+measurement procedures of \autoref{sec:radiometry} extract everything
+the pipeline consumes, in the units it consumes; the datasheet's role
+shrinks to choosing hardware and to factorizing measured ratios into
+physically meaningful parts.
 
 \subsection{Optics: M12 vs C/CS mounts}
 \label{sec:lenses}

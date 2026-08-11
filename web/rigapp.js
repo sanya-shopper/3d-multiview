@@ -317,6 +317,19 @@
       var p = oproj(corners[e[0]]), q = oproj(corners[e[1]]);
       cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
     });
+    /* slice-height marker: the TSDF panel shows THIS dashed level */
+    if (state.tsdf && state.phase === 'measure') {
+      var zk = sliceZ(), sq = 1.1;
+      cx.strokeStyle = '#b45309'; cx.lineWidth = 1;
+      cx.setLineDash([4, 3]);
+      cx.beginPath();
+      [[-sq, -sq], [sq, -sq], [sq, sq], [-sq, sq]].forEach(function (c, k) {
+        var p = oproj([c[0], c[1], zk]);
+        if (k === 0) cx.moveTo(p[0], p[1]); else cx.lineTo(p[0], p[1]);
+      });
+      cx.closePath(); cx.stroke();
+      cx.setLineDash([]);
+    }
     /* the box, true pose: front faces filled in their colors */
     var VDIR = MV.unit([0.45, 1, -0.311]);    /* oblique-view kernel */
     FACES.forEach(function (f) {
@@ -403,7 +416,32 @@
     });
   }
 
-  /* TSDF slice: diverging map, dark at the zero crossing (the surface) */
+  /* TSDF slice: diverging map, dark at the zero crossing (the surface).
+   * Overlaid: the box's TRUE cross-section at this height (dashed) and
+   * the directions the camera rays come from, so the streaks read. */
+  function sliceZ() {
+    return state.tsdf ?
+      state.tsdf.min[2] + (state.sliceK + 0.5) * state.tsdf.cell : 0;
+  }
+  function boxCrossSection(zk, atoms) {
+    var pts = [];
+    box.bonds.forEach(function (b) {
+      var A = atoms[b[0]], B = atoms[b[1]], dz = B[2] - A[2];
+      if (Math.abs(dz) < 1e-9) return;
+      var t = (zk - A[2]) / dz;
+      if (t < 0 || t > 1) return;
+      pts.push([A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])]);
+    });
+    if (pts.length < 3) return null;
+    var cx0 = 0, cy0 = 0;
+    pts.forEach(function (p) { cx0 += p[0]; cy0 += p[1]; });
+    cx0 /= pts.length; cy0 /= pts.length;
+    pts.sort(function (a, b) {
+      return Math.atan2(a[1] - cy0, a[0] - cx0) -
+             Math.atan2(b[1] - cy0, b[0] - cx0);
+    });
+    return pts;
+  }
   function drawSlice() {
     var cv = document.getElementById('tsdfslice'), cx = cv.getContext('2d');
     cx.clearRect(0, 0, cv.width, cv.height);
@@ -428,8 +466,44 @@
       /* screen y up = world +y: flip rows */
       cx.fillRect(i * px, (n - 1 - j) * px, Math.ceil(px), Math.ceil(px));
     }
+    /* world (x,y) -> slice-panel pixels, matching the voxel fill above */
+    var size = t.cell * n;
+    function sp(x, y) {
+      return [(x - t.min[0]) / size * cv.width,
+              cv.height - (y - t.min[1]) / size * cv.height];
+    }
+    /* the box's true cross-section at this height, for orientation */
+    var zk = sliceZ();
+    var atoms = MV.poseMolecule(box, state.pose);
+    var poly = boxCrossSection(zk, atoms);
+    if (poly) {
+      cx.strokeStyle = '#1c2733'; cx.lineWidth = 1.5;
+      cx.setLineDash([5, 3]);
+      cx.beginPath();
+      poly.forEach(function (p, k) {
+        var q = sp(p[0], p[1]);
+        if (k === 0) cx.moveTo(q[0], q[1]); else cx.lineTo(q[0], q[1]);
+      });
+      cx.closePath(); cx.stroke();
+      cx.setLineDash([]);
+    } else {
+      cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText('box does not reach this height', 6, cv.height - 6);
+    }
+    /* where the camera rays come from */
+    [[cam1, 'cam 1'], [cam2, 'cam 2']].forEach(function (cc) {
+      var C = cc[0].C;
+      var d = MV.unit([C[0], C[1], 0]);
+      var bx0 = cv.width / 2 + d[0] * (cv.width / 2 - 16);
+      var by0 = cv.height / 2 - d[1] * (cv.height / 2 - 16);
+      cx.strokeStyle = '#2d6cdf'; cx.lineWidth = 1.5;
+      cx.beginPath(); cx.moveTo(bx0, by0);
+      cx.lineTo(bx0 - d[0] * 10, by0 + d[1] * 10); cx.stroke();
+      cx.fillStyle = '#2d6cdf'; cx.font = '9px system-ui, sans-serif';
+      cx.fillText(cc[1], bx0 - 12, by0 + (d[1] > 0 ? 12 : -5));
+    });
     document.getElementById('slicelabel').textContent =
-      'z = ' + (t.min[2] + (state.sliceK + 0.5) * t.cell).toFixed(2) + ' m';
+      'z = ' + zk.toFixed(2) + ' m';
   }
 
   /* dedicated point-cloud panel: the world view stays clean */
@@ -756,6 +830,15 @@
     state.faceCov = [0, 0, 0, 0, 0, 0];
     state.prevS = null; state.stableCount = 0; state.solveStatus = 'none';
     state.bankMsg = 'drag the box, release to auto-bank';
+    render();
+  });
+  /* click the cloud panel: wipe the model and re-estimate immediately
+   * from the box's current pose */
+  document.getElementById('cloudview').addEventListener('click', function () {
+    if (state.phase !== 'measure') return;
+    state.cloud = []; state.tsdf = null;
+    state.faceCov = [0, 0, 0, 0, 0, 0];
+    state.lastPoseKey = '';                   /* forces fresh accumulation */
     render();
   });
   document.getElementById('clearmodel').addEventListener('click', function () {

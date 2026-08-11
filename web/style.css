@@ -146,3 +146,4 @@ footer {
 .covnote { font-size: 0.75rem; color: #4a5563; margin: 0.1rem 0 0.4rem; }
 .bankcount { margin-left: 0.4rem; font-size: 0.85rem; color: #4a5563; }
 #buildstamp { font-size: 0.78rem; color: #8a94a1; }
+#cloudview { cursor: pointer; }

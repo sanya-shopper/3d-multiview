@@ -109,6 +109,9 @@ try {
   dragBox(-30, 15, { shift: 1 });
   ok(el('readout').textContent.indexOf('model accumulation') >= 0,
      'measure phase reports cloud/TSDF accumulation');
+  fire(el('cloudview'), 'click', {});
+  ok(/cloud \d+ points/.test(el('readout').textContent),
+     'clicking the cloud panel clears and re-estimates the current pose');
   fire(el('clearmodel'), 'click', {});
   fire(el('tosolve'), 'click', {});
   fire(el('resetsolve'), 'click', {});

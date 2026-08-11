@@ -73,15 +73,21 @@
     <figure>
       <canvas id="cloudview" width="224" height="224"></canvas>
       <figcaption>point cloud — solved-rig triangulations; gray ghost =
-      box's current true pose</figcaption>
+      box's current true pose. <b>Click to clear</b> and re-estimate from
+      the current pose</figcaption>
     </figure>
     <figure>
       <canvas id="tsdfslice" width="224" height="224"></canvas>
-      <figcaption>TSDF horizontal slice, <span id="slicelabel">z</span>
+      <figcaption>TSDF horizontal slice at <span id="slicelabel">z</span>
+      (dashed orange square in the world view)
       <input type="range" id="slicek" min="0" max="31" value="16"
         style="width: 100%"><br>
-      blue = measured empty (carved), orange = behind surface, dark
-      boundary = the zero crossing; gray = never observed</figcaption>
+      a top-down cut through the voxel grid. Dashed outline = the box's
+      true cross-section at this height; each captured mark writes a blue
+      streak along its camera rays (measured empty), a dark cell near the
+      mark itself (the surface), and orange just behind it; gray = no ray
+      has crossed. Sweep the box and dark cells shell its outline; sweep
+      the slider to move the cut up and down</figcaption>
     </figure>
     <figure>
       <canvas id="convgraph" width="280" height="120"></canvas>

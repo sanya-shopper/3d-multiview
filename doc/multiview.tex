@@ -75,9 +75,16 @@ volume restores depth, because a point seen by both cameras is pinned to
 the intersection of two viewing rays (\autoref{sec:triangulation});
 and placing an object of known physical dimensions in the volume anchors
 the unit, because its image tells the pixel grid what a metre looks like
---- the heart of calibration (\autoref{sec:calib}). From two views and
+--- the heart of calibration (\autoref{sec:calib}). Time has the same
+character: each camera samples light at its own rate, on its own private
+clock, so no pair of frames arrives certified as simultaneous --- but by
+comparing \emph{when} objects appear, move, and disappear in each view,
+the clocks themselves can be measured and brought into a common frame
+(\autoref{sec:timemodel}), making ``the same instant'' as recoverable as
+``the same point.'' From two views and
 one known object, it becomes possible to calibrate the physical meaning
-of every pixel and then to extract progressively richer descriptions of
+of every pixel --- in space and in time --- and then to extract
+progressively richer descriptions of
 what the cameras see: distances, surfaces, models of the scene, and
 events unfolding in it. This document develops that program, engineered
 for one deliberately favorable setting.

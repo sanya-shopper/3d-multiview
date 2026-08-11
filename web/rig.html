@@ -77,7 +77,8 @@
       <figcaption>solved-baseline error vs banked poses</figcaption>
     </figure>
     <div class="quickhelp">
-      <p><b id="phasebadge">phase 1: solve</b></p>
+      <p><b id="phasebadge">phase 1: solve</b><br>
+      <span id="bankmsg" style="font-size:0.82rem;color:#4a5563"></span></p>
       <p>
         <button type="button" id="bank">bank this pose</button>
         <button type="button" id="tomeasure">accept solve → measure</button>
@@ -87,11 +88,15 @@
         <button type="button" id="clearmodel">clear model</button>
         <button type="button" id="resetsolve">reset everything</button>
       </p>
+      <label class="check"><input type="checkbox" id="autobank" checked>
+        auto-bank when the box is released in a novel pose</label>
       <label class="check"><input type="checkbox" id="subpixel">
         subpixel corners (remove quantization noise)</label>
-      <p>Bank several <em>varied</em> box poses, accept the solve, then
-      move the box and watch the cloud and TSDF grow through the solved
-      cameras.</p>
+      <p>Drag the box, release, and novel poses bank themselves (a pose
+      must differ from every banked one by ~15° or ~15 cm to add
+      information). The readout coaches you on driving the error down;
+      then accept the solve and watch the cloud and TSDF grow through
+      the solved cameras.</p>
     </div>
   </section>
 

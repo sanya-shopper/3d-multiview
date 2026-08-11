@@ -40,7 +40,9 @@
     pose: { yaw: 25 * DEG, pitch: 15 * DEG, roll: 0, x: 0, y: 0, z: 0 },
     phase: 'solve',                           /* 'solve' | 'measure' */
     subpixel: false,
-    banks: [],                                /* each: [{i, p1, p2}, ...] */
+    autoBank: true,                           /* bank on release, if novel */
+    bankMsg: 'drag the box, release to auto-bank',
+    banks: [],                                /* each: {obs, pose, R} */
     solved: null,                             /* {F, R, t, s, camS1, camS2} */
     baselineHist: [],                         /* % error per bank */
     cloud: [],                                /* world-frame points */
@@ -80,11 +82,53 @@
     return out;
   }
 
+  /* rotation matrix of a box pose (same composition as poseMolecule) */
+  function poseR(pose) {
+    var cy = Math.cos(pose.yaw), sy = Math.sin(pose.yaw);
+    var cp = Math.cos(pose.pitch), sp = Math.sin(pose.pitch);
+    var cr = Math.cos(pose.roll), sr = Math.sin(pose.roll);
+    return MV.matMul([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]],
+      MV.matMul([[1, 0, 0], [0, cp, -sp], [0, sp, cp]],
+                [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]));
+  }
+
+  /* how different the current pose is from the closest banked one:
+   * >= 1 means "novel enough to add information" (15 deg or 15 cm) */
+  function novelty(pose) {
+    if (!state.banks.length) return Infinity;
+    var R = poseR(pose), c = [pose.x, pose.y, pose.z], best = Infinity;
+    state.banks.forEach(function (b) {
+      var d = MV.rotationAngle(R, b.R) / (15 * DEG) +
+              MV.norm(MV.sub(c, [b.pose.x, b.pose.y, b.pose.z])) / 0.15;
+      if (d < best) best = d;
+    });
+    return best;
+  }
+
+  /* bank the current pose (returns true if banked) */
+  function bankPose(auto) {
+    var obs = observe();
+    if (obs.length < 8) {
+      state.bankMsg = 'box partly out of view — not banked';
+      return false;
+    }
+    if (auto && novelty(state.pose) < 1) {
+      state.bankMsg = 'pose too similar to a banked one — move or rotate more';
+      return false;
+    }
+    state.banks.push({ obs: obs,
+                       pose: JSON.parse(JSON.stringify(state.pose)),
+                       R: poseR(state.pose) });
+    runSolve();
+    state.bankMsg = (auto ? 'auto-' : '') + 'banked pose ' + state.banks.length;
+    return true;
+  }
+
   /* ---- the solve ------------------------------------------------------- */
 
   function runSolve() {
     var all = [], seen = {};
-    state.banks.forEach(function (b) { b.forEach(function (c) {
+    state.banks.forEach(function (b) { b.obs.forEach(function (c) {
       var key = c.p1.u + ',' + c.p1.v + '|' + c.p2.u + ',' + c.p2.v;
       if (seen[key]) return;                  /* quantization duplicates */
       seen[key] = 1;
@@ -102,10 +146,10 @@
     var ratios = [];
     state.banks.forEach(function (b) {
       var X = {};
-      b.forEach(function (c) {
+      b.obs.forEach(function (c) {
         X[c.i] = MV.triangulate(camU1, c.p1, camU2, c.p2);
       });
-      b.forEach(function (c) {
+      b.obs.forEach(function (c) {
         var j = c.i ^ 1;                      /* corner pairs only */
         if (c.i < 8 && j > c.i && X[c.i] && X[j])
           ratios.push(box.dims[0] / MV.norm(MV.sub(X[j], X[c.i])));
@@ -357,6 +401,13 @@
     h.forEach(function (v, i) {
       cx.beginPath(); cx.arc(px(i), py(v), 3, 0, 2 * Math.PI); cx.fill();
     });
+    var best = Math.min.apply(null, h);
+    cx.strokeStyle = '#16a085'; cx.lineWidth = 1;
+    cx.setLineDash([4, 3]);
+    cx.beginPath(); cx.moveTo(padL, py(best)); cx.lineTo(W - padR, py(best)); cx.stroke();
+    cx.setLineDash([]);
+    cx.fillStyle = '#16a085'; cx.font = '9px system-ui, sans-serif';
+    cx.fillText('best ' + best.toFixed(2) + '%', W - padR + 2, py(best) + 3);
     var last = h[h.length - 1];
     cx.fillStyle = '#1c2733'; cx.font = '11px system-ui, sans-serif';
     cx.fillText('baseline err ' + last.toFixed(2) + '%',
@@ -384,7 +435,7 @@
       lines.push(trueDims);
       lines.push('');
       lines.push('banked poses: ' + state.banks.length +
-        '   correspondences: ' + state.banks.reduce(function (a, b) { return a + b.length; }, 0));
+        '   correspondences: ' + state.banks.reduce(function (a, b) { return a + b.obs.length; }, 0));
       lines.push('');
       lines.push('bank a pose to run the first solve: the 8-point machinery on');
       lines.push('the 20 mark correspondences (§6) → essential matrix → (R, t) at');
@@ -421,6 +472,10 @@
       lines.push('   construction; the other two dimensions are honest tests)');
       if (!isNaN(rms))
         lines.push('  corner position RMS vs truth: ' + (rms * 1000).toFixed(1) + ' mm');
+      if (state.phase === 'solve') {
+        lines.push('');
+        coach(obs).forEach(function (l) { lines.push(l); });
+      }
       if (state.phase === 'measure') {
         lines.push('');
         lines.push('model accumulation (§9): cloud ' + state.cloud.length +
@@ -432,6 +487,58 @@
       }
     }
     out.textContent = lines.join('\n');
+  }
+
+  /* actionable advice for driving the solve error down */
+  function coach(obs) {
+    var lines = ['driving the error down:'];
+    var n = state.banks.length, i, j;
+    /* the estimate wanders: each bank adds a fresh draw of quantization
+     * noise, so expect improvement on AVERAGE, not every bank */
+    var h = state.baselineHist;
+    if (h.length >= 2 && h[h.length - 1] > h[h.length - 2])
+      lines.push('  · error went UP on that bank — normal: each pose adds a fresh');
+    else
+      lines.push('  · error falls only on average — each pose adds a fresh');
+    lines.push('    random draw of quantization noise, so the estimate wanders');
+    lines.push('    (~1/√N in expectation; doc §13.2 mindset)');
+    /* rotation diversity */
+    if (n >= 2) {
+      var meanRot = 0, cnt = 0;
+      for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) {
+        meanRot += MV.rotationAngle(state.banks[i].R, state.banks[j].R);
+        cnt++;
+      }
+      meanRot = meanRot / cnt / DEG;
+      if (meanRot < 35)
+        lines.push('  · banked orientations are similar (mean ' + meanRot.toFixed(0) +
+          '°) — shift-drag to ROTATE the box between banks');
+      /* translation diversity */
+      var cs = state.banks.map(function (b) { return [b.pose.x, b.pose.y, b.pose.z]; });
+      var mean = [0, 0, 0];
+      cs.forEach(function (c) { mean = MV.add(mean, c); });
+      mean = MV.scale(mean, 1 / n);
+      var spread = 0;
+      cs.forEach(function (c) { spread += MV.dot(MV.sub(c, mean), MV.sub(c, mean)); });
+      spread = Math.sqrt(spread / n);
+      if (spread < 0.22)
+        lines.push('  · banked positions cluster (spread ' + (spread * 100).toFixed(0) +
+          ' cm) — drag the box around the volume, incl. alt-drag for depth');
+    }
+    /* apparent size on the displays */
+    if (obs.length) {
+      var lo = Infinity, hi = -Infinity;
+      obs.forEach(function (c) { lo = Math.min(lo, c.p1.u); hi = Math.max(hi, c.p1.u); });
+      if ((hi - lo) < 0.30 * DISP_W)
+        lines.push('  · the box looks small in camera 1 (' + Math.round(hi - lo) +
+          ' of ' + DISP_W + ' px) — bring it closer so each pixel error matters less');
+    }
+    if (n >= 6 && !state.subpixel)
+      lines.push('  · at this point you are near the quantization floor — the');
+    if (n >= 6 && !state.subpixel)
+      lines.push('    subpixel-corners toggle shows the noise-free limit');
+    if (lines.length === 4) lines.push('  · keep banking varied poses — you are doing it right');
+    return lines;
   }
 
   /* ---- main render ------------------------------------------------------ */
@@ -481,11 +588,11 @@
   var clamp = function (x, lo, hi) { return Math.max(lo, Math.min(hi, x)); };
 
   document.getElementById('bank').addEventListener('click', function () {
-    var obs = observe();
-    if (obs.length < 8) return;               /* need all corners this once */
-    state.banks.push(obs);
-    runSolve();
+    bankPose(false);
     render();
+  });
+  document.getElementById('autobank').addEventListener('change', function (e) {
+    state.autoBank = e.target.checked;
   });
   document.getElementById('tomeasure').addEventListener('click', function () {
     if (state.solved) { state.phase = 'measure'; render(); }
@@ -517,6 +624,8 @@
     document.getElementById('tosolve').disabled = state.phase === 'solve';
     document.getElementById('phasebadge').textContent =
       state.phase === 'solve' ? 'phase 1: solve' : 'phase 2: measure';
+    document.getElementById('bankmsg').textContent =
+      state.phase === 'solve' ? state.bankMsg : '';
   }
 
   /* drag the box in the world view: translate / shift-rotate / alt-depth */
@@ -542,7 +651,13 @@
       drag = { x: e.clientX, y: e.clientY };
       render();
     });
-    window.addEventListener('mouseup', function () { drag = null; });
+    window.addEventListener('mouseup', function () {
+      if (drag && state.autoBank && state.phase === 'solve') {
+        bankPose(true);
+        render();
+      }
+      drag = null;
+    });
   })();
 
   render();

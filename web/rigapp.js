@@ -543,10 +543,11 @@
       var X = measureCorners(obs);
       var dims = measureDims(X);
       var rmsPts = [], rms = NaN;
+      var marksTrue = markers(MV.poseMolecule(box, state.pose));
       Object.keys(X).forEach(function (i) {
-        var Xw = toWorld(X[i]);
-        var Xt = MV.poseMolecule(box, state.pose)[i];
-        rmsPts.push(MV.norm(MV.sub(Xw, Xt)));
+        var Xt = marksTrue[i];               /* all 20 marks, not 8 atoms */
+        if (!Xt) return;
+        rmsPts.push(MV.norm(MV.sub(toWorld(X[i]), Xt)));
       });
       if (rmsPts.length)
         rms = Math.sqrt(rmsPts.reduce(function (a, b) { return a + b * b; }, 0) / rmsPts.length);

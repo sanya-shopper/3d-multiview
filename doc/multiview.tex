@@ -63,6 +63,25 @@ deterministic test programs in the repository.
 \section{Introduction and capabilities}
 \label{sec:capabilities}
 
+A camera pointed at a three-dimensional scene produces a grid of pixels,
+each holding a brightness or color sample. In principle that grid encodes
+a great deal about the scene's geometry; the difficulty is what a single
+image withholds. Every point along one pixel's viewing ray lands on the
+same pixel, so depth is lost outright --- and the grid carries no
+intrinsic unit of measurement: nothing in the pixels distinguishes a
+small scene photographed up close from a large one photographed from
+afar. Both losses are repairable. A second camera viewing the same
+volume restores depth, because a point seen by both cameras is pinned to
+the intersection of two viewing rays (\autoref{sec:triangulation});
+and placing an object of known physical dimensions in the volume anchors
+the unit, because its image tells the pixel grid what a metre looks like
+--- the heart of calibration (\autoref{sec:calib}). From two views and
+one known object, it becomes possible to calibrate the physical meaning
+of every pixel and then to extract progressively richer descriptions of
+what the cameras see: distances, surfaces, models of the scene, and
+events unfolding in it. This document develops that program, engineered
+for one deliberately favorable setting.
+
 The target deployment is deliberately narrow and fully under our control:
 \emph{fixed} cameras --- two in the reference rig --- are rigidly mounted
 and observe the same working volume. ``Fixed'' is the load-bearing word:

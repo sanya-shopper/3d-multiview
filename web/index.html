@@ -10,9 +10,12 @@
 <header>
   <h1>Two cameras watching a molecule</h1>
   <p>
-    An interactive companion to <code>doc/multiview.pdf</code>: a stylized
-    molecule graph floats in the working volume, observed by the two cameras
-    of a stationary rig. Everything the page computes is a calculation the
+    A camera reduces a 3D scene to a grid of pixels — depthless and
+    unitless on its own; a second camera restores depth, and calibration
+    gives the pixels metric meaning. This page is the interactive
+    companion to <code>doc/multiview.pdf</code>, which develops that
+    program: a stylized molecule graph floats in the working volume,
+    observed by the two cameras of a stationary rig. Everything the page computes is a calculation the
     document derives — pinhole projection (§4), plane-homography view
     transfer (§5.1), the fundamental matrix and epipolar lines (§6), DLT
     triangulation (§7), and the depth-error law (§8) — recomputed live as

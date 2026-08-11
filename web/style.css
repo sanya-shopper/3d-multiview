@@ -51,8 +51,8 @@ canvas.graph { margin-top: 4px; }
 #overview:active { cursor: grabbing; }
 
 .quickhelp {
-  flex: 1 1 14rem;
-  min-width: 13rem;
+  flex: 1 1 12rem;
+  min-width: 11.5rem;
   font-size: 0.88rem;
   color: #38424e;
 }

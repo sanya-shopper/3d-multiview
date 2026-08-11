@@ -317,12 +317,6 @@
       var p = oproj(corners[e[0]]), q = oproj(corners[e[1]]);
       cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
     });
-    /* accumulated cloud (measure phase), under the live geometry */
-    cx.fillStyle = 'rgba(15,118,110,0.55)';
-    state.cloud.forEach(function (X) {
-      var p = oproj(X);
-      cx.fillRect(p[0] - 1, p[1] - 1, 2, 2);
-    });
     /* the box, true pose: front faces filled in their colors */
     var VDIR = MV.unit([0.45, 1, -0.311]);    /* oblique-view kernel */
     FACES.forEach(function (f) {
@@ -436,6 +430,46 @@
     }
     document.getElementById('slicelabel').textContent =
       'z = ' + (t.min[2] + (state.sliceK + 0.5) * t.cell).toFixed(2) + ' m';
+  }
+
+  /* dedicated point-cloud panel: the world view stays clean */
+  function drawCloud(atoms) {
+    var cv = document.getElementById('cloudview'), cx = cv.getContext('2d');
+    var S = 58;
+    function cp(X) {
+      return [cv.width / 2 + S * (X[0] - 0.45 * X[1]),
+              cv.height / 2 - S * (X[2] * 0.9 + 0.28 * X[1])];
+    }
+    cx.clearRect(0, 0, cv.width, cv.height);
+    /* faint volume outline for orientation */
+    cx.strokeStyle = '#e2e6ea'; cx.lineWidth = 1;
+    var s = 1.1, k, corners = [], edges = [
+      [0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4],
+      [0, 4], [1, 5], [2, 6], [3, 7]];
+    for (k = 0; k < 8; k++)
+      corners.push([(k & 1 ? s : -s), (k & 2 ? s : -s), (k & 4 ? s : -s)]);
+    edges.forEach(function (e) {
+      var p = cp(corners[e[0]]), q = cp(corners[e[1]]);
+      cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
+    });
+    if (!state.cloud.length) {
+      cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText('cloud accumulates in phase 2', 10, cv.height / 2);
+      return;
+    }
+    /* ghost of the box's current true pose, for reference */
+    cx.strokeStyle = '#c9ced4'; cx.lineWidth = 1;
+    box.bonds.forEach(function (b) {
+      var p = cp(atoms[b[0]]), q = cp(atoms[b[1]]);
+      cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
+    });
+    cx.fillStyle = 'rgba(15,118,110,0.6)';
+    state.cloud.forEach(function (X) {
+      var p = cp(X);
+      cx.fillRect(p[0] - 1, p[1] - 1, 2, 2);
+    });
+    cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+    cx.fillText(state.cloud.length + ' pts', 6, 12);
   }
 
   /* face-coverage meter: how clearly each colored side has been seen */
@@ -691,6 +725,7 @@
     drawOverview(atoms);
     drawView('view1', cam1, atoms, obs, 'p1', reproj1);
     drawView('view2', cam2, atoms, obs, 'p2', reproj2);
+    drawCloud(atoms);
     drawSlice();
     drawGraph();
     drawFaceCov();

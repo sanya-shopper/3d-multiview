@@ -71,6 +71,11 @@
   </section>
   <section class="row">
     <figure>
+      <canvas id="cloudview" width="224" height="224"></canvas>
+      <figcaption>point cloud — solved-rig triangulations; gray ghost =
+      box's current true pose</figcaption>
+    </figure>
+    <figure>
       <canvas id="tsdfslice" width="224" height="224"></canvas>
       <figcaption>TSDF horizontal slice, <span id="slicelabel">z</span>
       <input type="range" id="slicek" min="0" max="31" value="16"
@@ -79,7 +84,7 @@
       boundary = the zero crossing; gray = never observed</figcaption>
     </figure>
     <figure>
-      <canvas id="convgraph" width="320" height="120"></canvas>
+      <canvas id="convgraph" width="280" height="120"></canvas>
       <figcaption>solved-baseline error vs banked poses</figcaption>
     </figure>
     <div class="quickhelp">

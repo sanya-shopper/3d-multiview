@@ -76,7 +76,7 @@ fieldset {
   background: var(--panel);
 }
 legend { font-size: 0.9rem; padding: 0 0.3rem; }
-legend button {
+legend button, #copylink {
   font: 0.75rem/1.4 Georgia, serif;
   margin-left: 0.4rem;
   padding: 0 0.4rem;
@@ -86,7 +86,7 @@ legend button {
   color: var(--ink);
   cursor: pointer;
 }
-legend button:hover { border-color: var(--accent); color: var(--accent); }
+legend button:hover, #copylink:hover { border-color: var(--accent); color: var(--accent); }
 label {
   display: flex;
   align-items: center;

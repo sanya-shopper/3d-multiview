@@ -577,6 +577,93 @@
   });
 
   function setVal(id, v) { document.getElementById(id).value = v; }
+  /* --- URL-addressable scenes (doc section 1.1) ------------------------ */
+  /* ?scene=<preset> applies a named configuration; any individual
+   * parameter (slider ids, angles in degrees; sel=<atom>; aim1/aim2=0|1)
+   * overrides on top. The document references these by name. */
+  var PRESETS = {
+    'default': {},
+    /* cameras nearly together: plane transfer becomes exact, DLT
+     * triangulation degrades (doc eq. parallax vs eq. deptherr) */
+    narrow: { cam1x: 3.95, cam1y: -0.25, cam1z: 0.60,
+              cam2x: 3.95, cam2y: 0.25, cam2z: 0.55, aim1: 1, aim2: 1 },
+    /* camera 2 rolled: its epipolar lines slant */
+    roll: { cam2roll: 35 }
+  };
+
+  function applyParams() {
+    var q = new URLSearchParams(window.location.search);
+    var vals = {};
+    var preset = PRESETS[q.get('scene') || ''];
+    if (preset) Object.keys(preset).forEach(function (k) { vals[k] = preset[k]; });
+    q.forEach(function (v, k) { if (k !== 'scene') vals[k] = parseFloat(v); });
+    Object.keys(vals).forEach(function (k) {
+      var v = vals[k];
+      if (isNaN(v)) return;
+      var m = k.match(/^cam([12])(x|y|z|pan|tilt|roll)$/);
+      if (m) {
+        var c = state['cam' + m[1]];
+        if (m[2] === 'pan' || m[2] === 'tilt') {
+          c[m[2]] = v * DEG;
+          state.autoAim[m[1]] = false;        /* explicit look direction */
+        } else if (m[2] === 'roll') {
+          c.roll = v * DEG;
+        } else {
+          c[m[2]] = v;
+        }
+        return;
+      }
+      var mm = k.match(/^mol(yaw|pitch|roll|x|y|z)$/);
+      if (mm) {
+        var key = mm[1];
+        state.pose[key] =
+          (key === 'yaw' || key === 'pitch' || key === 'roll') ? v * DEG : v;
+        return;
+      }
+      if (k === 'sel')
+        state.selected = Math.max(0, Math.min(mol.atoms.length - 1, Math.round(v)));
+      if (k === 'aim1') state.autoAim[1] = !!v;
+      if (k === 'aim2') state.autoAim[2] = !!v;
+    });
+  }
+
+  function sceneLink() {
+    var q = [];
+    ['1', '2'].forEach(function (n) {
+      var c = state['cam' + n];
+      q.push('cam' + n + 'x=' + c.x.toFixed(2),
+             'cam' + n + 'y=' + c.y.toFixed(2),
+             'cam' + n + 'z=' + c.z.toFixed(2),
+             'cam' + n + 'roll=' + (c.roll / DEG).toFixed(1),
+             'aim' + n + '=' + (state.autoAim[n] ? 1 : 0));
+      if (!state.autoAim[n])
+        q.push('cam' + n + 'pan=' + (c.pan / DEG).toFixed(1),
+               'cam' + n + 'tilt=' + (c.tilt / DEG).toFixed(1));
+    });
+    var p = state.pose;
+    q.push('molyaw=' + (p.yaw / DEG).toFixed(1),
+           'molpitch=' + (p.pitch / DEG).toFixed(1),
+           'molroll=' + (p.roll / DEG).toFixed(1),
+           'molx=' + p.x.toFixed(2), 'moly=' + p.y.toFixed(2),
+           'molz=' + p.z.toFixed(2), 'sel=' + state.selected);
+    return window.location.href.split('?')[0] + '?' + q.join('&');
+  }
+
+  document.getElementById('copylink').addEventListener('click', function () {
+    var btn = this, url = sceneLink();
+    function done(ok) {
+      btn.textContent = ok ? 'copied ✓' : 'copy failed';
+      setTimeout(function () { btn.textContent = 'copy scene link'; }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () { done(true); },
+                                              function () { window.prompt('Scene link:', url); done(true); });
+    } else {
+      window.prompt('Scene link:', url);
+      done(true);
+    }
+  });
+
   function syncSliders() {
     ['1', '2'].forEach(function (n) {
       var c = state['cam' + n];
@@ -600,6 +687,9 @@
     return d;
   }
 
+  applyParams();
+  document.getElementById('aimauto1').checked = state.autoAim[1];
+  document.getElementById('aimauto2').checked = state.autoAim[2];
   syncSliders();
   render();
 })();

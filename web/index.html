@@ -31,7 +31,11 @@
       selected pixel. The <em>diff</em> panel shows |actual − predicted|
       per pixel (×2 gain): dark where the plane transfer works, glowing
       where parallax — the depth signal no single 2D matrix can model —
-      remains. Shrink the baseline and watch the glow fade; the displays
+      remains. The glow is large by design: the default rig is strongly
+      converged (B ≈ 3.6 m), so off-plane atoms miss by ~9 px on a 64-px
+      display, and thin strokes saturate the difference; doc §6.1
+      <em>Plane transfer and parallax</em> derives the numbers. Shrink
+      the baseline and watch the glow fade; the displays
       are deliberately coarse (64×48) so pixel quantization, the
       σ<sub>d</sub> of §8's error law, is visible everywhere.
     </p>
@@ -62,7 +66,9 @@
     </figure>
     <figure>
       <canvas id="diff" width="320" height="240"></canvas>
-      <figcaption>pixel diff |actual − predicted| — glow = parallax</figcaption>
+      <figcaption>pixel diff |actual − predicted| — glow = parallax.
+      Doc §6.1 <em>Plane transfer and parallax</em> derives why it is
+      this large (try <code>?scene=narrow</code>)</figcaption>
     </figure>
     <div class="quickhelp">
       <label class="check"><input type="checkbox" id="aimauto1" checked>
@@ -71,6 +77,10 @@
         camera 2 tracks the molecule</label>
       <p>With tracking on, drag a camera dot anywhere — it stays aimed.
       Dragging inside a camera view aims it by hand (turns tracking off).</p>
+      <p><button type="button" id="copylink">copy scene link</button><br>
+      Scenes are URL-addressable (doc §1.1): <code>?scene=default</code>,
+      <code>?scene=narrow</code>, <code>?scene=roll</code>, or paste a
+      copied link to reproduce any arrangement.</p>
       <details class="sliders">
         <summary>fine controls (sliders)</summary>
         <fieldset>

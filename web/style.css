@@ -9,26 +9,16 @@
 * { box-sizing: border-box; }
 body {
   margin: 0 auto;
-  max-width: 68rem;
-  padding: 1.2rem;
+  max-width: 66rem;
+  padding: 0.9rem 1.2rem;
   font: 16px/1.5 Georgia, 'Times New Roman', serif;
   color: var(--ink);
   background: var(--paper);
 }
-
-/* two-column app: panels on the left, positioning controls tucked along
- * the right-hand side so world view and camera views stay visible at once */
-.app {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 15.5rem;
-  gap: 1rem;
-  align-items: start;
-}
-@media (max-width: 66rem) {
-  .app { grid-template-columns: 1fr; }
-}
-header h1 { margin: 0.2rem 0 0.6rem; font-size: 1.7rem; }
-header p { margin: 0.4rem 0; }
+header h1 { margin: 0.1rem 0 0.3rem; font-size: 1.45rem; }
+.lede { margin: 0.2rem 0 0.4rem; font-size: 0.93rem; color: #38424e; }
+details.explain { font-size: 0.92rem; color: #4a5563; margin: 0 0 0.4rem; }
+details.explain summary { cursor: pointer; }
 .hint { color: #4a5563; font-size: 0.95rem; }
 h2 { font-size: 1.2rem; margin: 1.2rem 0 0.4rem; }
 code { font-family: Menlo, Consolas, monospace; font-size: 0.9em; }
@@ -36,16 +26,18 @@ code { font-family: Menlo, Consolas, monospace; font-size: 0.9em; }
 .row {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.8rem;
   align-items: flex-start;
-  margin: 1rem 0;
+  margin: 0.5rem 0;
 }
 figure { margin: 0; }
 figcaption {
-  font-size: 0.85rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
   color: #4a5563;
   text-align: center;
-  margin-top: 0.3rem;
+  margin-top: 0.2rem;
+  max-width: 21rem;
 }
 canvas {
   display: block;
@@ -54,8 +46,28 @@ canvas {
   border-radius: 4px;
 }
 #view1, #view2 { cursor: crosshair; background: #10141a; }
+#overview { cursor: grab; }
+#overview:active { cursor: grabbing; }
 
-.controls { flex: 1 1 16rem; min-width: 15rem; }
+.quickhelp {
+  flex: 1 1 14rem;
+  min-width: 13rem;
+  font-size: 0.88rem;
+  color: #38424e;
+}
+.quickhelp p { margin: 0.4rem 0; }
+.check { display: block; margin: 0.15rem 0; cursor: pointer; }
+.check input { accent-color: var(--accent); margin-right: 0.35rem; }
+details.sliders { margin-top: 0.5rem; font-size: 0.85rem; }
+details.sliders summary { cursor: pointer; color: var(--accent); }
+details.sliders[open] {
+  position: relative;
+  z-index: 5;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.5rem;
+}
 fieldset {
   border: 1px solid var(--rule);
   border-radius: 4px;

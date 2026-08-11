@@ -9,109 +9,105 @@
 <body>
 <header>
   <h1>Two cameras watching a molecule</h1>
-  <p>
+  <p class="lede">
     A camera reduces a 3D scene to a grid of pixels — depthless and
     unitless on its own; a second camera restores depth, and calibration
-    gives the pixels metric meaning. This page is the interactive
-    companion to <code>doc/multiview.pdf</code>, which develops that
-    program: a stylized molecule graph floats in the working volume,
-    observed by the two cameras of a stationary rig. Everything the page computes is a calculation the
-    document derives — pinhole projection (§4), plane-homography view
-    transfer (§5.1), the fundamental matrix and epipolar lines (§6), DLT
-    triangulation (§7), and the depth-error law (§8) — recomputed live as
-    you move the cameras or the molecule.
+    gives the pixels metric meaning. Interactive companion to
+    <code>doc/multiview.pdf</code>: everything below is computed live from
+    the document's equations — projection (§4), plane-homography transfer
+    (§5.1), epipolar geometry (§6), triangulation (§7), depth error (§8).
   </p>
-  <p class="hint">
-    Drag a camera view to turn that camera; <em>aim at molecule</em>
-    re-points it. Drag the molecule in the world view
-    (drag&nbsp;=&nbsp;move, shift-drag&nbsp;=&nbsp;rotate,
-    alt/option-drag&nbsp;=&nbsp;depth), or use the sliders. Click an atom in
-    a camera view to select it (yellow); the dashed cyan line in each view
-    is the selected pixel's epipolar line from the <em>other</em> view. The
-    fourth panel warps camera&nbsp;1's display into camera&nbsp;2's frame by
-    the computed plane homography — compare it against the actual
-    camera&nbsp;2 panel: the leftover misalignment (yellow rings mark truth)
-    is parallax, which no single 2D matrix can transfer and which depth
-    recovery lives on.
-  </p>
+  <details class="explain">
+    <summary>What the panels show, in detail</summary>
+    <p>
+      A stylized molecule graph floats in the working volume, observed by
+      the two cameras of a stationary rig. Click an atom in a camera view
+      to select it (yellow); the dashed cyan line in each view is the
+      selected pixel's epipolar line from the <em>other</em> view — the 1D
+      locus where its match must lie. The <em>predicted</em> panel warps
+      camera&nbsp;1's display into camera&nbsp;2's frame by the computed
+      plane homography; yellow rings mark where camera&nbsp;2 actually
+      sees each atom, and the cyan cross is the depth-true transfer of the
+      selected pixel. The <em>diff</em> panel shows |actual − predicted|
+      per pixel (×2 gain): dark where the plane transfer works, glowing
+      where parallax — the depth signal no single 2D matrix can model —
+      remains. Shrink the baseline and watch the glow fade; the displays
+      are deliberately coarse (64×48) so pixel quantization, the
+      σ<sub>d</sub> of §8's error law, is visible everywhere.
+    </p>
+  </details>
 </header>
 
-<main class="app">
-  <div class="panels">
-    <section class="row">
-      <figure>
-        <canvas id="overview" width="380" height="300"></canvas>
-        <figcaption>world view: volume, molecule, cameras (drag molecule here)</figcaption>
-      </figure>
-      <figure>
-        <canvas id="view1" width="320" height="240"></canvas>
-        <figcaption>camera 1 display — 64×48 px (§3.1: each pixel is a ray)</figcaption>
-      </figure>
-    </section>
-    <section class="row">
-      <figure>
-        <canvas id="view2" width="320" height="240"></canvas>
-        <figcaption>camera 2 display (actual)</figcaption>
-      </figure>
-      <figure>
-        <canvas id="xfer" width="320" height="240"></canvas>
-        <figcaption>camera 2 <em>predicted</em>: view 1 warped by the plane
-        homography (§5.1); rings = actual, cross = depth-true transfer</figcaption>
-      </figure>
-    </section>
-    <section class="row">
-      <figure>
-        <canvas id="diff" width="320" height="240"></canvas>
-        <figcaption>pixel diff |actual − predicted| (×2 gain): dark =
-        transfer correct; glowing = parallax and resampling error, the
-        depth signal the homography cannot model</figcaption>
-      </figure>
-    </section>
-    <section>
-      <h2>The computations, live</h2>
-      <pre id="readout"></pre>
-      <p class="note">
-        The displays are deliberately coarse (64×48) so quantization is
-        visible: the epipolar residual and the triangulation error come
-        entirely from snapping continuous projections to pixel centers —
-        exactly the σ<sub>d</sub> that §8's error law propagates to depth.
-        Make the baseline small (move the cameras together) and watch the
-        triangulation error grow as the rays intersect at grazing angles
-        (§10); watch the predicted panel converge to the actual one as the
-        baseline shrinks, since parallax vanishes with it.
-      </p>
-    </section>
-  </div>
+<main>
+  <section class="row">
+    <figure>
+      <canvas id="overview" width="340" height="280"></canvas>
+      <figcaption>world view — <b>drag the camera dots and the
+      molecule</b> (shift&nbsp;=&nbsp;rotate, alt&nbsp;=&nbsp;depth)</figcaption>
+    </figure>
+    <figure>
+      <canvas id="view1" width="320" height="240"></canvas>
+      <figcaption>camera 1 — drag to look, scroll to roll</figcaption>
+    </figure>
+    <figure>
+      <canvas id="view2" width="320" height="240"></canvas>
+      <figcaption>camera 2 (actual) — drag to look, scroll to roll</figcaption>
+    </figure>
+  </section>
+  <section class="row">
+    <figure>
+      <canvas id="xfer" width="320" height="240"></canvas>
+      <figcaption>camera 2 <em>predicted</em>: view 1 warped by the plane
+      homography (§5.1)</figcaption>
+    </figure>
+    <figure>
+      <canvas id="diff" width="320" height="240"></canvas>
+      <figcaption>pixel diff |actual − predicted| — glow = parallax</figcaption>
+    </figure>
+    <div class="quickhelp">
+      <label class="check"><input type="checkbox" id="aimauto1" checked>
+        camera 1 tracks the molecule</label>
+      <label class="check"><input type="checkbox" id="aimauto2" checked>
+        camera 2 tracks the molecule</label>
+      <p>With tracking on, drag a camera dot anywhere — it stays aimed.
+      Dragging inside a camera view aims it by hand (turns tracking off).</p>
+      <details class="sliders">
+        <summary>fine controls (sliders)</summary>
+        <fieldset>
+          <legend>camera 1 <button type="button" id="aim1">aim once</button></legend>
+          <label>x <input type="range" id="cam1x" min="-6" max="6" step="0.05" value="3.72"></label>
+          <label>y <input type="range" id="cam1y" min="-6" max="6" step="0.05" value="-1.80"></label>
+          <label>z <input type="range" id="cam1z" min="-3" max="3" step="0.05" value="0.75"></label>
+          <label>pan <input type="range" id="cam1pan" min="-180" max="180" step="1" value="154"></label>
+          <label>tilt <input type="range" id="cam1tilt" min="-85" max="85" step="1" value="-10"></label>
+          <label>roll <input type="range" id="cam1roll" min="-180" max="180" step="1" value="0"></label>
+        </fieldset>
+        <fieldset>
+          <legend>camera 2 <button type="button" id="aim2">aim once</button></legend>
+          <label>x <input type="range" id="cam2x" min="-6" max="6" step="0.05" value="3.76"></label>
+          <label>y <input type="range" id="cam2y" min="-6" max="6" step="0.05" value="1.82"></label>
+          <label>z <input type="range" id="cam2z" min="-3" max="3" step="0.05" value="0.42"></label>
+          <label>pan <input type="range" id="cam2pan" min="-180" max="180" step="1" value="-154"></label>
+          <label>tilt <input type="range" id="cam2tilt" min="-85" max="85" step="1" value="-6"></label>
+          <label>roll <input type="range" id="cam2roll" min="-180" max="180" step="1" value="0"></label>
+        </fieldset>
+        <fieldset>
+          <legend>molecule</legend>
+          <label>yaw <input type="range" id="molyaw" min="-180" max="180" step="1" value="29"></label>
+          <label>pitch <input type="range" id="molpitch" min="-90" max="90" step="1" value="17"></label>
+          <label>roll <input type="range" id="molroll" min="-180" max="180" step="1" value="0"></label>
+          <label>x <input type="range" id="molx" min="-0.8" max="0.8" step="0.02" value="0"></label>
+          <label>y <input type="range" id="moly" min="-0.8" max="0.8" step="0.02" value="0"></label>
+          <label>z <input type="range" id="molz" min="-0.8" max="0.8" step="0.02" value="0"></label>
+        </fieldset>
+      </details>
+    </div>
+  </section>
 
-  <aside class="controls">
-    <fieldset>
-      <legend>camera 1 <button type="button" id="aim1">aim at molecule</button></legend>
-      <label>x <input type="range" id="cam1x" min="-6" max="6" step="0.05" value="3.72"></label>
-      <label>y <input type="range" id="cam1y" min="-6" max="6" step="0.05" value="-1.80"></label>
-      <label>z <input type="range" id="cam1z" min="-3" max="3" step="0.05" value="0.75"></label>
-      <label>pan <input type="range" id="cam1pan" min="-180" max="180" step="1" value="154"></label>
-      <label>tilt <input type="range" id="cam1tilt" min="-85" max="85" step="1" value="-10"></label>
-      <label>roll <input type="range" id="cam1roll" min="-180" max="180" step="1" value="0"></label>
-    </fieldset>
-    <fieldset>
-      <legend>camera 2 <button type="button" id="aim2">aim at molecule</button></legend>
-      <label>x <input type="range" id="cam2x" min="-6" max="6" step="0.05" value="3.76"></label>
-      <label>y <input type="range" id="cam2y" min="-6" max="6" step="0.05" value="1.82"></label>
-      <label>z <input type="range" id="cam2z" min="-3" max="3" step="0.05" value="0.42"></label>
-      <label>pan <input type="range" id="cam2pan" min="-180" max="180" step="1" value="-154"></label>
-      <label>tilt <input type="range" id="cam2tilt" min="-85" max="85" step="1" value="-6"></label>
-      <label>roll <input type="range" id="cam2roll" min="-180" max="180" step="1" value="0"></label>
-    </fieldset>
-    <fieldset>
-      <legend>molecule</legend>
-      <label>yaw <input type="range" id="molyaw" min="-180" max="180" step="1" value="29"></label>
-      <label>pitch <input type="range" id="molpitch" min="-90" max="90" step="1" value="17"></label>
-      <label>roll <input type="range" id="molroll" min="-180" max="180" step="1" value="0"></label>
-      <label>x <input type="range" id="molx" min="-0.8" max="0.8" step="0.02" value="0"></label>
-      <label>y <input type="range" id="moly" min="-0.8" max="0.8" step="0.02" value="0"></label>
-      <label>z <input type="range" id="molz" min="-0.8" max="0.8" step="0.02" value="0"></label>
-    </fieldset>
-  </aside>
+  <section>
+    <h2>The computations, live</h2>
+    <pre id="readout"></pre>
+  </section>
 </main>
 
 <footer>

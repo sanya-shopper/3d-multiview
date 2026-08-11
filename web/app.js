@@ -31,6 +31,7 @@
     cam1: { x: 3.72, y: -1.80, z: 0.75, pan: 154 * DEG, tilt: -10 * DEG, roll: 0 },
     cam2: { x: 3.76, y: 1.82, z: 0.42, pan: -154 * DEG, tilt: -6 * DEG, roll: 0 },
     pose: { yaw: 0.5, pitch: 0.3, roll: 0, x: 0, y: 0, z: 0 },
+    autoAim: { 1: true, 2: true },            /* cameras track the molecule */
     selected: 6                               /* the O atom */
   };
   var bufs = {};                              /* low-res buffers per view */
@@ -422,6 +423,14 @@
   /* ---------------- main render ------------------------------------------ */
 
   function render() {
+    /* auto-aim: a camera with tracking on always points at the molecule,
+     * so dragging its position never loses the subject */
+    ['1', '2'].forEach(function (n) {
+      if (!state.autoAim[n]) return;
+      var c = state['cam' + n];
+      var a = MV.aimAngles([c.x, c.y, c.z], molCenter());
+      c.pan = a.pan; c.tilt = a.tilt;
+    });
     var cam1 = camera(state.cam1), cam2 = camera(state.cam2);
     var atoms = MV.poseMolecule(mol, state.pose);
     var F = MV.fundamental(cam1, cam2);
@@ -432,6 +441,7 @@
     var xstats = drawTransfer(cam1, cam2, atoms);
     xstats.diff = drawDiff();
     updateReadout(cam1, cam2, atoms, F, xstats);
+    syncSliders();                            /* keep fine controls honest */
   }
 
   /* ---------------- controls --------------------------------------------- */
@@ -457,7 +467,11 @@
     document.getElementById('aim' + n).addEventListener('click', function () {
       var a = MV.aimAngles([c.x, c.y, c.z], molCenter());
       c.pan = a.pan; c.tilt = a.tilt;
-      syncSliders(); render();
+      render();
+    });
+    document.getElementById('aimauto' + n).addEventListener('change', function (e) {
+      state.autoAim[n] = e.target.checked;
+      render();
     });
   });
   bindSlider('molyaw', state.pose, 'yaw', DEG);
@@ -467,46 +481,74 @@
   bindSlider('moly', state.pose, 'y');
   bindSlider('molz', state.pose, 'z');
 
-  /* drag on a camera view turns that camera (first-person pan/tilt) */
+  /* drag on a camera view turns that camera (first-person pan/tilt);
+   * the scroll wheel rolls it about its optical axis */
   ['view1', 'view2'].forEach(function (id, idx) {
     var cv = document.getElementById(id), drag = null;
+    var n = idx === 0 ? '1' : '2';
     cv.addEventListener('mousedown', function (e) {
       drag = { x: e.clientX, y: e.clientY };
     });
     window.addEventListener('mousemove', function (e) {
       if (!drag) return;
-      var c = state[idx === 0 ? 'cam1' : 'cam2'];
+      var c = state['cam' + n];
+      state.autoAim[n] = false;               /* manual look = tracking off */
+      document.getElementById('aimauto' + n).checked = false;
       c.pan -= (e.clientX - drag.x) * 0.004;   /* drag right = look right */
       c.tilt = clamp(c.tilt - (e.clientY - drag.y) * 0.004, -1.5, 1.5);
       drag = { x: e.clientX, y: e.clientY };
-      syncSliders(); render();
+      render();
     });
     window.addEventListener('mouseup', function () { drag = null; });
+    cv.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      state['cam' + n].roll += e.deltaY * 0.002;
+      render();
+    }, { passive: false });
   });
 
-  /* drag the molecule in the world view: translate in the view plane;
-   * shift-drag rotates (yaw/pitch); alt-drag translates in y (depth) */
+  /* drag things in the world view. Grabbing a camera dot moves that
+   * camera (view-plane; alt = depth y); grabbing anywhere else moves the
+   * molecule (shift = rotate, alt = depth y). */
   (function () {
     var cv = document.getElementById('overview'), drag = null;
     cv.addEventListener('mousedown', function (e) {
-      drag = { x: e.clientX, y: e.clientY };
+      var rect = cv.getBoundingClientRect();
+      var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      var target = 'mol';
+      ['1', '2'].forEach(function (n) {
+        var c = state['cam' + n];
+        var p = oproj([c.x, c.y, c.z]);
+        if (Math.hypot(p[0] - mx, p[1] - my) < 12) target = 'cam' + n;
+      });
+      drag = { x: e.clientX, y: e.clientY, target: target };
       e.preventDefault();
     });
     window.addEventListener('mousemove', function (e) {
       if (!drag) return;
       var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      var p = state.pose;
-      if (e.shiftKey) {
-        p.yaw += dx * 0.01;
-        p.pitch = clamp(p.pitch + dy * 0.01, -Math.PI / 2, Math.PI / 2);
-      } else if (e.altKey) {
-        p.y = clamp(p.y + dx / OSCALE / -0.45, -0.8, 0.8);
+      if (drag.target === 'mol') {
+        var p = state.pose;
+        if (e.shiftKey) {
+          p.yaw += dx * 0.01;
+          p.pitch = clamp(p.pitch + dy * 0.01, -Math.PI / 2, Math.PI / 2);
+        } else if (e.altKey) {
+          p.y = clamp(p.y + dx / OSCALE / -0.45, -0.8, 0.8);
+        } else {
+          p.x = clamp(p.x + dx / OSCALE, -0.8, 0.8);
+          p.z = clamp(p.z - dy / OSCALE / 0.9, -0.8, 0.8);
+        }
       } else {
-        p.x = clamp(p.x + dx / OSCALE, -0.8, 0.8);
-        p.z = clamp(p.z - dy / OSCALE / 0.9, -0.8, 0.8);
+        var c = state[drag.target];
+        if (e.altKey) {
+          c.y = clamp(c.y + dx / OSCALE / -0.45, -6, 6);
+        } else {
+          c.x = clamp(c.x + dx / OSCALE, -6, 6);
+          c.z = clamp(c.z - dy / OSCALE / 0.9, -3, 3);
+        }
       }
-      drag = { x: e.clientX, y: e.clientY };
-      syncSliders(); render();
+      drag = { x: e.clientX, y: e.clientY, target: drag.target };
+      render();
     });
     window.addEventListener('mouseup', function () { drag = null; });
   })();

@@ -36,3 +36,22 @@ viewer navigation actions and were not treated as findings.
 | Snavely2006.pdf | 1681 K | none | no |
 
 Files with real active-content findings: 0.
+
+## Additions 2026-08-11
+
+Same screening method as above (PDF magic verified, object-level scan
+for JavaScript/Launch/RichMedia/XFA actions and embedded files,
+including inside decompressed streams; VirusTotal unavailable).
+Amanatides1987 from the author's York University page; Cadena2016 from
+arXiv (1606.05830); Elfes1989 via the Internet Archive mirror of a
+Brooklyn College course page --- the live copy has a corrupt xref table
+(unreadable by poppler) and was replaced by the archived one, which
+renders correctly and matches the published paper.
+
+| file | size | active-content findings | embedded files |
+|---|---|---|---|
+| Amanatides1987.pdf | 17 K | none | no |
+| Cadena2016.pdf | 6535 K | none | no |
+| Elfes1989.pdf | 1176 K | none | no |
+
+Files with real active-content findings: 0.

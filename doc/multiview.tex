@@ -73,10 +73,20 @@ computed once --- and a \emph{mobile} camera entering the volume is not a
 rival architecture but just another tracked mover, one that happens to
 carry a sensor (\autoref{sec:photos}). The system
 first \emph{calibrates itself} from views of a known planar target
-(\autoref{sec:calib}); thereafter video is processed frame by frame. Because
+(\autoref{sec:calib}); thereafter video is processed frame by frame. The
+result of that first step is best stated at the level of pixels: each
+camera of the rig ends up with a known intrinsic matrix, lens-distortion
+model, and pose in one shared metric world frame, so every pixel of every
+camera is promoted from a bare brightness sample to a measurement along a
+\emph{known ray} --- pixel $(u,v)$ of camera $i$ observes exactly the
+points on one fixed, computable line in space (back-projection,
+\autoref{sec:camera}), and conversely any 3D point in the working volume
+projects to a predictable pixel in each camera. Because
 the cameras do not move, every geometric quantity that depends only on the
-rig --- projection matrices, the fundamental matrix, the rectifying
-homographies --- is computed \emph{once} and reused for every frame, which is
+rig --- the projection matrices (\autoref{sec:camera}), the fundamental
+matrix (\autoref{sec:epipolar}), the rectifying homographies
+(\autoref{sec:stereo}) --- is computed \emph{once} and reused for every
+frame, which is
 the central efficiency win of the stationary-rig assumption.
 
 The implemented core (v0.4.0) provides:
@@ -123,7 +133,9 @@ implemented; their theory and integration points are described in
 rearchitecting.
 
 \paragraph{How to read this document.} \autoref{sec:toolkit} collects the
-small amount of linear algebra everything else stands on.
+small amount of linear algebra everything else stands on, and closes with
+two short orientation notes that locate the system's design choices in the
+wider reconstruction literature.
 \autoref{sec:camera}--\autoref{sec:stereo} then follow the data through the
 system: camera model, calibration, two-view geometry, triangulation, dense
 stereo. Every section ends in a worked example with numbers chosen so the
@@ -186,13 +198,64 @@ frames --- the entry point for scene \emph{analysis} beyond reconstruction.
 \label{sec:toolkit}
 
 Four ideas carry the whole system; everything later is an application.
+The section closes with two subsections that are orientation rather than
+machinery: the two dual ways of integrating measurements into a volume
+(\autoref{sec:gatherscatter}), and the standard estimation problems ---
+bundle adjustment and SLAM --- relative to which the whole design is best
+located (\autoref{sec:slamba}).
 
 \subsection{Homogeneous coordinates}
 A 2D point $(u,v)$ is represented as any triple $(wu, wv, w)$, $w\neq0$; a
 3D point $(X,Y,Z)$ as $(X,Y,Z,1)$ up to scale. The payoff: projection,
 homographies and rigid motions all become \emph{linear} maps, and points at
 infinity ($w=0$) need no special case. We write $\simeq$ for equality up to
-a nonzero scale.
+a nonzero scale. \autoref{fig:homogpixels} shows what the convention means
+physically for our cameras: a homogeneous triple is best read as the name
+of a \emph{viewing ray}, and a pixel on a camera's display is exactly one
+such ray --- which is why every rescaling of the triple addresses the same
+pixel.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  % ---- left: the working volume seen by the two rig cameras
+  \draw[gray!70] (2.3,0.4) rectangle (5.3,3.2);
+  \node[gray!90!black] at (3.8,3.45) {working volume};
+  \fill (4.0,1.6) circle (2.5pt) node[below right] {object at $\X$};
+  \fill (0,0.6) circle (1.5pt) node[below] {$\Cv_1$};
+  \fill (0.4,3.3) circle (1.5pt) node[above] {$\Cv_2$};
+  \draw[->] (0,0.6) -- (4.0,1.6);
+  \draw[->] (0.4,3.3) -- (4.0,1.6);
+  \draw[thick] (0.99,1.41) -- (1.25,0.35) node[below] {$\pi_1$};
+  \draw[thick] (1.25,2.29) -- (1.71,3.29) node[above] {$\pi_2$};
+  \fill[blue!70] (1.12,0.88) +(-0.06,-0.06) rectangle +(0.06,0.06);
+  \fill[blue!70] (1.48,2.79) +(-0.06,-0.06) rectangle +(0.06,0.06);
+  % ---- right: camera 1's display, coarse pixels
+  \draw[->,gray!90!black] (7.0,3.0) -- (7.7,3.0) node[right] {$u$};
+  \draw[->,gray!90!black] (6.8,2.7) -- (6.8,2.0) node[below] {$v$};
+  \draw[gray!50] (7.0,0.3) grid[step=4mm] (10.2,2.7);
+  \fill[blue!20] (8.6,1.5) rectangle (9.0,1.9);
+  \fill[blue!20] (8.2,1.1) rectangle (8.6,1.5);
+  \fill[blue!20] (8.6,1.1) rectangle (9.0,1.5);
+  \fill[blue!50] (8.2,1.5) rectangle (8.6,1.9);
+  \node at (8.6,3.3) {display of camera 1};
+  \draw[->,shorten >=2pt] (8.0,-0.15) -- (8.35,1.6);
+  \node at (8.6,-0.35)
+    {$(60,70,1)\simeq(120,140,2)$: the object's pixel};
+\end{tikzpicture}
+\caption{What a homogeneous triple names. Left: each camera of the rig
+observes the working volume through its image plane ($\pi_1,\pi_2$,
+thick); the object at $\X$ determines one ray per camera (arrows), and
+each ray punches through its image plane at one pixel (blue squares).
+Right: camera 1's display as a coarse pixel grid --- the object lights
+up a small patch of pixels (light blue), one of which (dark blue) is
+the pixel of $\X$. Every point along the left-hand ray projects to
+this same pixel, and correspondingly every rescaling
+$(wu,wv,w)$ of its homogeneous coordinates, e.g.\ the two triples of
+\autoref{ex:homog}, dehomogenizes to the same display position
+$(u,v)=(60,70)$: the triple names the ray, the ray names the pixel.}
+\label{fig:homogpixels}
+\end{figure}
 
 \begin{example}[dehomogenization]
 \label{ex:homog}
@@ -249,6 +312,112 @@ the null vector solves $x_1+2x_2=0$: $\vect x=\tfrac1{\sqrt5}(2,-1)$.
 Check: $\mat A\vect x=\vect 0$.
 \end{example}
 
+\subsection{Integrating measurements into a volume: gather versus scatter}
+\label{sec:gatherscatter}
+
+A recurring computational choice later in the document
+(\autoref{sec:models}) deserves to be named here in its general form.
+The measurements this system produces are \emph{ray-shaped}: each depth
+pixel says ``along this known ray, the first surface is at distance
+$Z$'' --- which simultaneously asserts a surface \emph{near} the
+endpoint and emptiness \emph{along} the segment before it. To build a
+persistent model, a stream of such measurements must update a
+volumetric state, in our case a voxel grid. There are exactly two
+iteration orders, dual to one another:
+
+\begin{itemize}
+  \item \emph{Scatter} (measurement-major): for each measurement, visit
+        the voxels it touches. \emph{Ray marching} steps each ray
+        through the grid cell by cell --- an incremental traversal
+        costing a few additions per voxel crossed \cite{Amanatides1987}
+        --- updating the cells it passes through (measured empty) and
+        the cells around its endpoint (measured near-surface).
+        \emph{Voxel accumulation} is the degenerate scatter:
+        back-project each point and increment the one voxel containing
+        it, as in classical occupancy grids \cite{Elfes1989}; emptiness
+        is then either ignored or restored by ray marching, which is
+        exactly OctoMap's \code{insertPointCloud} \cite{Hornung2013}.
+  \item \emph{Gather} (state-major): for each voxel, look up the one
+        measurement that constrains it --- project the voxel center
+        into the camera and read the depth map at that pixel. This
+        demands \emph{dense} measurements (every lookup must find an
+        answer); a depth map is precisely such a dense bundle of rays.
+\end{itemize}
+
+The costs are proportional to different things: scatter costs
+$O(\text{rays}\times\text{voxels crossed per ray})$ and touches only
+observed cells; gather costs $O(\text{voxels}\times\text{cameras})$ per
+frame no matter how many measurements arrived. Fidelity differs too:
+plain voxel accumulation records only \emph{presence}, so a surface
+extracted from it is a density ridge whose accuracy is capped at one
+voxel, whereas ray-marched and gathered updates can both store
+\emph{signed distance to the surface}, whose zero crossing interpolates
+to sub-voxel accuracy (\autoref{sec:tsdf}).
+
+Where this system sits: its TSDF fusion (\autoref{sec:tsdf}) is the
+gather form --- the right choice there because the depth maps are dense
+and the cameras never move, so each voxel's projection is precomputed
+once and the per-frame update collapses to a table lookup. Scatter is
+not rejected, only deferred: it is the natural update for \emph{sparse}
+measurements, which is how the planned range-finder returns
+(\autoref{sec:range}) would enter the same TSDF through its
+enriched-sample interface. Ray marching also returns on the output
+side: marching a ray of a \emph{virtual} camera through the fused grid
+until the stored distance changes sign renders a synthetic depth map
+from any viewpoint (\autoref{sec:tsdf}).
+
+\begin{example}[gather or scatter for our rig]
+\label{ex:gatherscatter}
+Numbers from \autoref{ex:tsdf}: $5.5$M voxels at $1$\,cm, two cameras,
+so a gather sweep is $11$M lookups per frame regardless of input. A
+dense $640\times480$ depth map is $307$k rays per camera; marching each
+ray only through the $\pm\tau=7$\,cm truncation band ($\sim$14 voxels)
+costs $4.3$M steps --- comparable --- but also carving the $\sim4$\,m of
+free space before each hit ($\sim$400 voxels per ray) costs $123$M,
+an order worse. For $10^4$ sparse laser returns the same two figures
+are $0.14$M and $4$M --- there scatter wins by orders of magnitude.
+Measurement density decides the traversal order.
+\end{example}
+
+\subsection{Placing the system: bundle adjustment and SLAM}
+\label{sec:slamba}
+
+Two terms dominate the neighboring literature; defining each by its
+inputs and outputs is enough to see where this system stands.
+
+\emph{Bundle adjustment} \cite{Triggs2000}. \emph{Input}: a set of 2D
+feature correspondences across images (point $j$ seen in image $i$ at
+pixel $\x_{ij}$), together with an initial estimate of every camera's
+parameters and every 3D point. \emph{Output}: refined cameras and
+points that \emph{jointly} minimize the total squared reprojection
+error $\sum_{ij}\|\x_{ij}-\pi(\text{camera}_i,\X_j)\|^2$, with
+$\pi$ the projection of \autoref{sec:camera}. It is a large sparse
+nonlinear least-squares problem --- the gold-standard \emph{final
+polish} of a reconstruction, not a way of obtaining one from nothing:
+it needs the initialization.
+
+\emph{SLAM}, simultaneous localization and mapping \cite{Cadena2016}.
+\emph{Input}: a time-ordered measurement stream from a \emph{moving}
+sensor (images, range scans, often inertial readings), with no prior
+poses. \emph{Output}: the sensor's trajectory --- a pose per time step
+--- \emph{and} a map of the environment, estimated jointly, usually
+online. The signature circularity is that the map is needed to
+localize the sensor while the poses are needed to build the map;
+modern visual SLAM systems run bundle adjustment internally as their
+refinement back-end.
+
+Where this system sits: the stationary rig cuts the circularity.
+Poses come once from calibration against a known target
+(\autoref{sec:calib}) and never change, so there is no localization
+problem, and ``mapping'' reduces to the model building of
+\autoref{sec:models}; frame-by-frame operation involves no estimation
+loop at all. Bundle adjustment appears only in its classical polishing
+role: jointly refining the rig calibration itself (\code{mv/bundle.h},
+\autoref{sec:results}) and registering auxiliary photo collections
+(\autoref{sec:photos}) --- where a moving camera does finally enter,
+and each photo's pose is estimated against an already-built map: a
+miniature, offline SLAM with the hard half already solved.
+
 %----------------------------------------------------------------------
 \section{Camera model}
 \label{sec:camera}
@@ -279,7 +448,54 @@ y_d &= y\,(1 + k_1 r^2 + k_2 r^4 + k_3 r^6) + p_1(r^2 + 2y^2) + 2p_2 xy,
 \end{equation}
 and the pixel is $\K(x_d,y_d,1)^{\!\top}$. Back-projection inverts
 \eqref{eq:distortion} by fixed-point iteration and returns the ray
-$\Cv + s\,\vect d$, $s>0$.
+$\Cv + s\,\vect d$, $s>0$. \autoref{fig:pinholerig} draws
+\eqref{eq:pinhole} for both cameras of the rig at once --- each with its
+own frame $(\R_i,\tv_i)$ --- and previews how a pixel in one view
+constrains its partner in the other.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  % ---- working volume in the world frame
+  \draw[gray!70] (2.6,2.2) rectangle (5.6,4.6);
+  \node[gray!90!black] at (4.1,4.85) {working volume};
+  \fill (4.1,3.3) circle (2.5pt) node[above right] {$\X$};
+  \draw[->,gray!90!black] (2.0,1.6) -- (2.6,1.6) node[right] {$X_w$};
+  \draw[->,gray!90!black] (2.0,1.6) -- (2.0,2.2) node[above] {$Z_w$};
+  % ---- camera 1 with its frame
+  \fill (0.4,0.5) circle (1.5pt) node[below] {$\Cv_1$};
+  \draw[->,gray!90!black] (0.4,0.5) -- (0.96,0.92) node[below right,xshift=-1pt] {$\vect z_1$};
+  \draw[->,gray!90!black] (0.4,0.5) -- (0.73,0.06) node[right] {$\vect x_1$};
+  \draw[->] (0.4,0.5) -- (4.1,3.3);
+  \draw[thick] (1.15,1.82) node[above left,yshift=-2pt] {$\pi_1$} -- (1.87,0.86);
+  \fill[blue!70] (1.51,1.34) +(-0.06,-0.06) rectangle +(0.06,0.06);
+  \node[blue!70!black] at (1.15,1.15) {$\x_1$};
+  % ---- camera 2 with its frame
+  \fill (6.9,0.7) circle (1.5pt) node[below] {$\Cv_2$};
+  \draw[->,gray!90!black] (6.9,0.7) -- (6.39,1.18) node[below left,xshift=2pt] {$\vect z_2$};
+  \draw[->,gray!90!black] (6.9,0.7) -- (6.42,0.19) node[left] {$\vect x_2$};
+  \draw[->] (6.9,0.7) -- (4.1,3.3);
+  \draw[thick] (6.39,2.00) node[above right,yshift=-2pt] {$\pi_2$} -- (5.57,1.12);
+  \fill[blue!70] (5.98,1.56) +(-0.06,-0.06) rectangle +(0.06,0.06);
+  \node[blue!70!black] at (6.35,1.35) {$\x_2$};
+  % ---- the induced pixel-to-pixel relation
+  \draw[<->,dashed] (1.75,1.28) .. controls (3.7,0.35) .. (5.72,1.48);
+  \node at (3.75,0.30) {$\x_2^{\!\top}\F\,\x_1=0$ \ (\autoref{sec:epipolar})};
+\end{tikzpicture}
+\caption{The camera model, drawn for the rig. The volume and the scene
+point $\X$ live in the world frame (gray axes $X_w,Z_w$; $Y_w$ out of
+the page). Each camera $i$ carries its own frame --- optical axis
+$\vect z_i$, image axis $\vect x_i$, $\vect y_i$ out of the page ---
+related to the world by $(\R_i,\tv_i)$, and its intrinsic matrix
+$\K_i$ turns the intersection of a viewing ray (solid arrow) with the
+image plane $\pi_i$ (thick) into a pixel $\x_i$ (blue). Because both
+cameras watch the same volume, the two pixels of one scene point are
+not independent: knowing $\x_1$ confines $\x_2$ to the image of
+$\x_1$'s back-projected ray (dashed relation), which
+\autoref{sec:epipolar} makes exact as the fundamental-matrix
+constraint.}
+\label{fig:pinholerig}
+\end{figure}
 
 \begin{example}[projection]
 \label{ex:project}
@@ -696,7 +912,7 @@ of the signal:
         $T_d$.
   \item \emph{Period $T$:} no extra signal needed --- a linear fit of
         decoded display time against camera frame index over seconds
-        (\autoref{ex:skew}); the inevitable beat between camera and
+        (\autoref{ex:clockfit}); the inevitable beat between camera and
         display rates is a \emph{feature}, sweeping the sampling phase
         through the display cycle so all phases get observed without any
         genlock.
@@ -1033,7 +1249,7 @@ estimator chain runs: per-camera Zhang on obliquity-gated M2 frames
 $\to$ joint orbit fit $\to$ clock fit $\to$ radial alternation. The
 session is \emph{accepted} only if the standing statistics land in
 their bands (\autoref{sec:statrules}): reprojection T5 ratio within its
-documented band; clock-fit residuals within the \autoref{ex:skew}
+documented band; clock-fit residuals within the \autoref{ex:clockfit}
 budget; banding-derived $\tau$ consistent across repeats; and the
 resulting analytic $\F$ stored as the baseline for the run-time drift
 monitor (\autoref{sec:epipolar}). Roadmap items 1--2
@@ -1174,6 +1390,17 @@ on the \emph{same image row}. This is precisely the situation rectification
 \section{Triangulation}
 \label{sec:triangulation}
 
+\paragraph{Input and output.} The input is $N\ge2$ pixel observations of
+\emph{one} physical point --- one pixel per viewing camera, already
+matched to each other (by the calibration pattern reader, by feature
+matching, or one disparity of the dense stereo of \autoref{sec:stereo})
+--- together with the calibrated projection matrices of those cameras.
+The output is a single 3D point $\X$, in metres in the world frame,
+that best explains the observed pixels, accompanied by its RMS
+reprojection error as a per-point quality report. This is the moment 2D
+becomes 3D: everything before this section produces matched pixels,
+everything after consumes 3D points.
+
 Given observations $\x^{(v)} = (u_v, w_v)$ of the same point in $N\ge2$ views
 with projection matrices $\PP^{(v)}$, each view contributes two linear
 equations obtained by eliminating the projective scale from
@@ -1216,6 +1443,20 @@ full point recovered by hand.
 \section{Rectification and dense stereo}
 \label{sec:stereo}
 
+\paragraph{Input and output.} The input is a synchronized pair of raw
+frames, one per camera, plus the fixed rig calibration. The output is a
+\emph{depth map}: for every pixel of the rectified reference image
+(minus the pixels where matching fails), the metric distance to the
+surface seen there --- a dense grid of 3D samples where
+\autoref{sec:triangulation} gave one point per matched feature. The
+section reaches it in two steps, both visible in
+\autoref{fig:rectify} and \autoref{fig:blockmatch}: \emph{rectification}
+warps both images so that corresponding pixels are guaranteed to share
+an image row (computed once per rig), and \emph{block matching} then
+searches, for each left pixel, only along that one right row; the column
+offset of the best match (the \emph{disparity}) converts to metric depth
+via \eqref{eq:depth}.
+
 For dense per-pixel depth the pair is first \emph{rectified}: both cameras
 are rotated (synthetically, about their centers) onto a common orientation
 whose $x$ axis is the baseline, making the geometry of
@@ -1230,13 +1471,101 @@ $\mat{H}_i = \K_{\mathrm{new}}\R_{\mathrm{new}}\R_i^{\!\top}\K_i^{-1}$
 (homographies again --- cf.~\eqref{eq:planehom}, here induced by pure
 rotation instead of a scene plane). Since the rig is stationary,
 $\mat{H}_1,\mat{H}_2$ are computed once and each video frame is warped by
-table lookup.
+table lookup. \autoref{fig:rectify} shows the effect: the fans of
+slanted epipolar lines become one shared set of horizontal rows.
 
-On the rectified pair, dense correspondence is found by block matching: for
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  % ---- raw pair: epipolar lines slanted, fanning toward the epipoles
+  \node at (1.5,2.5) {raw left};
+  \node at (6.1,2.5) {raw right};
+  \draw (0,0) rectangle (3,2.2);
+  \draw (4.6,0) rectangle (7.6,2.2);
+  \draw[blue!60] (0,0.03) -- (3,0.50);
+  \draw[blue!60] (0,0.74) -- (3,1.00);
+  \draw[blue!60] (0,1.46) -- (3,1.50);
+  \draw[blue!60] (4.6,0.50) -- (7.6,0.03);
+  \draw[blue!60] (4.6,1.00) -- (7.6,0.74);
+  \draw[blue!60] (4.6,1.50) -- (7.6,1.46);
+  \fill (1.9,0.90) circle (1.5pt) node[above,yshift=1pt] {$\x_1$};
+  \fill (5.6,0.91) circle (1.5pt) node[above,yshift=1pt] {$\x_2$};
+  % ---- warps
+  \draw[->,dashed] (1.5,-0.25) -- (1.5,-0.95) node[midway,right] {$\mat H_1$};
+  \draw[->,dashed] (6.1,-0.25) -- (6.1,-0.95) node[midway,right] {$\mat H_2$};
+  % ---- rectified pair: rows aligned across both images
+  \draw (0,-3.4) rectangle (3,-1.2);
+  \draw (4.6,-3.4) rectangle (7.6,-1.2);
+  \foreach \yy in {-2.9,-2.3,-1.7}{
+    \draw[blue!60] (0,\yy) -- (3,\yy);
+    \draw[blue!60] (4.6,\yy) -- (7.6,\yy);}
+  \draw[densely dotted] (3,-2.3) -- (4.6,-2.3) node[midway,above] {same row};
+  \fill (1.9,-2.3) circle (1.5pt) node[above,yshift=1pt] {$\x_1'$};
+  \fill (6.0,-2.3) circle (1.5pt) node[above,yshift=1pt] {$\x_2'$};
+  \draw[densely dotted] (6.5,-3.4) -- (6.5,-2.3);
+  \draw[->] (6.5,-3.1) -- (6.0,-3.1) node[midway,above] {$d$};
+  \node at (1.5,-3.8) {rectified left};
+  \node at (6.1,-3.8) {rectified right};
+\end{tikzpicture}
+\caption{Rectification. Top: in the raw pair the epipolar lines (blue)
+of \autoref{fig:epipolar} are slanted and unaligned, so the match of a
+pixel $\x_1$ must be sought along a slanted line. Bottom: the
+precomputed homographies $\mat H_1,\mat H_2$ warp each image so that
+epipolar lines become horizontal \emph{and} row-aligned between the
+views; the same scene point now lands on the same row in both images
+(dotted), displaced only horizontally by the disparity $d$ (dotted
+vertical: the column $\x_1'$ would occupy at infinite depth).}
+\label{fig:rectify}
+\end{figure}
+
+On the rectified pair, dense correspondence is found by block matching
+(\autoref{fig:blockmatch}): for
 each left pixel the sum of absolute differences (SAD) over a $(2w{+}1)^2$
 window is minimized along the corresponding right row over a disparity
 range, followed by sub-pixel refinement by parabolic interpolation of the
-cost around the minimum. This is the classic local baseline method in the
+cost around the minimum.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  % ---- rectified pair with reference and candidate windows
+  \node at (1.5,2.5) {rectified left};
+  \node at (6.1,2.5) {rectified right};
+  \draw (0,0) rectangle (3,2.2);
+  \draw (4.6,0) rectangle (7.6,2.2);
+  \draw[blue!60] (4.6,1.2) -- (7.6,1.2);
+  \draw[fill=blue!8] (1.7,1.0) rectangle (2.1,1.4);
+  \fill (1.9,1.2) circle (1.5pt);
+  \node[align=center] at (1.35,0.5) {reference\\window};
+  \draw[->,shorten >=2pt] (1.35,0.75) -- (1.8,1.02);
+  \draw[blue!40] (5.0,1.0) rectangle (5.4,1.4);
+  \draw[blue!40] (6.6,1.0) rectangle (7.0,1.4);
+  \draw[fill=blue!8] (5.8,1.0) rectangle (6.2,1.4);
+  \fill (6.0,1.2) circle (1.5pt);
+  \draw[densely dotted] (6.5,0) -- (6.5,1.2);
+  \draw[->] (7.3,1.7) -- (4.9,1.7) node[midway,above] {search along the row};
+  % ---- SAD cost as a function of candidate column, aligned under the row
+  \draw[->] (4.6,-3.0) -- (7.75,-3.0) node[right] {column};
+  \draw[->] (4.6,-3.0) -- (4.6,-0.7) node[above] {SAD};
+  \draw[blue!60,smooth] plot coordinates
+    {(4.8,-1.15) (5.2,-1.75) (5.5,-2.25) (5.8,-2.62) (6.1,-2.25)
+     (6.5,-1.65) (7.0,-1.30) (7.4,-1.10)};
+  \fill (5.5,-2.25) circle (1.5pt);
+  \fill (5.8,-2.62) circle (1.5pt);
+  \fill (6.1,-2.25) circle (1.5pt);
+  \draw[densely dotted] (5.85,-3.0) -- (5.85,-2.60);
+  \node[below] at (5.85,-3.05) {$\hat d$ (sub-pixel)};
+\end{tikzpicture}
+\caption{Block matching on the rectified pair. Top: the
+$(2w{+}1)^2$-pixel window around a left pixel is compared against
+same-size windows sliding along the \emph{single} corresponding right
+row (blue); light squares are candidates, the shaded one is the best
+match, and the dotted vertical repeats the reference column so the
+displacement is visible. Bottom: SAD cost of each candidate column;
+the three dots are the integer samples around the minimum, and a
+parabola through them places the sub-pixel disparity $\hat d$.}
+\label{fig:blockmatch}
+\end{figure} This is the classic local baseline method in the
 taxonomy of Scharstein and Szeliski \cite{ScharsteinSzeliski2002} --- chosen
 deliberately: it is simple, portable, trivially parallel, and its failure
 modes (textureless regions, occlusions, repetitive patterns) are well
@@ -1271,6 +1600,19 @@ $\sigma_Z = 4.7^2\cdot 0.42/(800\cdot0.5) \approx 0.023$\,m: about
 %----------------------------------------------------------------------
 \section{From depth to models}
 \label{sec:models}
+
+\paragraph{Input and output --- where this is going.} The input is what
+the previous sections produce: per frame and per camera, a dense depth
+map (\autoref{sec:stereo}) and, where wanted, sparse triangulated points
+(\autoref{sec:triangulation}) --- all back-projectable to 3D points in
+the one fixed world frame. The intended output is a persistent
+\emph{model} of the working volume that outlives any single frame:
+today, an accumulated point cloud exported as PLY; as the accumulation
+matures (the argument of this section), a fused TSDF volume from which
+a triangulated mesh of the static scene, a queryable background model,
+and per-frame foreground ``movers'' are all derived. In one sentence:
+the sections before this one turn pixels into per-frame 3D, and this
+one turns per-frame 3D into a durable scene.
 
 Every depth estimate back-projects to a 3D point in the fixed world frame;
 points are accumulated in a growable cloud with optional per-point color and
@@ -1308,7 +1650,8 @@ derived from the one below, and robustness generally \emph{decreases}
 upward:
 
 \begin{enumerate}
-  \item \emph{Point clouds} (implemented): no topology, no commitments;
+  \item \emph{Point clouds} (implemented, this section): no topology, no
+        commitments;
         ideal for measurement and inspection; never wrong, never finished.
   \item \emph{Occupancy / signed-distance volumes}: the truncated signed
         distance function (TSDF) fuses many noisy depth maps by running
@@ -1316,12 +1659,21 @@ upward:
         noise-averaging, topology-agnostic --- the workhorse of the
         KinectFusion lineage \cite{Newcombe2011} and the natural
         accumulation structure for our per-frame depth
-        (elaborated in \autoref{sec:tsdf}).
-  \item \emph{Triangulated meshes}: extracted from a TSDF by marching
+        (elaborated in \autoref{sec:tsdf}; the traversal-order choice
+        behind it in \autoref{sec:gatherscatter}).
+  \item \emph{Triangulated meshes}: the explicit surface representation
+        --- a list of vertices (3D points) and a list of triangles
+        (vertex index triples), adjacent triangles sharing edges so that
+        together they tile a continuous surface with a well-defined
+        inside and outside. This is the native language of renderers,
+        3D printers, and CAD interchange, and the first rung that can
+        answer ``what does the surface look like \emph{between} the
+        samples?'' Extracted from a TSDF by marching
         cubes \cite{Lorensen1987}, or from oriented points by Poisson
         reconstruction \cite{Kazhdan2006}. Both are mature and reliable
         \emph{given} rung 2; meshing raw noisy stereo clouds directly
         (Delaunay-based, ball-pivoting) is fragile and best avoided.
+        (Extraction for the static scene: \autoref{sec:background}.)
   \item \emph{Geometric primitives} (``something more geometric''):
         RANSAC plane extraction \cite{FischlerBolles1981} is the single
         most robust operation in the entire reconstruction literature ---
@@ -1329,14 +1681,25 @@ upward:
         spheres and cones follow with efficient RANSAC variants
         \cite{Schnabel2007} at the cost of tuning; box/cuboid fits give
         furniture-level abstraction. Beyond quadrics, parametric fitting
-        becomes brittle.
+        becomes brittle. (Slotted into the background pipeline of
+        \autoref{sec:background}.)
   \item \emph{Object/semantic models} (chair, table, person): robust today
         only via learned detectors --- outside the dependency-free core,
         but the geometry below is exactly what such an external module
-        would consume.
+        would consume (the mover statistics of \autoref{sec:movers} are
+        the first step in this direction).
 \end{enumerate}
 Modern learned implicit representations (neural radiance fields, Gaussian
-splatting) excel at appearance and view synthesis but are not metrically
+splatting\footnote{Gaussian splatting represents a scene as a few million
+translucent ellipsoidal blobs --- each a 3D Gaussian with a position,
+shape, opacity, and view-dependent color --- whose parameters are
+optimized by gradient descent until images rendered from them match the
+input photographs. Rendering ``splats'' each blob onto the screen in
+depth order, which is fast enough for real-time view synthesis. The
+result is a soft cloud of overlapping blobs tuned to reproduce
+\emph{appearance}: excellent for generating new views, but with no
+explicit surface to measure against.}) excel at appearance and view
+synthesis but are not metrically
 superior for measurement, and sit outside this system's portable-C99,
 controlled-environment charter.
 
@@ -1356,7 +1719,8 @@ three: a triangulated mesh (the ``proper model,'' extracted on demand,
 exported as PLY); a queryable distance field (how far is any point from
 the nearest surface --- \autoref{sec:background}'s foreground test is
 exactly ``does this new depth sample disagree with $D$?''); and, by
-raycasting the field, synthetic depth/normal maps from any viewpoint
+raycasting the field (ray marching again, \autoref{sec:gatherscatter}),
+synthetic depth/normal maps from any viewpoint
 \cite{Newcombe2011}. Build-side and use-side data flow:
 \[
 \underbrace{\text{depth maps} + \text{calibration}}_{\text{per frame}}
@@ -1431,6 +1795,65 @@ untouched --- a voxel is only carved by rays that pass near or through
 it. The reconstructed surface is the zero level set of $D$, extracted
 as a mesh by marching cubes \cite{Lorensen1987} with linear
 interpolation along voxel edges for sub-voxel placement.
+\autoref{fig:tsdfslice} lays the pieces out along a single camera ray.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  % ---- one slice of the voxel grid; the row pierced by one ray is colored
+  \draw[gray!50] (0,0) grid[step=4mm] (4,2.8);
+  \foreach \xx in {0,0.4,0.8,1.2,1.6}
+    \fill[blue!8]  (\xx,1.2) rectangle +(0.4,0.4);
+  \foreach \xx in {2.0,2.4,2.8,3.2}
+    \fill[blue!30] (\xx,1.2) rectangle +(0.4,0.4);
+  \fill[gray!30] (3.6,1.2) rectangle +(0.4,0.4);
+  \node at (2.2,1.4) {$+$}; \node at (2.6,1.4) {$+$};
+  \node at (3.0,1.4) {$-$}; \node at (3.4,1.4) {$-$};
+  % ray and surface
+  \fill (-1.3,1.4) circle (1.5pt) node[below] {$\Cv$};
+  \draw[->] (-1.3,1.4) -- (2.9,1.4);
+  \draw[densely dotted] (2.9,1.4) -- (4.1,1.4);
+  \fill (2.9,1.4) circle (1.5pt) node[above left,xshift=2pt,yshift=3pt] {$Z_{\text{obs}}$};
+  \draw[thick] plot [smooth] coordinates
+    {(3.15,0) (2.95,0.7) (2.90,1.4) (3.00,2.1) (3.20,2.8)};
+  \node at (3.75,3.0) {surface};
+  % extent markers below the grid
+  \draw (0,-0.25) -- (0,-0.4) (2.0,-0.25) -- (2.0,-0.4)
+        (3.6,-0.25) -- (3.6,-0.4) (4.0,-0.25) -- (4.0,-0.4);
+  \draw (0,-0.325) -- (2.0,-0.325) node[midway,below] {carved: $d=+\tau$};
+  \draw (2.0,-0.325) -- (3.6,-0.325) node[midway,below,yshift=-9pt] {band: $d=\eta$};
+  \draw (3.6,-0.325) -- (4.0,-0.325);
+  \node[below] at (4.45,-0.35) {untouched};
+\end{tikzpicture}\\[14pt]
+\begin{tikzpicture}[font=\scriptsize]
+  % ---- the stored update as a function of voxel depth along that ray
+  \draw[->] (0,0) -- (4.4,0) node[right] {$Z_v$};
+  \draw[->] (0,-0.95) -- (0,0.95) node[above] {$d$};
+  \draw[densely dotted] (0,0.55) -- (4.1,0.55)
+    node[pos=0.5,above] {$+\tau$};
+  \draw[densely dotted] (0,-0.55) -- (4.1,-0.55)
+    node[pos=0.25,below] {$-\tau$};
+  \draw[blue!60,thick] (0,0.55) -- (2.35,0.55) -- (3.45,-0.55);
+  \draw[blue!60,thick,densely dotted] (3.45,-0.55) -- (4.1,-0.55);
+  \node[blue!60] at (4.6,-0.75) {(no update)};
+  \fill (2.9,0) circle (1.5pt);
+  \draw[densely dotted] (2.9,0.55) -- (2.9,-0.55);
+  \node[above right] at (2.9,0.02) {$Z_{\text{obs}}$};
+\end{tikzpicture}
+\caption{One depth measurement seen by the TSDF, in the grid (top) and
+as a function (bottom). Top: a slice of the voxel grid; along the ray
+from the camera center $\Cv$ to the observed surface hit $Z_{\text{obs}}$,
+voxels well in front of the surface are carved with the clamped value
+$+\tau$ (light blue), voxels inside the truncation band store the true
+signed offset $\eta$ (darker blue, sign marked), and voxels more than
+$\tau$ \emph{behind} the surface are left untouched (gray) --- the
+surface (thick curve) is later recovered as the zero crossing between
+the $+$ and $-$ cells. Bottom: the same rule \eqref{eq:tsdf} as the
+truncated signed distance $d$ stored at a voxel of depth $Z_v$ along
+the ray; the blue profile is what one measurement contributes, and
+fusion averages many such profiles per voxel.}
+\label{fig:tsdfslice}
+\end{figure}
 
 Three design choices connect \eqref{eq:tsdf} to the rest of this
 document. \emph{Truncation} $\tau$ should cover the depth noise:
@@ -1452,7 +1875,11 @@ The stationary rig adds one more gift: because the cameras never move,
 each voxel's projection into each camera --- the pixel it reads and its
 depth along the ray --- is \emph{constant}, computable once at start-up
 and stored. The per-frame update collapses to a table-driven sweep: one
-depth-map lookup, one compare, one multiply-add per voxel per camera.
+depth-map lookup, one compare, one multiply-add per voxel per camera ---
+the \emph{gather} traversal of \autoref{sec:gatherscatter}, chosen
+exactly because the depth maps are dense and the projections precompute;
+\autoref{ex:gatherscatter} quantifies when the scatter alternatives
+would win instead.
 
 \begin{example}[TSDF budget]
 \label{ex:tsdf}
@@ -2175,7 +2602,7 @@ change false alarms & $1.39\%$ of image \\
 \end{tabular}
 \caption{Room-model experiment, seed 20260804 (reproduce with
 \code{make demo}; $\approx$6\,s). Outputs shown in
-\autoref{fig:room}.}
+\autoref{fig:room} and \autoref{fig:roompair}.}
 \label{tab:roomresults}
 \end{table}
 
@@ -2209,7 +2636,15 @@ exactly the failure modes \autoref{sec:stereo} predicts}
 {\scriptsize (d) change mask after the box moves: two blobs --- the
 box's \emph{old} footprint (background now visible) and its \emph{new}
 position; isolated flicker removed by a $3\times3$ majority filter}
-\end{minipage}\\[3pt]
+\end{minipage}
+\caption{Dense-pipeline stages of the room experiment --- generated by
+\code{demo\_room}, converted from its PGM outputs. The concluding
+truth-vs-reconstruction pair is \autoref{fig:roompair}.}
+\label{fig:room}
+\end{figure}
+
+\begin{figure}[tp]
+\centering
 \begin{minipage}[t]{0.46\textwidth}
 \centering
 \includegraphics[width=\textwidth]{figs/room_truth.png}\\[1pt]
@@ -2228,10 +2663,10 @@ model says they should, the box's front reads blue, and its occlusion
 shadow is the black void behind it; holes are honestly-unobserved
 regions (texture-gated grazing floor, occlusions)}
 \end{minipage}
-\caption{Dense-pipeline stages of the room experiment, ending in the
-truth-vs-reconstruction pair (e)/(f) --- generated by
-\code{demo\_room}, converted from its PGM outputs.}
-\label{fig:room}
+\caption{The room experiment's conclusion: generating model (e) versus
+reconstruction (f), rendered by the same previewer from the same
+viewpoint. Panel letters continue \autoref{fig:room}.}
+\label{fig:roompair}
 \end{figure}
 
 Reading the imagery, stage by stage: panel (a) is an
@@ -2245,7 +2680,8 @@ sweeping nearer, back wall uniformly dark, the box standing out of its
 surroundings --- while the black regions are the validity gate
 declining to guess: the untextured void, and the occlusion fringe
 beside the box where the left camera sees background the right camera
-cannot. The truth/reconstruction pair (e)/(f) is rendered by the same
+cannot. The truth/reconstruction pair (e)/(f)
+(\autoref{fig:roompair}) is rendered by the same
 software previewer from the same viewpoint --- a viewpoint \emph{no
 physical camera occupies}, which is the point of having a model at all;
 comparing them shows what survives (both walls, floor, the box as a
@@ -3642,7 +4078,7 @@ display timestamps (record \code{CTR} of \autoref{tab:records}); the
 phase patches refine them below the refresh period (\code{PHS}); a
 linear fit of (camera frame index, decoded display time) pairs per
 camera yields its offset and rate --- see the precision budget in
-\autoref{ex:skew}. (ii) \emph{Movers themselves}: a tracked point moving
+\autoref{ex:clockfit}. (ii) \emph{Movers themselves}: a tracked point moving
 across the epipolar field sits off its epipolar line by (image velocity
 $\perp$ line)$\,\times\Delta t$; with $\F$ known exactly, $\Delta t$ is a
 one-parameter fit to residuals already computed --- the $\F$-drift
@@ -3670,7 +4106,7 @@ building it once serves both. Self-verification in the
 speed must equal the fitted $\Delta t$, and golden pairs must show none.
 
 \begin{example}[clock-fit precision from the display]
-\label{ex:skew}
+\label{ex:clockfit}
 Display timestamps are quantized to the refresh period
 ($16.7$\,ms at 60\,Hz), i.e.\ per-sample noise
 $\sigma_q=16.7/\sqrt{12}\approx4.8$\,ms. One minute at 30\,fps gives
@@ -3689,7 +4125,7 @@ $\approx150$\,mm by \autoref{ex:sync}. Linearly interpolating the
 tracked detection between frames leaves only the curvature term
 $a\,\Delta t^2/8$: at $a=2$\,m/s$^2$,
 $2\cdot0.0167^2/8\approx70\,\mu$m --- a factor of $\sim$2000. If
-$\Delta t$ itself is known to $\pm1$\,ms (\autoref{ex:skew}), the
+$\Delta t$ itself is known to $\pm1$\,ms (\autoref{ex:clockfit}), the
 residual first-order term is $\sim$1\,mm at $1$\,m/s: software
 synchronization turns the dominant dynamic-scene error into a minor one.
 \end{example}
@@ -4058,7 +4494,7 @@ Paper & Implementation & Validated by \\
 \midrule
 \autoref{sec:toolkit}, \autoref{sec:numerics} & \code{mv/mat.h}, \code{src/mat.c} & SVD/inverse tests \\
 \autoref{sec:camera} & \code{mv/cam.h}, \code{src/cam.c} & center/ray/projection tests \\
-\autoref{sec:timemodel} (clock model) & --- (planned state on \code{mv\_camera}) & \autoref{ex:skew} budgets \\
+\autoref{sec:timemodel} (clock model) & --- (planned state on \code{mv\_camera}) & \autoref{ex:clockfit} budgets \\
 \autoref{sec:homography}--\autoref{sec:radial} & \code{mv/calib.h}, \code{src/calib.c} & Zhang exactness tests; \code{demo\_calibrate} \\
 \autoref{sec:printed} & \code{mv/target.h}, \code{src/target.c} & calibration tests \\
 \autoref{sec:display} & \code{mv/graycode.h}, \code{src/graycode.c} & round-trip tests \\

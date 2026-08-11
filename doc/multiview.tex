@@ -275,39 +275,59 @@ figure live: its camera displays are exactly such coarse pixel grids.)
   % ---- left: the working volume seen by the two rig cameras
   \draw[gray!70] (2.3,0.4) rectangle (5.3,3.2);
   \node[gray!90!black] at (3.8,3.45) {working volume};
-  \fill (4.0,1.6) circle (2.5pt) node[below right] {object at $\X$};
+  % three objects, color-coded to their pixels on the displays
+  \fill[blue!70!black] (4.0,1.6) circle (2.5pt) node[below right] {$\X$};
+  \fill[red!75!black] (3.2,2.6) circle (2.5pt);
+  \fill[green!55!black] (4.6,0.9) circle (2.5pt);
   \fill (0,0.6) circle (1.5pt) node[below] {$\Cv_1$};
   \fill (0.4,3.3) circle (1.5pt) node[above] {$\Cv_2$};
+  % rays: X to both cameras; the other two to camera 1 only
   \draw[->] (0,0.6) -- (4.0,1.6);
   \draw[->] (0.4,3.3) -- (4.0,1.6);
+  \draw[->] (0,0.6) -- (3.2,2.6);
+  \draw[->] (0,0.6) -- (4.6,0.9);
   \draw[thick] (0.99,1.41) -- (1.25,0.35) node[below] {$\pi_1$};
   \draw[thick] (1.25,2.29) -- (1.71,3.29) node[above] {$\pi_2$};
+  % pixels where each ray punches its image plane
   \fill[blue!70] (1.12,0.88) +(-0.06,-0.06) rectangle +(0.06,0.06);
   \fill[blue!70] (1.48,2.79) +(-0.06,-0.06) rectangle +(0.06,0.06);
+  \fill[red!75!black] (1.03,1.24) +(-0.06,-0.06) rectangle +(0.06,0.06);
+  \fill[green!55!black] (1.17,0.68) +(-0.06,-0.06) rectangle +(0.06,0.06);
   % ---- right: camera 1's display, coarse pixels
   \draw[->,gray!90!black] (7.0,3.0) -- (7.7,3.0) node[right] {$u$};
   \draw[->,gray!90!black] (6.8,2.7) -- (6.8,2.0) node[below] {$v$};
   \draw[gray!50] (7.0,0.3) grid[step=4mm] (10.2,2.7);
+  % blue object X: a small patch, its center pixel darkest
   \fill[blue!20] (8.6,1.5) rectangle (9.0,1.9);
   \fill[blue!20] (8.2,1.1) rectangle (8.6,1.5);
   \fill[blue!20] (8.6,1.1) rectangle (9.0,1.5);
   \fill[blue!50] (8.2,1.5) rectangle (8.6,1.9);
+  % red object: up-left on the display
+  \fill[red!25] (7.8,1.9) rectangle (8.2,2.3);
+  \fill[red!60] (7.4,1.9) rectangle (7.8,2.3);
+  % green object: down-right on the display
+  \fill[green!25] (9.0,0.7) rectangle (9.4,1.1);
+  \fill[green!45!black!60] (9.4,0.7) rectangle (9.8,1.1);
   \node at (8.6,3.3) {display of camera 1};
   \draw[->,shorten >=2pt] (8.0,-0.15) -- (8.35,1.6);
   \node at (8.6,-0.35)
-    {$(60,70,1)\simeq(120,140,2)$: the object's pixel};
+    {$(60,70,1)\simeq(120,140,2)$: the blue object's pixel};
 \end{tikzpicture}
-\caption{What a homogeneous triple names. Left: each camera of the rig
-observes the working volume through its image plane ($\pi_1,\pi_2$,
-thick); the object at $\X$ determines one ray per camera (arrows), and
-each ray punches through its image plane at one pixel (blue squares).
-Right: camera 1's display as a coarse pixel grid --- the object lights
-up a small patch of pixels (light blue), one of which (dark blue) is
-the pixel of $\X$. Every point along the left-hand ray projects to
-this same pixel, and correspondingly every rescaling
-$(wu,wv,w)$ of its homogeneous coordinates, e.g.\ the two triples of
-\autoref{ex:homog}, dehomogenizes to the same display position
-$(u,v)=(60,70)$: the triple names the ray, the ray names the pixel.}
+\caption{What a homogeneous triple names. Left: the working volume
+holds three objects (colored dots); each camera of the rig observes it
+through its image plane ($\pi_1,\pi_2$, thick), and every object
+determines one ray per camera (arrows), punching through the image
+plane at one pixel drawn in the object's color --- for legibility only
+the blue object's ray to camera 2 is shown, and the two extra objects
+send rays to camera 1 alone. Right: camera 1's display as a coarse
+pixel grid --- each object lights up its own small patch of pixels, in
+its own color, at its own position (the red object up-left, the blue
+mid-frame, the green down-right, matching the geometry at left).
+Every point along a ray projects to that ray's one pixel, and
+correspondingly every rescaling $(wu,wv,w)$ of its homogeneous
+coordinates, e.g.\ the two triples of \autoref{ex:homog} for the blue
+object, dehomogenizes to the same display position $(u,v)=(60,70)$:
+the triple names the ray, the ray names the pixel.}
 \label{fig:homogpixels}
 \end{figure}
 
@@ -333,15 +353,28 @@ inspection: the rows are orthonormal.
 \end{example}
 
 \subsection{The cross-product matrix}
-For $\vect v=(v_1,v_2,v_3)$,
+The cross product is how geometry says ``perpendicular to both'' and,
+via $\vect u\cdot(\vect v\times\vect w)=0$, how it tests whether three
+vectors are coplanar. The toolkit move is to \emph{linearize} it: with
+the left factor held fixed, $\vect w\mapsto\vect v\times\vect w$ is a
+linear map, so it can be written as a matrix multiply,
 \begin{equation}
 [\vect v]_\times=
 \begin{pmatrix}0&-v_3&v_2\\ v_3&0&-v_1\\ -v_2&v_1&0\end{pmatrix},
 \qquad [\vect v]_\times\vect w=\vect v\times\vect w .
 \label{eq:skew}
 \end{equation}
-It is rank 2 with null vector $\vect v$ itself --- the algebraic reason
-epipoles exist (\autoref{sec:epipolar}).
+The payoff is that geometric statements built from cross products
+compose with rotations and projections as ordinary matrix algebra. The
+central example in this system: ``the two viewing rays of a scene point
+and the baseline between the cameras all lie in one plane'' becomes the
+single matrix $\E=[\tv]_\times\R$ sandwiched between two pixels ---
+the essential matrix of \autoref{sec:epipolar}. Two properties of
+\eqref{eq:skew} then do real work: $[\vect v]_\times$ has rank 2, and
+its null vector is $\vect v$ itself (since $\vect v\times\vect v=0$).
+Inherited by $\E$ and $\F$, they are the algebraic reason every
+fundamental matrix has rank 2 and possesses a distinguished null pixel
+--- the epipole (\autoref{sec:epipolar}).
 
 \begin{example}[skew matrix]
 \label{ex:skew}
@@ -2368,6 +2401,37 @@ orientation prior --- fewer correspondences needed and a sanity gate
 on the vision solution; indoor compass yaw is too coarse to replace
 the vision pose, so the pipeline above remains the foundation either
 way.
+
+\paragraph{Structure from motion: the ledger.} Since the recipe above
+is a rig-anchored special case of SfM, it is worth stating the general
+problem by its interface and taking honest stock. \emph{Input}: an
+unordered collection of photographs of a scene --- no poses, no
+ordering, per-image intrinsics possibly unknown and different.
+\emph{Output}: a calibrated camera $(\K_i,\R_i,\tv_i)$ for every
+registrable image plus a sparse 3D point cloud of the matched
+features, mutually consistent but determined only up to a global
+\emph{gauge} --- a 7-parameter rotation/translation/scale that nothing
+in the images can fix (\autoref{sec:slamba}); in our deployment the
+calibrated rig donates the gauge, which is why scale ambiguity never
+appears. Of the pipeline that produces this output, the
+\emph{mathematical} stages are built and sim-validated in this
+library: pairwise geometry (normalized 8-point,
+\autoref{sec:epipolar}), $N$-view triangulation
+(\autoref{sec:triangulation}), resection with unknown K
+(\code{mv/photo.h}, above), and joint refinement
+(\code{mv/bundle.h}, \autoref{sec:results}). What remains is the
+\emph{combinatorial} connective tissue, in implementation order:
+(i) multi-scale, rotation-robust features and matching --- the current
+single-scale descriptors are the measured position bottleneck above;
+(ii) \emph{track building}, chaining pairwise matches into consistent
+multi-image feature tracks and resolving conflicts; (iii) the
+incremental driver --- choose a seed, register images in a
+data-dependent order, retriangulate and prune outliers as the model
+grows; and, only for rig-free operation, (iv) bootstrapping the seed
+pair's relative pose by decomposing the essential matrix, plus the
+drift and loop-closure management that anchored operation never
+needs. In short: the geometry engine of SfM is done; the
+bookkeeping that feeds it is the open work.
 
 The dynamic limit of this idea is the \emph{tracked mobile camera}: a
 drone or handheld camera moving through the volume is, to the fixed rig,

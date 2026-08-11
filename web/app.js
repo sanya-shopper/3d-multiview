@@ -249,6 +249,82 @@
     return stats;
   }
 
+  /* ---------------- error graph: mean diff over interaction time -------- */
+
+  var diffHist = [];                          /* rolling mean-|diff| samples */
+  var HIST_MAX = 240;
+
+  function pushDiff(v) {
+    if (isNaN(v)) return;
+    diffHist.push(v);
+    if (diffHist.length > HIST_MAX) diffHist.shift();
+  }
+
+  function drawErrGraph(hoverIdx) {
+    var cv = document.getElementById('errgraph'), cx = cv.getContext('2d');
+    var W = cv.width, H = cv.height;
+    var padL = 6, padR = 46, padT = 12, padB = 6;
+    cx.clearRect(0, 0, W, H);
+    if (diffHist.length < 2) {
+      cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText('interact to accumulate history', padL + 2, H / 2);
+      return;
+    }
+    var top = Math.max(4, Math.max.apply(null, diffHist) * 1.1);
+    var n = diffHist.length;
+    function px(i) { return padL + (W - padL - padR) * i / (HIST_MAX - 1); }
+    function py(v) { return padT + (H - padT - padB) * (1 - v / top); }
+    /* recessive grid: top-of-scale and midpoint */
+    cx.strokeStyle = '#d7dce2'; cx.lineWidth = 1;
+    cx.fillStyle = '#4a5563'; cx.font = '9px system-ui, sans-serif';
+    [top, top / 2].forEach(function (v) {
+      cx.beginPath(); cx.moveTo(padL, py(v)); cx.lineTo(W - padR, py(v)); cx.stroke();
+      cx.fillText(v.toFixed(v < 10 ? 1 : 0), padL + 1, py(v) - 2);
+    });
+    /* the series: one thin accent line */
+    cx.strokeStyle = '#2d6cdf'; cx.lineWidth = 2;
+    cx.lineJoin = 'round';
+    cx.beginPath();
+    var i;
+    for (i = 0; i < n; i++) {
+      if (i === 0) cx.moveTo(px(i), py(diffHist[i]));
+      else cx.lineTo(px(i), py(diffHist[i]));
+    }
+    cx.stroke();
+    /* current value: accent dot + ink label at the line's end */
+    var lastX = px(n - 1), lastY = py(diffHist[n - 1]);
+    cx.fillStyle = '#2d6cdf';
+    cx.beginPath(); cx.arc(lastX, lastY, 3, 0, 2 * Math.PI); cx.fill();
+    cx.fillStyle = '#1c2733'; cx.font = '11px system-ui, sans-serif';
+    cx.fillText('mean |Δ| ' + diffHist[n - 1].toFixed(1),
+                Math.min(lastX + 6, W - padR + 2),
+                Math.max(padT + 8, Math.min(H - 4, lastY + 4)));
+    /* hover crosshair + value */
+    if (hoverIdx != null && hoverIdx >= 0 && hoverIdx < n) {
+      var hx = px(hoverIdx), hy = py(diffHist[hoverIdx]);
+      cx.strokeStyle = '#9aa3ad'; cx.lineWidth = 1;
+      cx.setLineDash([3, 3]);
+      cx.beginPath(); cx.moveTo(hx, padT); cx.lineTo(hx, H - padB); cx.stroke();
+      cx.setLineDash([]);
+      cx.fillStyle = '#2d6cdf';
+      cx.beginPath(); cx.arc(hx, hy, 3, 0, 2 * Math.PI); cx.fill();
+      cx.fillStyle = '#1c2733'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText(diffHist[hoverIdx].toFixed(1),
+                  Math.min(hx + 5, W - 30), Math.max(padT + 8, hy - 5));
+    }
+  }
+
+  (function () {
+    var cv = document.getElementById('errgraph');
+    cv.addEventListener('mousemove', function (e) {
+      var rect = cv.getBoundingClientRect();
+      var frac = (e.clientX - rect.left - 6) / (cv.width - 6 - 46);
+      var idx = Math.round(frac * (HIST_MAX - 1));
+      drawErrGraph(Math.max(0, Math.min(diffHist.length - 1, idx)));
+    });
+    cv.addEventListener('mouseleave', function () { drawErrGraph(null); });
+  })();
+
   /* ---------------- world overview -------------------------------------- */
 
   function oproj(X) {
@@ -440,6 +516,8 @@
     drawDisplay('view2', cam2, atoms, F, cam1, atoms);
     var xstats = drawTransfer(cam1, cam2, atoms);
     xstats.diff = drawDiff();
+    pushDiff(xstats.diff.mean);
+    drawErrGraph(null);
     updateReadout(cam1, cam2, atoms, F, xstats);
     syncSliders();                            /* keep fine controls honest */
   }

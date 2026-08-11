@@ -46,6 +46,7 @@ canvas {
   border-radius: 4px;
 }
 #view1, #view2 { cursor: crosshair; background: #10141a; }
+canvas.graph { margin-top: 4px; }
 #overview { cursor: grab; }
 #overview:active { cursor: grabbing; }
 

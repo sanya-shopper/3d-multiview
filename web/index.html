@@ -66,9 +66,12 @@
     </figure>
     <figure>
       <canvas id="diff" width="320" height="240"></canvas>
+      <canvas id="errgraph" width="320" height="84" class="graph"></canvas>
       <figcaption>pixel diff |actual − predicted| — glow = parallax.
       Doc §6.1 <em>Plane transfer and parallax</em> derives why it is
-      this large (try <code>?scene=narrow</code>)</figcaption>
+      this large (try <code>?scene=narrow</code>). Below: mean diff per
+      change, over your last moves — watch it fall as the baseline
+      shrinks</figcaption>
     </figure>
     <div class="quickhelp">
       <label class="check"><input type="checkbox" id="aimauto1" checked>

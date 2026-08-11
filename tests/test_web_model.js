@@ -82,10 +82,42 @@ var F = MV.fundamental(cam1, cam2);
      'depth error law reproduces doc ex. deptherr (23 mm)');
 })();
 
+/* --- explicit 6-DOF camera pose ---------------------------------------- */
+(function () {
+  var pos = [3.1, -1.4, 0.8], target = [0.2, 0.3, -0.1];
+  var a = MV.aimAngles(pos, target);
+  var cam = MV.makeCameraPose({ pos: pos, pan: a.pan, tilt: a.tilt, roll: 0,
+                                f: 52, W: 64, H: 48 });
+  var p = MV.project(cam, target);
+  ok(p && approx(p.u, 32, 1e-9) && approx(p.v, 24, 1e-9),
+     'aimAngles + makeCameraPose put the target on the principal point');
+
+  /* orbit wrapper and pose form agree */
+  var orb = MV.makeCamera({ az: 0.7, el: -0.25, dist: 3.7, f: 52, W: 64, H: 48 });
+  var a2 = MV.aimAngles(orb.C, [0, 0, 0]);
+  var pose = MV.makeCameraPose({ pos: orb.C, pan: a2.pan, tilt: a2.tilt,
+                                 roll: 0, f: 52, W: 64, H: 48 });
+  var i, j, worst = 0;
+  for (i = 0; i < 3; i++) for (j = 0; j < 4; j++)
+    worst = Math.max(worst, Math.abs(orb.P[i][j] - pose.P[i][j]));
+  ok(worst < 1e-9, 'orbit camera equals pose camera aimed the same way');
+
+  /* a 90-degree roll turns image u-offsets into v-offsets */
+  var rolled = MV.makeCameraPose({ pos: pos, pan: a.pan, tilt: a.tilt,
+                                   roll: Math.PI / 2, f: 52, W: 64, H: 48 });
+  var off = [target[0], target[1], target[2] + 0.3];   /* world offset */
+  var p0 = MV.project(cam, off), p90 = MV.project(rolled, off);
+  /* right-hand-rule roll about the optical axis: u' = v, v' = -u */
+  ok(approx(p90.u - 32, (p0.v - 24), 1e-6) &&
+     approx(p90.v - 24, -(p0.u - 32), 1e-6),
+     'roll of 90 degrees rotates the image plane as expected');
+})();
+
 /* --- molecule/pose plumbing -------------------------------------------- */
 (function () {
   var mol = MV.makeMolecule();
-  var atoms = MV.poseMolecule(mol, { yaw: 0.3, pitch: -0.2, x: 0.1, y: 0, z: -0.1 });
+  var atoms = MV.poseMolecule(mol,
+    { yaw: 0.3, pitch: -0.2, roll: 0.7, x: 0.1, y: 0, z: -0.1 });
   ok(atoms.length === mol.atoms.length, 'pose preserves atom count');
   var d0 = MV.norm(MV.sub(mol.atoms[1].p, mol.atoms[0].p));
   var d1 = MV.norm(MV.sub(atoms[1], atoms[0]));

@@ -124,13 +124,15 @@ var MV = (function () {
     return { atoms: atoms, bonds: bonds };
   }
 
-  /* pose the molecule: yaw/pitch (radians) then translate */
+  /* pose the molecule: yaw/pitch/roll (radians) then translate */
   function poseMolecule(mol, pose) {
     var cy = Math.cos(pose.yaw), sy = Math.sin(pose.yaw);
     var cp = Math.cos(pose.pitch), sp = Math.sin(pose.pitch);
+    var cr = Math.cos(pose.roll || 0), sr = Math.sin(pose.roll || 0);
     var Ry = [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]];
     var Rx = [[1, 0, 0], [0, cp, -sp], [0, sp, cp]];
-    var R = matMul(Rx, Ry);
+    var Rz = [[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]];
+    var R = matMul(Rz, matMul(Rx, Ry));
     return mol.atoms.map(function (a) {
       return add(matVec(R, a.p), [pose.x, pose.y, pose.z]);
     });
@@ -138,20 +140,21 @@ var MV = (function () {
 
   /* ---------------- cameras --------------------------------------------- */
 
-  /* Orbit parameterization around the volume center: azimuth az,
-   * elevation el, distance dist; the camera looks at the center.
-   * Returns {K, R, t, C, P(3x4), f, W, H} -- doc section 4. */
-  function makeCamera(par) {
-    var target = par.target || v3(0, 0, 0);
-    var caz = Math.cos(par.az), saz = Math.sin(par.az);
-    var cel = Math.cos(par.el), sel = Math.sin(par.el);
-    var C = add(target, scale(v3(caz * cel, saz * cel, sel), par.dist));
-    var zc = unit(sub(target, C));            /* optical axis toward target */
+  /* Build a camera from an explicit pose: center C, optical axis zc,
+   * roll about that axis. Returns {K, R, t, C, P(3x4), f, W, H} --
+   * doc section 4: rows of R are the camera axes in world coordinates. */
+  function buildCamera(C, zc, roll, par) {
     var up = v3(0, 0, 1);
     var xc = cross(zc, up);
     if (norm(xc) < 1e-9) xc = v3(1, 0, 0);    /* looking straight down z */
     xc = unit(xc);
     var yc = cross(zc, xc);
+    if (roll) {                                /* rotate image axes about zc */
+      var cr = Math.cos(roll), sr = Math.sin(roll);
+      var xr = add(scale(xc, cr), scale(yc, sr));
+      yc = cross(zc, xr);
+      xc = xr;
+    }
     var R = [xc, yc, zc];                     /* rows = camera axes (doc 3.2) */
     var t = scale(matVec(R, C), -1);          /* t = -R C */
     var K = [[par.f, 0, par.W / 2],
@@ -164,6 +167,33 @@ var MV = (function () {
       P[i][3] = K[i][0] * t[0] + K[i][1] * t[1] + K[i][2] * t[2];
     }
     return { K: K, R: R, t: t, C: C, P: P, f: par.f, W: par.W, H: par.H };
+  }
+
+  /* Explicit 6-DOF pose: position pos = [x,y,z]; pan (heading of the
+   * optical axis in the ground plane), tilt (its elevation), roll about
+   * the axis. pan/tilt/roll in radians. */
+  function makeCameraPose(par) {
+    var cp = Math.cos(par.pan), sp = Math.sin(par.pan);
+    var ct = Math.cos(par.tilt), st = Math.sin(par.tilt);
+    var zc = v3(ct * cp, ct * sp, st);
+    return buildCamera(par.pos.slice(), zc, par.roll || 0, par);
+  }
+
+  /* pan/tilt that point a camera at C toward target (roll unchanged) */
+  function aimAngles(C, target) {
+    var d = unit(sub(target, C));
+    return { pan: Math.atan2(d[1], d[0]), tilt: Math.asin(d[2]) };
+  }
+
+  /* Orbit parameterization around a target: azimuth az, elevation el,
+   * distance dist; the camera looks at the target with zero roll.
+   * Kept as a thin wrapper over the pose form. */
+  function makeCamera(par) {
+    var target = par.target || v3(0, 0, 0);
+    var caz = Math.cos(par.az), saz = Math.sin(par.az);
+    var cel = Math.cos(par.el), sel = Math.sin(par.el);
+    var C = add(target, scale(v3(caz * cel, saz * cel, sel), par.dist));
+    return buildCamera(C, unit(sub(target, C)), 0, par);
   }
 
   /* project world point -> {u,v,z} (continuous pixels; z = camera depth) */
@@ -246,7 +276,8 @@ var MV = (function () {
     transpose: transpose, inv3: inv3, skew: skew,
     smallestEigvec: smallestEigvec,
     makeMolecule: makeMolecule, poseMolecule: poseMolecule,
-    makeCamera: makeCamera, project: project, quantize: quantize,
+    makeCamera: makeCamera, makeCameraPose: makeCameraPose,
+    aimAngles: aimAngles, project: project, quantize: quantize,
     fundamental: fundamental, epipolarResidual: epipolarResidual,
     epipolarLine: epipolarLine, triangulate: triangulate,
     reprojError: reprojError, depthSigma: depthSigma

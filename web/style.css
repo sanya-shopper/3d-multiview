@@ -52,6 +52,17 @@ fieldset {
   background: var(--panel);
 }
 legend { font-size: 0.9rem; padding: 0 0.3rem; }
+legend button {
+  font: 0.75rem/1.4 Georgia, serif;
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+legend button:hover { border-color: var(--accent); color: var(--accent); }
 label {
   display: flex;
   align-items: center;

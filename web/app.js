@@ -1,25 +1,40 @@
 /* app.js -- UI layer: canvases, sliders, and the live readout.
  * All mathematics lives in model.js (kept DOM-free); this file only
- * renders state and routes input. */
+ * renders state and routes input.
+ *
+ * Controls:
+ *   - each camera has an explicit 6-DOF pose: position x/y/z sliders and
+ *     pan/tilt/roll sliders; dragging a camera view turns that camera
+ *     first-person style; "aim at molecule" re-points it.
+ *   - the molecule has yaw/pitch/roll + x/y/z sliders, and can be dragged
+ *     directly in the world view (drag = translate in the view plane,
+ *     shift-drag = rotate, alt-drag = translate in depth y).
+ */
 'use strict';
 
 (function () {
   var DISP_W = 64, DISP_H = 48, ZOOM = 6;   /* coarse displays, magnified */
   var FOCAL = 52;                            /* pixels, on the 64x48 sensor */
   var BASE_SIGMA_D = Math.sqrt(2) * (1 / Math.sqrt(12)); /* quantization */
+  var DEG = Math.PI / 180;
 
   var mol = MV.makeMolecule();
   var state = {
-    cam1: { az: -0.45, el: 0.18, dist: 4.2 },
-    cam2: { az: 0.45, el: 0.10, dist: 4.2 },
-    pose: { yaw: 0.5, pitch: 0.3, x: 0, y: 0, z: 0 },
+    /* poses chosen to match the old defaults: both cameras ~4.2 m out,
+     * aimed at the origin */
+    cam1: { x: 3.72, y: -1.80, z: 0.75, pan: 154 * DEG, tilt: -10 * DEG, roll: 0 },
+    cam2: { x: 3.76, y: 1.82, z: 0.42, pan: -154 * DEG, tilt: -6 * DEG, roll: 0 },
+    pose: { yaw: 0.5, pitch: 0.3, roll: 0, x: 0, y: 0, z: 0 },
     selected: 6                               /* the O atom */
   };
 
-  function camera(par) {
-    return MV.makeCamera({ az: par.az, el: par.el, dist: par.dist,
-                           f: FOCAL, W: DISP_W, H: DISP_H,
-                           target: MV.v3(0, 0, 0) });
+  function camera(c) {
+    return MV.makeCameraPose({ pos: [c.x, c.y, c.z],
+                               pan: c.pan, tilt: c.tilt, roll: c.roll,
+                               f: FOCAL, W: DISP_W, H: DISP_H });
+  }
+  function molCenter() {
+    return [state.pose.x, state.pose.y, state.pose.z];
   }
 
   /* ---------------- coarse pixel displays ------------------------------- */
@@ -98,15 +113,16 @@
 
   /* ---------------- world overview -------------------------------------- */
 
+  var OSCALE = 52;
+  function oproj(X) {
+    var cv = document.getElementById('overview');
+    return [cv.width / 2 + OSCALE * (X[0] - 0.45 * X[1]),
+            cv.height / 2 - OSCALE * (X[2] * 0.9 + 0.28 * X[1])];
+  }
+
   function drawOverview(atoms, cam1, cam2) {
     var cv = document.getElementById('overview'), cx = cv.getContext('2d');
     cx.clearRect(0, 0, cv.width, cv.height);
-    /* fixed oblique orthographic view of the world */
-    function proj(X) {
-      var s = 52;
-      return [cv.width / 2 + s * (X[0] - 0.45 * X[1]),
-              cv.height / 2 - s * (X[2] * 0.9 + 0.28 * X[1])];
-    }
     /* working volume: 2 m cube wireframe */
     cx.strokeStyle = '#c3cad2'; cx.lineWidth = 1;
     var s = 1.1, k, corners = [], edges = [
@@ -115,17 +131,17 @@
     for (k = 0; k < 8; k++)
       corners.push([(k & 1 ? s : -s), (k & 2 ? s : -s), (k & 4 ? s : -s)]);
     edges.forEach(function (e) {
-      var p = proj(corners[e[0]]), q = proj(corners[e[1]]);
+      var p = oproj(corners[e[0]]), q = oproj(corners[e[1]]);
       cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
     });
     /* molecule */
     cx.strokeStyle = '#6b7280'; cx.lineWidth = 2;
     mol.bonds.forEach(function (b) {
-      var p = proj(atoms[b[0]]), q = proj(atoms[b[1]]);
+      var p = oproj(atoms[b[0]]), q = oproj(atoms[b[1]]);
       cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(q[0], q[1]); cx.stroke();
     });
     atoms.forEach(function (X, i) {
-      var p = proj(X);
+      var p = oproj(X);
       cx.fillStyle = mol.atoms[i].color;
       cx.beginPath();
       cx.arc(p[0], p[1], i === state.selected ? 7 : 5, 0, 2 * Math.PI);
@@ -135,22 +151,22 @@
         cx.stroke();
       }
     });
-    /* cameras: center dot, optical axis toward origin, tiny image plane */
+    /* cameras: center dot, true optical axis (row 3 of R), label */
     [[cam1, 'camera 1'], [cam2, 'camera 2']].forEach(function (cc) {
-      var cam = cc[0], p = proj(cam.C);
-      var tip = proj(MV.add(cam.C, MV.scale(MV.unit(MV.scale(cam.C, -1)), 0.9)));
+      var cam = cc[0], p = oproj(cam.C);
+      var tip = oproj(MV.add(cam.C, MV.scale(cam.R[2], 0.9)));
       cx.strokeStyle = '#2d6cdf'; cx.lineWidth = 1.5;
       cx.beginPath(); cx.moveTo(p[0], p[1]); cx.lineTo(tip[0], tip[1]); cx.stroke();
       cx.fillStyle = '#1c2733';
       cx.beginPath(); cx.arc(p[0], p[1], 5, 0, 2 * Math.PI); cx.fill();
-      cx.fillStyle = '#1c2733'; cx.font = '12px system-ui, sans-serif';
+      cx.font = '12px system-ui, sans-serif';
       cx.fillText(cc[1], p[0] + 8, p[1] + 4);
     });
   }
 
   /* ---------------- readout ---------------------------------------------- */
 
-  function fmt(x, d) { return (x >= 0 ? ' ' : '') + x.toFixed(d); }
+  function fmt(x, d) { return (x >= 0 ? ' ' : '') + x.toFixed(d); }
   function fmtMat(M, d) {
     return M.map(function (r) {
       return r.map(function (x) { return fmt(x, d); }).join('  ');
@@ -163,9 +179,12 @@
     var p1 = MV.project(cam1, atoms[sel]);
     var p2 = MV.project(cam2, atoms[sel]);
     var out = document.getElementById('readout');
-    if (!p1 || !p2) {
+    if (!p1 || !p2 ||
+        p1.u < 0 || p1.u >= DISP_W || p1.v < 0 || p1.v >= DISP_H ||
+        p2.u < 0 || p2.u >= DISP_W || p2.v < 0 || p2.v >= DISP_H) {
       out.textContent = 'selected atom ' + name +
-        ' is not visible in both cameras — move a camera.';
+        ' is not visible in both cameras — move or re-aim a camera\n' +
+        '(the "aim at molecule" buttons re-point a camera at the molecule).';
       return;
     }
     var q1 = MV.quantize(p1), q2 = MV.quantize(p2);
@@ -209,7 +228,7 @@
         ' mm  for σ_d = ' + BASE_SIGMA_D.toFixed(2) + ' px (pixel quantization)';
   }
 
-  /* ---------------- main render + input ---------------------------------- */
+  /* ---------------- main render ------------------------------------------ */
 
   function render() {
     var cam1 = camera(state.cam1), cam2 = camera(state.cam2);
@@ -222,6 +241,10 @@
     updateReadout(cam1, cam2, atoms, F);
   }
 
+  /* ---------------- controls --------------------------------------------- */
+
+  var clamp = function (x, lo, hi) { return Math.max(lo, Math.min(hi, x)); };
+
   function bindSlider(id, obj, key, scale) {
     var el = document.getElementById(id);
     el.addEventListener('input', function () {
@@ -232,17 +255,26 @@
 
   ['1', '2'].forEach(function (n) {
     var c = state['cam' + n];
-    bindSlider('cam' + n + 'az', c, 'az', Math.PI / 180);
-    bindSlider('cam' + n + 'el', c, 'el', Math.PI / 180);
-    bindSlider('cam' + n + 'dist', c, 'dist');
+    bindSlider('cam' + n + 'x', c, 'x');
+    bindSlider('cam' + n + 'y', c, 'y');
+    bindSlider('cam' + n + 'z', c, 'z');
+    bindSlider('cam' + n + 'pan', c, 'pan', DEG);
+    bindSlider('cam' + n + 'tilt', c, 'tilt', DEG);
+    bindSlider('cam' + n + 'roll', c, 'roll', DEG);
+    document.getElementById('aim' + n).addEventListener('click', function () {
+      var a = MV.aimAngles([c.x, c.y, c.z], molCenter());
+      c.pan = a.pan; c.tilt = a.tilt;
+      syncSliders(); render();
+    });
   });
-  bindSlider('molyaw', state.pose, 'yaw', Math.PI / 180);
-  bindSlider('molpitch', state.pose, 'pitch', Math.PI / 180);
+  bindSlider('molyaw', state.pose, 'yaw', DEG);
+  bindSlider('molpitch', state.pose, 'pitch', DEG);
+  bindSlider('molroll', state.pose, 'roll', DEG);
   bindSlider('molx', state.pose, 'x');
   bindSlider('moly', state.pose, 'y');
   bindSlider('molz', state.pose, 'z');
 
-  /* drag on a camera view orbits that camera */
+  /* drag on a camera view turns that camera (first-person pan/tilt) */
   ['view1', 'view2'].forEach(function (id, idx) {
     var cv = document.getElementById(id), drag = null;
     cv.addEventListener('mousedown', function (e) {
@@ -251,18 +283,49 @@
     window.addEventListener('mousemove', function (e) {
       if (!drag) return;
       var c = state[idx === 0 ? 'cam1' : 'cam2'];
-      c.az -= (e.clientX - drag.x) * 0.008;
-      c.el = Math.max(-1.4, Math.min(1.4, c.el + (e.clientY - drag.y) * 0.008));
+      c.pan -= (e.clientX - drag.x) * 0.004;   /* drag right = look right */
+      c.tilt = clamp(c.tilt - (e.clientY - drag.y) * 0.004, -1.5, 1.5);
       drag = { x: e.clientX, y: e.clientY };
       syncSliders(); render();
     });
     window.addEventListener('mouseup', function () { drag = null; });
   });
 
+  /* drag the molecule in the world view: translate in the view plane;
+   * shift-drag rotates (yaw/pitch); alt-drag translates in y (depth) */
+  (function () {
+    var cv = document.getElementById('overview'), drag = null;
+    cv.addEventListener('mousedown', function (e) {
+      drag = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      var p = state.pose;
+      if (e.shiftKey) {
+        p.yaw += dx * 0.01;
+        p.pitch = clamp(p.pitch + dy * 0.01, -Math.PI / 2, Math.PI / 2);
+      } else if (e.altKey) {
+        p.y = clamp(p.y + dx / OSCALE / -0.45, -0.8, 0.8);
+      } else {
+        p.x = clamp(p.x + dx / OSCALE, -0.8, 0.8);
+        p.z = clamp(p.z - dy / OSCALE / 0.9, -0.8, 0.8);
+      }
+      drag = { x: e.clientX, y: e.clientY };
+      syncSliders(); render();
+    });
+    window.addEventListener('mouseup', function () { drag = null; });
+  })();
+
   /* click an atom (in either view) to select it */
   ['view1', 'view2'].forEach(function (id, idx) {
-    var cv = document.getElementById(id);
+    var cv = document.getElementById(id), down = null;
+    cv.addEventListener('mousedown', function (e) { down = { x: e.clientX, y: e.clientY }; });
     cv.addEventListener('click', function (e) {
+      /* ignore clicks that were drags */
+      if (down && (Math.abs(e.clientX - down.x) > 3 || Math.abs(e.clientY - down.y) > 3))
+        return;
       var rect = cv.getBoundingClientRect();
       var u = (e.clientX - rect.left) / ZOOM, v = (e.clientY - rect.top) / ZOOM;
       var cam = camera(state[idx === 0 ? 'cam1' : 'cam2']);
@@ -278,17 +341,30 @@
     });
   });
 
+  function setVal(id, v) { document.getElementById(id).value = v; }
   function syncSliders() {
     ['1', '2'].forEach(function (n) {
       var c = state['cam' + n];
-      document.getElementById('cam' + n + 'az').value = c.az * 180 / Math.PI;
-      document.getElementById('cam' + n + 'el').value = c.el * 180 / Math.PI;
-      document.getElementById('cam' + n + 'dist').value = c.dist;
+      setVal('cam' + n + 'x', c.x);
+      setVal('cam' + n + 'y', c.y);
+      setVal('cam' + n + 'z', c.z);
+      setVal('cam' + n + 'pan', wrapDeg(c.pan / DEG));
+      setVal('cam' + n + 'tilt', c.tilt / DEG);
+      setVal('cam' + n + 'roll', wrapDeg(c.roll / DEG));
     });
+    setVal('molyaw', wrapDeg(state.pose.yaw / DEG));
+    setVal('molpitch', state.pose.pitch / DEG);
+    setVal('molroll', wrapDeg(state.pose.roll / DEG));
+    setVal('molx', state.pose.x);
+    setVal('moly', state.pose.y);
+    setVal('molz', state.pose.z);
+  }
+  function wrapDeg(d) {
+    while (d > 180) d -= 360;
+    while (d < -180) d += 360;
+    return d;
   }
 
   syncSliders();
-  document.getElementById('molyaw').value = state.pose.yaw * 180 / Math.PI;
-  document.getElementById('molpitch').value = state.pose.pitch * 180 / Math.PI;
   render();
 })();

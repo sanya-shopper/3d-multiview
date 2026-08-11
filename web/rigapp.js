@@ -506,6 +506,56 @@
       'z = ' + zk.toFixed(2) + ' m';
   }
 
+  /* whole-TSDF panel: every observed voxel at once, transparency doing
+   * the work -- dark shell = near-surface, faint fog = carved empty,
+   * orange = behind surface; same oblique viewpoint as the world view */
+  function drawTsdf3d() {
+    var cv = document.getElementById('tsdf3d'), cx = cv.getContext('2d');
+    cx.clearRect(0, 0, cv.width, cv.height);
+    if (!state.tsdf) {
+      cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+      cx.fillText('the fused volume appears in phase 2', 8, cv.height / 2);
+      return;
+    }
+    var t = state.tsdf, n = t.n, S = 58;
+    function tp(X) {
+      return [cv.width / 2 + S * (X[0] - 0.45 * X[1]),
+              cv.height / 2 - S * (X[2] * 0.9 + 0.28 * X[1])];
+    }
+    var V = [0.45, 1, -0.311];                /* oblique-view kernel */
+    var cells = [], i, j, k;
+    /* walk via slices (the TSDF's public surface) */
+    for (k = 0; k < n; k++) {
+      var sl = t.slice(k);
+      for (j = 0; j < n; j++) for (i = 0; i < n; i++) {
+        var v = sl[j][i];
+        if (isNaN(v)) continue;
+        var pos = [t.min[0] + (i + 0.5) * t.cell,
+                   t.min[1] + (j + 0.5) * t.cell,
+                   t.min[2] + (k + 0.5) * t.cell];
+        cells.push({ pos: pos, f: v / t.tau,
+                     depth: pos[0] * V[0] + pos[1] * V[1] + pos[2] * V[2] });
+      }
+    }
+    cells.sort(function (a, b) { return b.depth - a.depth; }); /* far first */
+    var half = Math.max(2, S * t.cell * 0.55);
+    cells.forEach(function (c) {
+      var f = Math.max(-1, Math.min(1, c.f)), col;
+      if (Math.abs(f) < 0.6) {                /* the surface shell */
+        col = f >= 0 ? 'rgba(24,58,132,0.65)' : 'rgba(140,75,15,0.65)';
+      } else if (f >= 0.6) {                  /* carved empty: faint fog */
+        col = 'rgba(90,140,220,0.045)';
+      } else {                                /* deep behind: rare */
+        col = 'rgba(180,100,20,0.25)';
+      }
+      var p = tp(c.pos);
+      cx.fillStyle = col;
+      cx.fillRect(p[0] - half, p[1] - half, 2 * half, 2 * half);
+    });
+    cx.fillStyle = '#4a5563'; cx.font = '10px system-ui, sans-serif';
+    cx.fillText(t.observed() + ' voxels observed', 6, 12);
+  }
+
   /* dedicated point-cloud panel: the world view stays clean */
   function drawCloud(atoms) {
     var cv = document.getElementById('cloudview'), cx = cv.getContext('2d');
@@ -833,6 +883,7 @@
     drawView('view1', cam1, atoms, obs, 'p1', reproj1);
     drawView('view2', cam2, atoms, obs, 'p2', reproj2);
     drawCloud(atoms);
+    drawTsdf3d();
     drawSlice();
     drawGraph();
     drawFaceCov();

@@ -71,54 +71,47 @@
   </section>
   <section class="row">
     <figure>
-      <canvas id="cloudview" width="224" height="224"></canvas>
-      <figcaption>point cloud — solved-rig triangulations; gray ghost =
-      box's current true pose. <b>Click to clear</b> and re-estimate from
-      the current pose</figcaption>
+      <canvas id="tsdf3d" width="224" height="224"></canvas>
+      <figcaption>whole TSDF, transparency: dark shell = near-surface
+      voxels, faint fog = carved empty space, orange = behind; same
+      viewpoint as the world view</figcaption>
     </figure>
     <figure>
       <canvas id="tsdfslice" width="224" height="224"></canvas>
-      <figcaption>TSDF horizontal slice at <span id="slicelabel">z</span>
-      (dashed orange square in the world view)
+      <figcaption>slice at <span id="slicelabel">z</span> (dashed orange
+      square in world view)
       <input type="range" id="slicek" min="0" max="31" value="16"
-        style="width: 100%"><br>
-      a top-down cut through the voxel grid. Dashed outline = the box's
-      true cross-section at this height; each captured mark writes a blue
-      streak along its camera rays (measured empty), a dark cell near the
-      mark itself (the surface), and orange just behind it; gray = no ray
-      has crossed. Sweep the box and dark cells shell its outline; sweep
-      the slider to move the cut up and down</figcaption>
+        style="width: 100%">
+      dashed = box's true cross-section; blue streaks = carved rays,
+      dark = surface, orange = behind, gray = unobserved</figcaption>
     </figure>
     <figure>
-      <canvas id="convgraph" width="280" height="120"></canvas>
-      <figcaption>solved-baseline error vs banked poses</figcaption>
+      <canvas id="cloudview" width="224" height="224"></canvas>
+      <figcaption>point cloud (solved-rig triangulations); gray ghost =
+      true pose. <b>Click to clear</b> + re-estimate</figcaption>
     </figure>
-    <div class="quickhelp">
-      <p><b id="phasebadge">phase 1: solve</b>
-      <span id="bankcount" class="bankcount">0 poses banked</span><br>
-      <span id="bankmsg" style="font-size:0.82rem;color:#4a5563"></span></p>
-      <p>
-        <button type="button" id="bank">bank this pose</button>
-        <button type="button" id="tomeasure">accept solve → measure</button>
-        <button type="button" id="tosolve">back to solving</button>
-      </p>
-      <p>
-        <button type="button" id="clearmodel">clear model</button>
-        <button type="button" id="resetsolve">reset everything</button>
-      </p>
-      <canvas id="facecov" width="190" height="96"></canvas>
-      <p class="covnote">face coverage: one bar per colored face — full =
-      that side has been captured frontally enough (phase 2)</p>
-      <label class="check"><input type="checkbox" id="autobank" checked>
-        auto-bank when the box is released in a novel pose</label>
-      <label class="check"><input type="checkbox" id="subpixel">
-        subpixel corners (remove quantization noise)</label>
-      <p>Drag the box, release, and novel poses bank themselves (a pose
-      must differ from every banked one by ~15° or ~15 cm to add
-      information). The readout coaches you on driving the error down;
-      then accept the solve and watch the cloud and TSDF grow through
-      the solved cameras.</p>
-    </div>
+    <figure>
+      <canvas id="convgraph" width="224" height="104"></canvas>
+      <canvas id="facecov" width="224" height="104" class="graph"></canvas>
+      <figcaption>top: solved-baseline error per banked pose; bottom:
+      face coverage — one bar per colored face</figcaption>
+    </figure>
+  </section>
+  <section class="quickbar">
+    <span><b id="phasebadge">phase 1: solve</b>
+      <span id="bankcount" class="bankcount">0 poses banked</span></span>
+    <span>
+      <button type="button" id="bank">bank this pose</button>
+      <button type="button" id="tomeasure">accept solve → measure</button>
+      <button type="button" id="tosolve">back to solving</button>
+      <button type="button" id="clearmodel">clear model</button>
+      <button type="button" id="resetsolve">reset everything</button>
+    </span>
+    <label class="check"><input type="checkbox" id="autobank" checked>
+      auto-bank novel poses</label>
+    <label class="check"><input type="checkbox" id="subpixel">
+      subpixel corners</label>
+    <span id="bankmsg" class="bankmsgbar"></span>
   </section>
 
   <section>

@@ -10,8 +10,12 @@ repository no longer carries the PDFs at any point in its history; a
 pre-rewrite backup bundle is kept locally outside the repo.
 
 Retrieved 2026-08-04 from publisher/author/institutional open-access
-sources (arXiv, NIST, university pages) via curl; see git history for
-exact URLs. VirusTotal was not available in this environment; screening
+sources (arXiv, NIST, university pages) via curl. Exact per-file URLs
+were not recorded at retrieval time (an earlier note here claimed the
+git history had them; it did not). On 2026-08-12 canonical sources
+were re-located and verified BYTE-IDENTICAL by SHA-256 for 26 of the
+27 files (the exception, Maze2018, exists publicly only as a same-work
+preprint); the verified URLs are recorded in the bibliography notes. VirusTotal was not available in this environment; screening
 was heuristic: PDF magic verified, and object-level scan for active
 content (JavaScript/Launch actions, embedded files), including inside
 decompressed streams. /OpenAction and /AA tokens alone are ordinary

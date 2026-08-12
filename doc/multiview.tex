@@ -2440,8 +2440,17 @@ data-dependent order, retriangulate and prune outliers as the model
 grows; and, only for rig-free operation, (iv) bootstrapping the seed
 pair's relative pose by decomposing the essential matrix, plus the
 drift and loop-closure management that anchored operation never
-needs. In short: the geometry engine of SfM is done; the
-bookkeeping that feeds it is the open work.
+needs. Items (i)--(iii) are now built and sim-validated:
+\code{mv\_feat\_detect\_ms} detects over a half-octave pyramid with
+descriptors sampled at detection scale (on a 1.5\(\times\) zoom pair:
+607 matches at 98\% verified inliers where single-scale finds 9);
+\code{mv/track.h} chains pairwise matches into conflict-rejected
+multi-image tracks and runs the next-best-view incremental driver with
+a fixed-K bundle polish --- six views spanning 1.55\(\times\)
+magnification register to a worst position error of 10.9\,mm at
+0.5\,px RMS, ten times better than the single-scale benchmark above.
+What remains open is only the rig-free leg: essential-matrix seeding
+and drift management.
 
 The dynamic limit of this idea is the \emph{tracked mobile camera}: a
 drone or handheld camera moving through the volume is, to the fixed rig,
@@ -3736,6 +3745,21 @@ experiments --- inside its own fence.
 
 \subsection{Deployment architecture: hardware boundaries and communication}
 
+\paragraph{Pair-then-decode (built).} The pairing contract recorded
+in \code{ALIGNED\_ASSESSMENT.md} is now implemented: a temporal
+frame-pair collector (\code{tools/hub\_pair.c}) banks raw frames at
+arrival rate and matches them across cameras on capture timestamps
+(nearest partner within a half-frame gate), the decoder decodes both
+frames of the freshest pair before any single frame, and each dual
+decode emits one strictly-simultaneous observation --- the display
+counter is demoted from correspondence signal to sanity check, and the
+dwell-relaxed gate that once fed 15\,s-skewed poses to the solver is
+gone. Unrelated clocks now yield zero pairs by design (replay cannot
+manufacture rig estimates). Two-camera loopback of a real session: 82
+strict observations at mean \(|\Delta t|\) 7.75\,ms, zero
+counter-sanity drops, and the solve of two identical streams returns
+baseline 0.000\,m --- the known truth.
+
 \paragraph{Live rig v1 (built).} The streaming skeleton of this
 architecture now exists and has been soak-tested in loopback:
 \code{tools/stream\_cam.swift} (macOS capture) and
@@ -4069,7 +4093,18 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         \autoref{sec:overview} runs on pixels end to end --- and now
         on \emph{real} frames too: \code{tools/scenecloud.c} ran the
         same path on handheld phone video to produce the 82k-point
-        cloud of \autoref{fig:scenecloud}. Remaining at real tier:
+        cloud of \autoref{fig:scenecloud}, and \code{tools/densereal.c}
+        has now run the DENSE chain on real recorded frames: pattern-
+        anchored metric pose per frame, plane-guided block matching
+        (the display's periodic texture aliases a global-range SAD by
+        whole \(\sim\)26\,px periods --- measured 114\,mm of phantom
+        relief --- and a \(\pm\)12\,px band around the expected plane
+        disparity eliminates it), TSDF fusion and mesh. The
+        reconstructed display measures \textbf{1.69\,mm RMS} from its
+        true plane over 57.6k pixels at a 58\,mm accidental baseline
+        (depth-law floor 0.68\,mm), and \code{mv\_plane\_ransac}
+        blindly rediscovers it at 0.26\(^\circ\)/0.30\,mm on 98\%
+        inliers. Remaining at real tier:
         multi-camera (fixed-rig) depth rather than accidental
         baselines. \emph{Unlocks}: dense change detection and
         moving-object silhouettes; with items 6 and 9, the room model
@@ -4126,9 +4161,17 @@ Dependency-ordered. Each entry gives a blurb (what it is) and a pitch
         in \code{src/tsdf.c}; setup and run instructions are in the
         comment atop \code{mv/tsdf.h} (\code{make demo\_tsdf}; mesh
         lands in \code{out\_tsdf.ply}); validated in
-        \autoref{tab:tsdfresults}. Remaining: the dense-depth producer
-        (item 5), the voxel-major fast path, and then RANSAC
-        plane/primitive extraction on the background model.
+        \autoref{tab:tsdfresults}. The voxel-major fast path is now
+        built (\code{mv\_tsdf\_table\_build} /
+        \code{mv\_tsdf\_fuse\_depthmap}): the per-voxel projection
+        table of \autoref{sec:tsdf}, measured at \(\sim\)460M voxel
+        visits/s --- 3.0\(\times\) the sample fold --- agreeing with
+        the fold to 0.23 voxel RMS, carving included; and RANSAC
+        plane extraction is built (\code{mv/plane.h}: seeded
+        deterministic fit + greedy multi-plane extraction, normals to
+        0.011\(^\circ\) under 29\% outliers). Remaining: the
+        fixed-rig dense-depth producer (item 5) feeding both, and
+        primitive fits beyond planes.
         \emph{Pitch}: every remaining piece rides on item 5 or 6;
         primitives (\autoref{sec:ladder}) then give the furniture-level
         scene description almost for free. \emph{Unlocks}: continuous
@@ -4247,6 +4290,16 @@ flicker and locking capture to the display's frame counter
 
 \subsection{Software synchronization: measuring and correcting the clocks}
 \label{sec:softsync}
+
+The correction stage is now implemented (\code{mv/sync.h}):
+timestamped detection tracks, mapped onto the common clock, are
+linearly interpolated so pairs form at one instant before
+triangulation. The reference-rig test reproduces this appendix's
+numbers: a half-frame mismatch on a 1\,m/s mover costs 154\,mm of
+phantom depth naively, and interpolation removes it to numerical zero
+on linear motion, leaving the predicted second-order
+\(a\,T^2/8\) residual (measured 278\,\(\mu\)m in detection space
+at \(a=2\)\,m/s\(^2\)).
 
 This subsection is the practice counterpart of the temporal camera model
 \eqref{eq:clock} of \autoref{sec:timemodel}: how the clock parameters
@@ -4775,7 +4828,13 @@ Paper & Implementation & Validated by \\
 \autoref{sec:stereo} & \code{mv/rectify.h}, \code{mv/stereo.h} & row-alignment tests \\
 \autoref{sec:models} & \code{mv/cloud.h}, \code{mv/img.h} & PLY/PGM outputs of all demos \\
 \autoref{sec:tsdf} & \code{mv/tsdf.h}, \code{src/tsdf.c} & sign/mesh tests; \autoref{tab:tsdfresults} \\
+\autoref{sec:tsdf} (fast path) & \code{mv\_tsdf\_table\_*}, \code{mv\_tsdf\_fuse\_depthmap} & \code{test\_tsdffast}: fold agreement, 3.0\(\times\) \\
+\autoref{sec:ladder} (planes) & \code{mv/plane.h}, \code{src/plane.c} & \code{test\_plane}; densereal blind refind \\
 \autoref{sec:background} (dense path) & \code{demo/roomsim.c}, \code{mv/render.h} & warp/scene tests; \autoref{tab:roomresults} \\
+\autoref{sec:background} (real tier) & \code{tools/densereal.c} & display flatness 1.69\,mm RMS \\
+\autoref{sec:softsync} (correction) & \code{mv/sync.h}, \code{src/sync.c} & \code{test\_sync}: 154\,mm \(\to\) exact \\
+\autoref{sec:photos} (SfM tissue) & \code{mv/track.h}, \code{mv\_feat\_detect\_ms} & \code{test\_track}: 10.9\,mm worst view \\
+pair-then-decode (\code{ALIGNED\_ASSESSMENT}) & \code{tools/hub\_pair.c} & \code{test\_hub\_pair}; loopback 82 obs \\
 \autoref{sec:results} diagnostics & \code{demo/diagnose.c} & the tripwires of \autoref{sec:statrules} \\
 \autoref{sec:scenarios} & \code{demo/track\_robot,insects,people}; \code{lightlog} & their ground-truth scoring \\
 \autoref{sec:statrules} T1 & \code{tests/test\_mv.c} (47 assertions) & \code{make check} \\

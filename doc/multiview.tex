@@ -3032,15 +3032,16 @@ against.
 
 \begin{figure}[ht]
 \centering
-\includegraphics[width=\textwidth]{figs/scene_cloud.png}
-\caption{Three splat renders (orbit views) of the 82{,}000-point
-metric cloud extracted from a single handheld phone video of the
-pattern laptop (\code{tools/scenecloud.c}). Gray values are carried
-from the source frames. Left to right: $-40^\circ$, frontal, and
-$+40^\circ$ orbits around the cloud center. Visible structure: the
-laptop with the pattern on screen, keyboard deck, table with legs,
-and curtains at left. Residual speckle is honest: these are raw
-confirmed stereo points, no smoothing, no mesh.}
+\includegraphics[width=\textwidth]{figs/synth_cloud.png}
+\caption{Orbit splat renders ($-35^\circ$, frontal, $+35^\circ$),
+shown on the \emph{synthetic} room cloud of \code{demo\_room}
+(depth-shaded): the real 82{,}000-point capture this section
+describes --- the pattern laptop, keyboard deck, table, and curtains,
+extracted by \code{tools/scenecloud.c} from a single handheld phone
+video --- is imagery of the author's home and is withheld from the
+public repository; its numeric results in the text stand as
+reported. Residual speckle is honest in both: raw confirmed stereo
+points, no smoothing, no mesh.}
 \label{fig:scenecloud}
 \end{figure}
 
@@ -3102,15 +3103,19 @@ requires the recovered panel corners within 4\,px of ground truth.
 
 \begin{figure}[ht]
 \centering
-\includegraphics[width=0.9\textwidth]{figs/detect_frame.png}
-\caption{Everything the system detected in one real 720p webcam
-frame (\code{tools/annotate.c}). Green: 159 sub-pixel saddle
-corners. Cyan: the identified corner lattice. Yellow: the pattern's
-$1920\times1080$ extent mapped through the fitted homography. Red:
-the laptop's lit display panel, \emph{detected} by
-\code{mv\_display\_outline}'s pattern-frame ray marching --- found
-in the image, not assumed from a spec. The hand adjusting the lid
-and the couch behind do not disturb the median-based edges.}
+\includegraphics[width=0.9\textwidth]{figs/synth_detect.png}
+\caption{Everything the system detects in one frame
+(\code{tools/annotate.c}), shown on a \emph{synthetic} pattern view
+(\code{tools/genframes.c}; 162 corners, counter decoded): the
+original 720p webcam frame --- 159 sub-pixel saddle corners, with a
+hand adjusting the lid and a couch behind that did not disturb the
+median-based edges --- is imagery of the author's home and is
+withheld from the public repository. Overlays are identical in kind:
+green sub-pixel saddle corners, cyan identified lattice, yellow
+pattern extent mapped through the fitted homography, red the lit
+display panel \emph{detected} by \code{mv\_display\_outline}'s
+pattern-frame ray marching --- found in the image, not assumed from
+a spec.}
 \label{fig:detect}
 \end{figure}
 

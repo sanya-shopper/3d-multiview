@@ -237,6 +237,7 @@ int mv_feat_detect(mv_feature *out, int maxf, const unsigned char *img,
         f->u = cx + du;
         f->v = cy + dv;
         f->resp = cand[i].resp;
+        f->scale = 1.0; /* single level: full resolution */
         feat_descriptor(f->desc, img, w, h, f->u, f->v, theta);
     }
 
@@ -244,6 +245,143 @@ int mv_feat_detect(mv_feature *out, int maxf, const unsigned char *img,
     free(gx);
     free(gy);
     free(resp);
+    return nout;
+}
+
+/* ---- multi-scale detection ---------------------------------------- */
+
+/* 3x3 binomial blur ([1 2 1]/4 separable, edges clamped): the
+ * prefilter before each sqrt(2) downsample.  tmp holds the horizontal
+ * pass; dst, tmp, src are all w x h and dst may not alias src. */
+static void feat_blur3(unsigned char *dst, unsigned char *tmp,
+                       const unsigned char *src, int w, int h)
+{
+    int x, y;
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            int xm = (x > 0) ? x - 1 : 0;
+            int xp = (x < w - 1) ? x + 1 : w - 1;
+            const unsigned char *r = src + (size_t)y * w;
+            tmp[(size_t)y * w + x] =
+                (unsigned char)((r[xm] + 2 * r[x] + r[xp] + 2) >> 2);
+        }
+    for (y = 0; y < h; y++)
+        for (x = 0; x < w; x++) {
+            int ym = (y > 0) ? y - 1 : 0;
+            int yp = (y < h - 1) ? y + 1 : h - 1;
+            dst[(size_t)y * w + x] =
+                (unsigned char)((tmp[(size_t)ym * w + x]
+                                 + 2 * tmp[(size_t)y * w + x]
+                                 + tmp[(size_t)yp * w + x] + 2) >> 2);
+        }
+}
+
+/* Bilinear resample: dst pixel (x, y) samples src at (x*r, y*r), so a
+ * dst coordinate maps to level-0 through the product of the per-step
+ * ratios -- exactly the absolute scale bookkeeping the caller keeps. */
+static void feat_resample(unsigned char *dst, int dw, int dh,
+                          const unsigned char *src, int sw, int sh,
+                          double r)
+{
+    int x, y;
+    for (y = 0; y < dh; y++)
+        for (x = 0; x < dw; x++) {
+            double g = feat_bilinear(src, sw, sh, x * r, y * r);
+            int gi = (int)(g + 0.5);
+            if (gi < 0) gi = 0;
+            if (gi > 255) gi = 255;
+            dst[(size_t)y * dw + x] = (unsigned char)gi;
+        }
+}
+
+/* Merged-pyramid ordering: response descending; ties broken by scale
+ * (finer first), then position, so the selection is deterministic. */
+static int feat_ms_cmp(const void *a, const void *b)
+{
+    const mv_feature *fa = (const mv_feature *)a;
+    const mv_feature *fb = (const mv_feature *)b;
+    if (fa->resp > fb->resp) return -1;
+    if (fa->resp < fb->resp) return 1;
+    if (fa->scale < fb->scale) return -1;
+    if (fa->scale > fb->scale) return 1;
+    if (fa->v < fb->v) return -1;
+    if (fa->v > fb->v) return 1;
+    if (fa->u < fb->u) return -1;
+    if (fa->u > fb->u) return 1;
+    return 0;
+}
+
+int mv_feat_detect_ms(mv_feature *out, int maxf, const unsigned char *img,
+                      int w, int h, int nlevels)
+{
+    mv_feature *all;
+    unsigned char *cur, *buf, *tmp;
+    double s = 1.0;
+    int cw = w, ch = h;
+    int nall = 0, nout, L;
+
+    if (!out || !img || maxf <= 0 || nlevels < 1 || nlevels > 12
+        || w < 2 * FEAT_MARGIN + 2 || h < 2 * FEAT_MARGIN + 2)
+        return MV_ERR;
+    if (nlevels == 1)
+        return mv_feat_detect(out, maxf, img, w, h);
+
+    all = (mv_feature *)malloc((size_t)nlevels * maxf
+                               * sizeof(mv_feature));
+    cur = (unsigned char *)malloc((size_t)w * h);
+    buf = (unsigned char *)malloc((size_t)w * h);
+    tmp = (unsigned char *)malloc((size_t)w * h);
+    if (!all || !cur || !buf || !tmp) {
+        free(all);
+        free(cur);
+        free(buf);
+        free(tmp);
+        return MV_ERR;
+    }
+    memcpy(cur, img, (size_t)w * h);
+
+    for (L = 0; L < nlevels; L++) {
+        int n, i;
+        if (cw < 2 * FEAT_MARGIN + 2 || ch < 2 * FEAT_MARGIN + 2)
+            break; /* image outgrown by the descriptor footprint */
+        n = mv_feat_detect(all + nall, maxf, cur, cw, ch);
+        if (n < 0) {
+            free(all);
+            free(cur);
+            free(buf);
+            free(tmp);
+            return MV_ERR;
+        }
+        /* positions back to level-0 pixels; descriptor stays as
+         * sampled on this level (that IS the detection scale) */
+        for (i = 0; i < n; i++) {
+            all[nall + i].u *= s;
+            all[nall + i].v *= s;
+            all[nall + i].scale = s;
+        }
+        nall += n;
+        if (L + 1 < nlevels) {
+            /* absolute scales from the original dims, so rounding
+             * never accumulates across levels */
+            double sn = pow(sqrt(2.0), L + 1);
+            int nw = (int)(w / sn), nh = (int)(h / sn);
+            feat_blur3(buf, tmp, cur, cw, ch);
+            feat_resample(cur, nw, nh, buf, cw, ch, sn / s);
+            cw = nw;
+            ch = nh;
+            s = sn;
+        }
+    }
+
+    if (nall > 0)
+        qsort(all, (size_t)nall, sizeof(mv_feature), feat_ms_cmp);
+    nout = (nall < maxf) ? nall : maxf;
+    memcpy(out, all, (size_t)nout * sizeof(mv_feature));
+
+    free(all);
+    free(cur);
+    free(buf);
+    free(tmp);
     return nout;
 }
 

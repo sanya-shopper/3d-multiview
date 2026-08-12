@@ -187,6 +187,34 @@ static int verify(double *med, double *uv1, double *uv2, int nm,
 static unsigned char im1[W * H], im2[W * H];
 static double uv1[2 * MAXF], uv2[2 * MAXF];
 
+/* match f1 (1.0x view) against f2 (1.5x zoomed view) and score against
+ * the analytic zoom map: a pure focal change keeps the ray bundle, so
+ * ground truth is exactly u2 = 1.5 (u1 - cx) + cx per axis.  Returns
+ * the mutual-match count; *ninl gets the matches within 2 px of truth. */
+static int match_zoom(int *ninl, const mv_feature *f1, int n1,
+                      const mv_feature *f2, int n2)
+{
+    static int idx2[4 * MAXF];
+    int i, nm = 0, inl = 0;
+    *ninl = 0;
+    if (n1 <= 0 || n2 <= 0 || n1 > 4 * MAXF)
+        return 0;
+    if (mv_feat_match(idx2, f1, n1, f2, n2, 0.55) < 0)
+        return 0;
+    for (i = 0; i < n1; i++)
+        if (idx2[i] >= 0) {
+            double pu = 1.5 * (f1[i].u - 320.0) + 320.0;
+            double pv = 1.5 * (f1[i].v - 240.0) + 240.0;
+            double du = pu - f2[idx2[i]].u;
+            double dv = pv - f2[idx2[i]].v;
+            nm++;
+            if (du * du + dv * dv < 4.0)
+                inl++;
+        }
+    *ninl = inl;
+    return nm;
+}
+
 int main(void)
 {
     mv_camera c1, c2;
@@ -249,6 +277,59 @@ int main(void)
                " %.3f px)\n", nm, nsurv, med);
         CHECK(nsurv >= 30 && med < 0.5,
               "feat: sigma=0 median analytic residual < 0.5 px");
+    }
+
+    /* 6. scale robustness: the same scene under a 1.5x zoom (focal
+     * 800 -> 1200, identical pose: same rays, analytic ground truth).
+     * This is the magnification regime where single-scale v1 features
+     * fall over -- multi-scale detection is the fix. */
+    {
+        static unsigned char imz[W * H];
+        static mv_feature fs1[MAXF], fs2[MAXF];
+        static mv_feature fm1[4 * MAXF], fm2[4 * MAXF], fmr[4 * MAXF];
+        mv_camera cz;
+        int ns1, ns2, nmm1, nmm2, nmr;
+        int nm_ss, inl_ss, nm_ms, inl_ms;
+
+        cz = c1;
+        mv_cam_set_K(&cz, 1200.0, 1200.0, 320.0, 240.0);
+        seed = 777;
+        mv_render_scene(im1, NULL, W, H, &c1, pls, 3, 128, 1.0, &seed);
+        mv_render_scene(imz, NULL, W, H, &cz, pls, 3, 128, 1.0, &seed);
+
+        /* nlevels == 1 must be bit-exact mv_feat_detect */
+        ns1 = mv_feat_detect(fs1, MAXF, im1, W, H);
+        nmr = mv_feat_detect_ms(fmr, MAXF, im1, W, H, 1);
+        CHECK(nmr == ns1 && ns1 > 0
+              && memcmp(fmr, fs1, (size_t)ns1 * sizeof(mv_feature)) == 0,
+              "feat: detect_ms(nlevels=1) == detect exactly");
+
+        CHECK(mv_feat_detect_ms(fmr, MAXF, im1, W, H, 0) == MV_ERR
+              && mv_feat_detect_ms(fmr, MAXF, im1, W, H, 13) == MV_ERR,
+              "feat: detect_ms rejects bad nlevels");
+
+        /* multi-scale determinism */
+        nmm1 = mv_feat_detect_ms(fm1, 4 * MAXF, im1, W, H, 4);
+        nmr = mv_feat_detect_ms(fmr, 4 * MAXF, im1, W, H, 4);
+        CHECK(nmm1 == nmr && nmm1 > 0
+              && memcmp(fm1, fmr, (size_t)nmm1 * sizeof(mv_feature)) == 0,
+              "feat: multi-scale detection is deterministic");
+
+        ns2 = mv_feat_detect(fs2, MAXF, imz, W, H);
+        nmm2 = mv_feat_detect_ms(fm2, 4 * MAXF, imz, W, H, 4);
+
+        nm_ss = match_zoom(&inl_ss, fs1, ns1, fs2, ns2);
+        nm_ms = match_zoom(&inl_ms, fm1, nmm1, fm2, nmm2);
+        printf("      (zoom 1.5x: single-scale %d matches / %d true;"
+               " multi-scale %d matches / %d true)\n",
+               nm_ss, inl_ss, nm_ms, inl_ms);
+        /* single-scale across 1.5x is starved; multi-scale must beat it
+         * by >= 4x in mutual matches with a > 80% verified inlier rate */
+        CHECK(nm_ms >= 40, "feat: >= 40 multi-scale matches across zoom");
+        CHECK(nm_ms >= 4 * (nm_ss > 0 ? nm_ss : 1),
+              "feat: multi-scale >= 4x single-scale matches across zoom");
+        CHECK(inl_ms * 5 >= nm_ms * 4,
+              "feat: multi-scale zoom inlier rate > 80%");
     }
 
     if (failures) {

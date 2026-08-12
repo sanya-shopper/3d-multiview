@@ -2,6 +2,10 @@
 
 Running log of development sessions in this repo, updated as we go.
 
+## 2026-08-13
+
+- **GitHub Pages presence (owner request).** The two web apps are now one click from the repo: `.github/workflows/pages.yml` assembles and deploys the site on every main push (rule W1 — the site can't drift from the repo) — `site/index.html` (new, self-contained landing page in the web/ visual language) at the root, the untouched `web/` apps under `web/`, and the committed `doc/multiview.pdf` as `multiview.pdf`. Pages enabled on the repo with `build_type=workflow` via the API; README links the live pages. Live at https://sanya-shopper.github.io/multiview/ .
+
 ## 2026-08-12
 
 - **Refs restructure, projects-wide.** Per the owner's updated B-rules: reference PDFs now live in the sibling tree `~/Claude/Projects/refs/<repo>/` (local use only, never pushed), keeping repos publishable without redistributing copyrighted works. multiview: 27 PDFs moved, bib notes + check_bib.py re-pathed, git history rewritten with filter-repo (refs/*.pdf purged from every commit; pre-rewrite bundle kept at ../multiview-pre-rewrite.bundle) and force-pushed (--force-with-lease). Same treatment for the remote-less repos: byoc (117 PDFs + SEC xlsx; repo pack shrank to 1.76 MiB; 13 doc tests pass), fovial (12 PDFs; existence-test regex re-pathed; 28 tests pass), practicalstats (18 untracked PDFs, no rewrite needed; localcopy fields + fetch.sh re-pathed), lean (3), solvtool (2). Screening records/manifests/tooling stay in-repo everywhere. pdfbib inbox records re-pathed. Still carrying PDFs in pushed history (out of scope, need the force-push treatment): distribs, fourier, kng256, prng-test-suites, shavar.

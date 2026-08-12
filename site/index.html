@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>multiview — two cameras, interactively</title>
+<style>
+/* Self-contained landing page; visual language follows web/style.css. */
+:root {
+  --ink: #1c2733;
+  --paper: #f6f7f9;
+  --panel: #ffffff;
+  --accent: #2d6cdf;
+  --rule: #d7dce2;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto;
+  max-width: 46rem;
+  padding: 1.2rem 1.2rem 2rem;
+  font: 17px/1.55 Georgia, 'Times New Roman', serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+h1 { margin: 0.2rem 0 0.3rem; font-size: 1.45rem; }
+.lede { margin: 0.2rem 0 1rem; color: #38424e; }
+code { font-family: Menlo, Consolas, monospace; font-size: 0.9em; }
+a { color: var(--accent); }
+.card {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.9rem 1.1rem;
+  margin: 0.8rem 0;
+  text-decoration: none;
+  color: inherit;
+}
+.card:hover { border-color: var(--accent); }
+.card h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.12rem;
+  color: var(--accent);
+}
+.card p { margin: 0; font-size: 0.95rem; color: #38424e; }
+.card .go { color: var(--accent); white-space: nowrap; }
+.aside { font-size: 0.92rem; color: #4a5563; margin-top: 1.4rem; }
+footer {
+  margin-top: 2rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.85rem;
+  color: #4a5563;
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>multiview: two cameras, interactively</h1>
+  <p class="lede">
+    Two stationary cameras watch an overlapping volume; geometry turns
+    their flat, depthless pixel grids into a metric 3D model. These two
+    interactive pages teach how — every number on them is computed live,
+    in plain JavaScript, from the same equations the
+    <a href="multiview.pdf">accompanying document</a> derives and the
+    <a href="https://github.com/sanya-shopper/multiview">C99 library</a>
+    implements.
+  </p>
+</header>
+
+<main>
+  <a class="card" href="web/index.html">
+    <h2>1 &nbsp;Two cameras watching a molecule <span class="go">→</span></h2>
+    <p>Start here: a <em>solved</em> rig is handed to you. Drag the
+    cameras and the molecule and watch projection, epipolar lines,
+    plane-homography transfer with its parallax residue, triangulation,
+    and the depth-error law respond — the displays are deliberately
+    coarse so pixel quantization is visible everywhere.</p>
+  </a>
+
+  <a class="card" href="web/rig.html">
+    <h2>2 &nbsp;Earn the rig <span class="go">→</span></h2>
+    <p>Then take the rig away and solve it yourself: bank varied poses of
+    a box of known size, run the eight-point/essential-matrix pipeline on
+    the marks both cameras see, anchor the metre with one known edge —
+    and measure how the solved rig differs from truth before using it to
+    triangulate a point cloud and a TSDF.</p>
+  </a>
+</main>
+
+<p class="aside">
+  Deeper reading: the full document
+  <a href="multiview.pdf"><code>multiview.pdf</code></a> (theory as a
+  self-study overview with hand-computable worked examples, measured
+  results, and bibliography) and the
+  <a href="https://github.com/sanya-shopper/multiview">source repository</a>,
+  where each public header names the document section it implements.
+</p>
+
+<footer>
+  <p>Static pages, no build step and no dependencies; the math lives in
+  <code>web/model.js</code>, unit-tested headlessly in the repo's
+  <code>make check</code>.</p>
+</footer>
+</body>
+</html>

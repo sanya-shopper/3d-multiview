@@ -195,7 +195,8 @@ drv_pgm: fuzz/standalone.c fuzz/fuzz_pgm.c $(SRC)
 	  fuzz/standalone.c fuzz/fuzz_pgm.c $(SRC) -lm -o $@
 
 demo: demo_synthetic demo_calibrate demo_track demo_diagnose \
-      demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf
+      demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf \
+      demo_room
 	./demo_synthetic
 	./demo_calibrate
 	./demo_track

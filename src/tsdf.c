@@ -79,6 +79,98 @@ void mv_tsdf_fuse(mv_tsdf *t, const double p[3], const double o[3],
     }
 }
 
+/* ---- voxel-major fast path ----------------------------------------- */
+
+int mv_tsdf_table_build(const mv_tsdf *t, const mv_camera *cam,
+                        int w, int h, mv_tsdf_table *tab)
+{
+    long n, id;
+    int i, j, k;
+    if (w <= 0 || h <= 0 || !t->d)
+        return MV_ERR;
+    n = (long)t->nx * t->ny * t->nz;
+    tab->nvox = n;
+    tab->w = w;
+    tab->h = h;
+    tab->pix = (int *)malloc((size_t)n * sizeof(int));
+    tab->lv = (float *)malloc((size_t)n * sizeof(float));
+    tab->scale = (float *)malloc((size_t)n * sizeof(float));
+    if (!tab->pix || !tab->lv || !tab->scale) {
+        mv_tsdf_table_free(tab);
+        return MV_ERR;
+    }
+    id = 0;
+    for (k = 0; k < t->nz; k++)
+        for (j = 0; j < t->ny; j++)
+            for (i = 0; i < t->nx; i++, id++) {
+                double q[3], Xc[3], uv[2], L;
+                int u, v, a;
+                q[0] = t->x0 + i * t->voxel;
+                q[1] = t->y0 + j * t->voxel;
+                q[2] = t->z0 + k * t->voxel;
+                tab->pix[id] = -1;
+                tab->lv[id] = 0.0f;
+                tab->scale[id] = 1.0f;
+                for (a = 0; a < 3; a++)
+                    Xc[a] = cam->R[a * 3 + 0] * q[0]
+                          + cam->R[a * 3 + 1] * q[1]
+                          + cam->R[a * 3 + 2] * q[2] + cam->t[a];
+                if (mv_cam_project(uv, cam, q) != MV_OK)
+                    continue;
+                u = (int)floor(uv[0] + 0.5);
+                v = (int)floor(uv[1] + 0.5);
+                if (u < 0 || v < 0 || u >= w || v >= h)
+                    continue;
+                L = mv_norm(Xc, 3);
+                tab->pix[id] = v * w + u;
+                tab->lv[id] = (float)L;
+                tab->scale[id] = (float)(L / Xc[2]);
+            }
+    return MV_OK;
+}
+
+void mv_tsdf_table_free(mv_tsdf_table *tab)
+{
+    free(tab->pix);
+    free(tab->lv);
+    free(tab->scale);
+    memset(tab, 0, sizeof(*tab));
+}
+
+int mv_tsdf_fuse_depthmap(mv_tsdf *t, const mv_tsdf_table *tab,
+                          const float *depth, int w, int h, double sigma0)
+{
+    long n = (long)t->nx * t->ny * t->nz;
+    long id;
+    if (w != tab->w || h != tab->h || n != tab->nvox || !tab->pix)
+        return MV_ERR;
+    for (id = 0; id < n; id++) {
+        double z, eta, wgt;
+        int p = tab->pix[id];
+        if (p < 0)
+            continue;
+        z = depth[p];
+        /* positive-form gate: NaN fails z > 0 and is rejected */
+        if (!(z > 0.0) || !isfinite(z))
+            continue;
+        eta = z * tab->scale[id] - tab->lv[id];
+        if (eta < -t->tau)
+            continue; /* occluded: the ray says nothing about it */
+        if (eta > t->tau)
+            eta = t->tau; /* free space: carve with the clamped value */
+        if (sigma0 > 0.0) {
+            double sz = sigma0 * z * z;
+            wgt = 1.0 / (sz * sz);
+        } else {
+            wgt = 1.0;
+        }
+        t->d[id] = (float)((t->w[id] * t->d[id] + wgt * eta)
+                           / (t->w[id] + wgt));
+        t->w[id] += (float)wgt;
+    }
+    return MV_OK;
+}
+
 double mv_tsdf_query(const mv_tsdf *t, const double q[3])
 {
     double fx = (q[0] - t->x0) / t->voxel;

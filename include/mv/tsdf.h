@@ -2,14 +2,19 @@
 #define MV_TSDF_H
 
 /* Paper: doc/multiview.tex, section "The TSDF, in detail" (fusion
- * interface, update equation, budget example). */
+ * interface, update equation, voxel-major fast path, budget example).
+ * OWNERSHIP (parallel build): this header, src/tsdf.c, and
+ * tests/test_tsdffast.c belong to the TSDF-completion work item ONLY. */
+
+#include "mv/cam.h"
 
 /* Truncated signed distance function over a fixed axis-aligned volume.
  * Fusion is a pure, commutative fold over enriched samples
  * (point, origin, weight): each sample updates the voxels in the
  * truncation band along its ray by the weighted running average of the
- * signed along-ray offset (positive in front of the surface). Band-only
- * in v1: free-space carving beyond +tau is not yet applied, which is
+ * signed along-ray offset (positive in front of the surface). The
+ * sample fold is band-only: free-space carving beyond +tau is applied
+ * by the depth-map fast path below, not by mv_tsdf_fuse -- band-only is
  * sufficient for static-scene reconstruction. Mesh extraction is the
  * table-free marching-tetrahedra variant of marching cubes (six
  * tetrahedra per cube around the main diagonal, linear interpolation on
@@ -56,5 +61,44 @@ int mv_tsdf_mesh(const mv_tsdf *t, double **tris, int *ntri);
 
 /* Extract and write an ASCII PLY mesh (vertices + faces). */
 int mv_tsdf_write_ply(const mv_tsdf *t, const char *path);
+
+/* ---- voxel-major fast path (stationary camera) --------------------- */
+
+/* Because the rig never moves, each voxel's projection into a camera --
+ * the depth-map pixel it reads and its distance along the viewing ray
+ * -- is constant.  mv_tsdf_table_build computes it once; each frame is
+ * then one depth lookup + compare + multiply-add per voxel, including
+ * the free-space carving (clamped +tau update) that the band-only
+ * sample fold does not apply.  Semantics per voxel and frame:
+ *     eta = Z*scale - lv        (along-ray signed offset, + in front)
+ *     eta < -tau                -> untouched (occluded, no information)
+ *     eta > +tau                -> carved with +tau
+ *     else                      -> band, true signed offset
+ * folded by the same running average as mv_tsdf_fuse.  The along-ray
+ * metric matches the sample fold exactly on-axis and everywhere on the
+ * ray; it exceeds the Euclidean distance to a slanted surface by the
+ * incidence secant, same as the fold. */
+
+typedef struct {
+    long nvox;    /* nx*ny*nz of the volume the table was built for */
+    int w, h;     /* depth-map size the pixel indices assume */
+    int *pix;     /* per-voxel pixel index v*w + u; -1 = no projection */
+    float *lv;    /* camera-center-to-voxel distance along the ray */
+    float *scale; /* along-ray length per unit depth (>= 1) */
+} mv_tsdf_table;
+
+/* Build the projection table of volume t into camera cam for w x h
+ * depth maps (applies cam's distortion; nearest-pixel rounding).
+ * Voxels behind the camera or off the image get pix = -1. */
+int mv_tsdf_table_build(const mv_tsdf *t, const mv_camera *cam,
+                        int w, int h, mv_tsdf_table *tab);
+void mv_tsdf_table_free(mv_tsdf_table *tab);
+
+/* Fuse one w x h row-major depth map (metres; depth <= 0, NaN or inf =
+ * no measurement at that pixel).  Per-sample weight is 1/sigma_Z^2 with
+ * the stereo depth law sigma_Z = sigma0 * Z^2; pass sigma0 <= 0 for
+ * unit weights.  Returns MV_ERR on volume/table/image size mismatch. */
+int mv_tsdf_fuse_depthmap(mv_tsdf *t, const mv_tsdf_table *tab,
+                          const float *depth, int w, int h, double sigma0);
 
 #endif /* MV_TSDF_H */

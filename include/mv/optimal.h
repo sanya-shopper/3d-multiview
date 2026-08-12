@@ -7,7 +7,7 @@
 
 #include "mv/cam.h"
 
-/* Hartley-Sturm optimal correction (refs/HartleySturm1997.pdf): replace
+/* Hartley-Sturm optimal correction (../refs/multiview/HartleySturm1997.pdf): replace
  * the measured pair (uv1, uv2) by the pair (out1, out2) EXACTLY
  * satisfying out2^T F out1 = 0 that minimizes the sum of squared image
  * distances to the measurements.  F convention: x2^T F x1 = 0 (as

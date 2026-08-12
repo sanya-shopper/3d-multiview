@@ -55,7 +55,7 @@ for m in re.finditer(r'@\w+\{(\w+),', bib):
         fail.append(f'entry missing local-copy note: {key}')
         continue
     note = nm.group(1)
-    pm = re.search(r'Local copy: (refs/[\w.-]+\.pdf)', note)
+    pm = re.search(r'Local copy: (\.\./refs/multiview/[\w.-]+\.pdf)', note)
     if pm:
         path = pm.group(1)
         if not os.path.exists(path):
@@ -79,4 +79,4 @@ if fail:
         print('  -', f)
     sys.exit(1)
 print(f'bibliography ok: {len(keys)} entries, all cited, notes consistent, '
-      f'{sum(1 for k in keys if os.path.exists(f"refs/{k}.pdf"))} local copies verified')
+      f'{sum(1 for k in keys if os.path.exists(f"../refs/multiview/{k}.pdf"))} local copies verified')

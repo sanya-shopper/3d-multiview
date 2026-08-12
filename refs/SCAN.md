@@ -1,4 +1,11 @@
-# refs/ retrieval and screening record
+# refs retrieval and screening record
+
+Relocated 2026-08-12: the PDFs now live OUTSIDE the repository, in the
+sibling folder `../refs/multiview/` (one shared refs tree across
+projects, one subdirectory per repo). This file stays in-repo as the
+screening record; bibliography local-copy notes and tests/check_bib.py
+point at the new location. Note: the files remain in git HISTORY prior
+to this date -- relevant if the repository is ever made public.
 
 Retrieved 2026-08-04 from publisher/author/institutional open-access
 sources (arXiv, NIST, university pages) via curl; see git history for

@@ -6,7 +6,8 @@ LDLIBS   = -lm -lpthread
 SRC = src/mat.c src/cam.c src/epipolar.c src/triangulate.c src/rectify.c \
       src/stereo.c src/img.c src/cloud.c src/target.c src/graycode.c \
       src/calib.c src/pattern.c src/render.c src/reader.c src/tsdf.c \
-      src/refine.c src/optimal.c src/feat.c src/session.c src/photo.c src/bundle.c src/rot.c
+      src/refine.c src/optimal.c src/feat.c src/session.c src/photo.c src/bundle.c src/rot.c \
+      src/plane.c src/sync.c src/track.c
 OBJ = $(SRC:.c=.o)
 
 all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv
@@ -56,6 +57,9 @@ nettest: tools/nettest.o libmv.a
 
 genframes: tools/genframes.o libmv.a
 	$(CC) $(CFLAGS) -o $@ tools/genframes.o libmv.a $(LDLIBS)
+
+densereal: tools/densereal.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tools/densereal.o libmv.a $(LDLIBS)
 
 stream_cam_v4l2: tools/stream_cam_v4l2.o
 	$(CC) $(CFLAGS) -o $@ tools/stream_cam_v4l2.o $(LDLIBS)
@@ -114,10 +118,22 @@ test_hub_solve: tests/test_hub_solve.o tools/hub_solve.o libmv.a
 test_hub_pair: tests/test_hub_pair.o tools/hub_pair.o
 	$(CC) $(CFLAGS) -o $@ tests/test_hub_pair.o tools/hub_pair.o $(LDLIBS)
 
+test_tsdffast: tests/test_tsdffast.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_tsdffast.o libmv.a $(LDLIBS)
+
+test_plane: tests/test_plane.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_plane.o libmv.a $(LDLIBS)
+
+test_sync: tests/test_sync.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_sync.o libmv.a $(LDLIBS)
+
+test_track: tests/test_track.o libmv.a
+	$(CC) $(CFLAGS) -o $@ tests/test_track.o libmv.a $(LDLIBS)
+
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-check: test_mv test_refine test_optimal test_feat test_session test_photo test_bundle test_mux test_reader_speed test_clock_sync test_hub_solve test_hub_pair
+check: test_mv test_refine test_optimal test_feat test_session test_photo test_bundle test_mux test_reader_speed test_clock_sync test_hub_solve test_hub_pair test_tsdffast test_plane test_sync test_track
 	./test_mv
 	./test_refine
 	./test_optimal
@@ -130,6 +146,10 @@ check: test_mv test_refine test_optimal test_feat test_session test_photo test_b
 	./test_clock_sync
 	./test_hub_solve
 	./test_hub_pair
+	./test_tsdffast
+	./test_plane
+	./test_sync
+	./test_track
 	python3 tests/check_targets.py
 	$(MAKE) doc/multiview.aux
 	python3 tests/check_bib.py

@@ -67,3 +67,8 @@ stream_cam
 rec/
 logs/
 test_hub_pair
+test_tsdffast
+test_plane
+test_sync
+test_track
+densereal

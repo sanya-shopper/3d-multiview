@@ -15,7 +15,7 @@
 #                                         '#error work item under
 #                                         construction' on __linux__;
 #                                         reported as XFAIL, not FAIL)
-#   4. build the C test binaries         (test_mv .. test_hub_solve)
+#   4. build the C test binaries         (test_mv .. test_track)
 #   5. run each test binary
 #
 # The python bib check (tests/check_bib.py) is deliberately skipped:
@@ -87,14 +87,16 @@ stage "tool stream_cam_v4l2" make stream_cam_v4l2
 # Stage 4: build test binaries.
 for t in test_mv test_refine test_optimal test_feat test_session \
          test_photo test_bundle test_mux test_reader_speed \
-         test_clock_sync test_hub_solve; do
+         test_clock_sync test_hub_solve test_hub_pair test_tsdffast \
+         test_plane test_sync test_track; do
     stage "build $t" make "$t"
 done
 
 # Stage 5: run test binaries (only those that were built).
 for t in test_mv test_refine test_optimal test_feat test_session \
          test_photo test_bundle test_mux test_reader_speed \
-         test_clock_sync test_hub_solve; do
+         test_clock_sync test_hub_solve test_hub_pair test_tsdffast \
+         test_plane test_sync test_track; do
     if [ -x "./$t" ]; then
         stage "run $t" "./$t"
     else

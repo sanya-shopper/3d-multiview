@@ -26,5 +26,8 @@
 #include "mv/session.h"
 #include "mv/photo.h"
 #include "mv/bundle.h"
+#include "mv/plane.h"
+#include "mv/sync.h"
+#include "mv/track.h"
 
 #endif /* MV_MV_H */

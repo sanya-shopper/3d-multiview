@@ -128,10 +128,11 @@ jobs:
       - name: build (plain -O1 -g)
         env:
           CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g
-        run: make test_session test_optimal test_feat test_mux test_photo nettest
+        run: make test_session test_optimal test_feat test_mux test_photo test_sync test_track nettest
       - name: valgrind quick suites
         run: |
-          for t in test_session test_optimal test_feat test_mux test_photo; do
+          for t in test_session test_optimal test_feat test_mux test_photo \
+                   test_sync test_track; do
             echo "=== valgrind $t ==="
             valgrind --error-exitcode=1 --leak-check=full \
                      --errors-for-leak-kinds=definite ./$t || exit 1
@@ -213,7 +214,9 @@ jobs:
           CFLAGS: -std=c99 -pedantic -Wall -Wextra -Werror ${{ matrix.opt }} -g
         run: |
           make CC=${{ matrix.cc }} libmv.a test_mv test_refine test_optimal \
-               test_feat test_session test_photo test_bundle test_mux
+               test_feat test_session test_photo test_bundle test_mux \
+               test_tsdffast test_plane test_sync test_track
           for t in test_mv test_refine test_optimal test_feat test_session \
-                   test_photo test_bundle test_mux; do ./$t >/dev/null || exit 1; done
+                   test_photo test_bundle test_mux test_tsdffast test_plane \
+                   test_sync test_track; do ./$t >/dev/null || exit 1; done
           echo "${{ matrix.cc }} ${{ matrix.opt }}: all suites pass"

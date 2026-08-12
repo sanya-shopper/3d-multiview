@@ -58,6 +58,7 @@
 
 #include "hub_clock.h"
 #include "hub_solve.h"
+#include "hub_pair.h"
 
 #define MAXCONN 8
 #define MAXCAMS 4
@@ -475,6 +476,25 @@ static double t_rig_stable;    /* when the rig last stopped changing */
 static int scene_mode;
 static long scene_pairs, scene_npts;
 
+/* pair-then-decode state (ALIGNED_ASSESSMENT.md): raw frames are
+ * banked at ARRIVAL rate in a per-camera ring and matched on capture
+ * timestamps by the hub_pair collector; the decoder then spends its
+ * scarce decodes on frames that already have a simultaneous partner,
+ * and each decoded pair emits one strictly-simultaneous observation.
+ * The display counter is demoted from correspondence signal to sanity
+ * check.  Memory: HP_RING frames per calibrated camera (~33 MB/cam at
+ * 1080p) -- the price of capture-rate pairing, paid only during the
+ * extrinsics phase. */
+static hub_pair hpair;
+static struct fslot {
+    unsigned char *buf;
+    int cap, w, h;
+    double t_cam;
+} fring[MAXCAMS][HP_RING];
+static hub_obs sobs[MAXCAMS][MAXCAMS][MAXPAIR];
+static int nsobs[MAXCAMS][MAXCAMS];
+static long strict_ctr_drops; /* counter-sanity rejections */
+
 static void try_extrinsics(void)
 {
     int a, b;
@@ -492,11 +512,22 @@ static void try_extrinsics(void)
              * times, i.e. the behavior before clock sync existed */
             synced = hub_clock_err(A->camid) >= 0.0
                      && hub_clock_err(B->camid) >= 0.0;
+            /* pair-then-decode: strictly-simultaneous decoded pairs,
+             * when present, ARE the observation set; the legacy
+             * counter-matched path below survives only as a fallback
+             * for old senders -- and without the dwell relaxation
+             * whose 15 s window fed non-simultaneous poses into
+             * hub_solve_pair as if they were rigid measurements. */
+            if (nsobs[a][b] >= 3) {
+                npair = nsobs[a][b];
+                memcpy(obs, sobs[a][b],
+                       (size_t)npair * sizeof(obs[0]));
+            }
+            else
             for (i = 0; i < A->nanch && npair < MAXPAIR; i++) {
                 for (j = 0; j < B->nanch && npair < MAXPAIR; j++) {
                     struct anchor *pa = &A->anch[i], *pb = &B->anch[j];
                     double dk, taT, tbT;
-                    int relaxed = pa->dwell && pb->dwell;
                     if (synced) {
                         taT = hub_clock_map(A->camid, pa->t_cam);
                         tbT = hub_clock_map(B->camid, pb->t_cam);
@@ -505,10 +536,7 @@ static void try_extrinsics(void)
                         taT = pa->t_host;
                         tbT = pb->t_host;
                     }
-                    /* both dwelling = display verified still: allow
-                     * the slow decoder's 7-15 s anchor spacing to
-                     * still produce cross-camera pairs */
-                    if (fabs(taT - tbT) > (relaxed ? 15.0 : 4.0))
+                    if (fabs(taT - tbT) > 4.0)
                         continue;
                     if (pa->tier == 1 && pb->tier == 1)
                         dk = fabs(pa->k - pb->k);
@@ -518,7 +546,7 @@ static void try_extrinsics(void)
                                          256.0) - 128.0;
                         dk = fabs(d8);
                     }
-                    if (dk > (relaxed ? 120.0 : 2.0))
+                    if (dk > 2.0)
                         continue;
                     memcpy(obs[npair].Ra, pa->pose.R,
                            sizeof(obs[0].Ra));
@@ -757,6 +785,118 @@ static void process_cam(cam_t *c, const unsigned char *img, int w, int h,
     }
 }
 
+/* Decode BOTH frames of the freshest temporal pair, if the collector
+ * has one: the pair-then-decode path.  Each success emits one
+ * strictly-simultaneous observation into sobs[][] (counter agreement
+ * demoted to a sanity check).  Returns 1 if a pair was decoded. */
+static int try_pair_decode(void)
+{
+    int a, b, ai = -1, bi = -1, ha, hb, ok = 0;
+    int wa = 0, hA = 0, wb = 0, hB = 0;
+    double dt = 0.0, tca = 0.0, tcb = 0.0;
+    cam_t *A = NULL, *B = NULL;
+
+    pthread_mutex_lock(&mbx);
+    for (a = 0; a < MAXCAMS && !ok; a++)
+        for (b = a + 1; b < MAXCAMS && !ok; b++) {
+            if (!cams[a].used || !cams[b].used
+                || !cams[a].calibrated || !cams[b].calibrated
+                || nsobs[a][b] >= MAXPAIR)
+                continue;
+            while (!ok && hub_pair_take(&hpair, a, b, &ha, &hb, &dt)) {
+                struct fslot *fa = &fring[a][ha % HP_RING];
+                struct fslot *fb = &fring[b][hb % HP_RING];
+                size_t sa, sb;
+                if (fa->w <= 0 || fb->w <= 0)
+                    continue;
+                sa = (size_t)fa->w * fa->h;
+                sb = (size_t)fb->w * fb->h;
+                A = &cams[a];
+                B = &cams[b];
+                if (A->workcap < (int)sa) {
+                    unsigned char *nb = realloc(A->work, sa);
+                    if (nb) {
+                        A->work = nb;
+                        A->workcap = (int)sa;
+                    }
+                }
+                if (B->workcap < (int)sb) {
+                    unsigned char *nb = realloc(B->work, sb);
+                    if (nb) {
+                        B->work = nb;
+                        B->workcap = (int)sb;
+                    }
+                }
+                if (A->workcap < (int)sa || B->workcap < (int)sb)
+                    continue;
+                memcpy(A->work, fa->buf, sa);
+                memcpy(B->work, fb->buf, sb);
+                wa = fa->w;
+                hA = fa->h;
+                tca = fa->t_cam;
+                wb = fb->w;
+                hB = fb->h;
+                tcb = fb->t_cam;
+                A->busy = B->busy = 1;
+                ai = a;
+                bi = b;
+                ok = 1;
+            }
+        }
+    pthread_mutex_unlock(&mbx);
+    if (!ok)
+        return 0;
+
+    process_cam(A, A->work, wa, hA, tca);
+    process_cam(B, B->work, wb, hB, tcb);
+
+    pthread_mutex_lock(&mbx);
+    A->busy = B->busy = 0;
+    /* both frames decoded to fresh pose anchors? then this temporal
+     * pair becomes one strict observation */
+    if (A->nanch > 0 && B->nanch > 0 && nsobs[ai][bi] < MAXPAIR) {
+        struct anchor *pa =
+            &A->anch[(A->anhead - 1 + MAXANCH) % MAXANCH];
+        struct anchor *pb =
+            &B->anch[(B->anhead - 1 + MAXANCH) % MAXANCH];
+        if (pa->t_cam == tca && pb->t_cam == tcb) {
+            double dk;
+            if (pa->tier == 1 && pb->tier == 1)
+                dk = fabs(pa->k - pb->k);
+            else {
+                double d8 = fmod(fmod(pa->k, 256.0)
+                                 - fmod(pb->k, 256.0) + 384.0,
+                                 256.0) - 128.0;
+                dk = fabs(d8);
+            }
+            if (dk <= 2.0) {
+                hub_obs *o = &sobs[ai][bi][nsobs[ai][bi]];
+                memcpy(o->Ra, pa->pose.R, sizeof(o->Ra));
+                memcpy(o->ta, pa->pose.t, sizeof(o->ta));
+                memcpy(o->Rb, pb->pose.R, sizeof(o->Rb));
+                memcpy(o->tb, pb->pose.t, sizeof(o->tb));
+                nsobs[ai][bi]++;
+                hlog("[pair] strict obs %d for cams %u-%u "
+                     "(frame |dt| %.1f ms; %ld pairs formed, "
+                     "mean %.1f ms)\n",
+                     nsobs[ai][bi], A->camid, B->camid,
+                     fabs(dt) * 1e3, hub_pair_formed(&hpair),
+                     hub_pair_mean_dt(&hpair) * 1e3);
+                try_extrinsics();
+            }
+            else {
+                strict_ctr_drops++;
+                hlog("[pair] counter sanity FAILED on a temporal "
+                     "pair (dk %.0f, |dt| %.1f ms) -- dropped "
+                     "(%ld total)\n", dk, fabs(dt) * 1e3,
+                     strict_ctr_drops);
+            }
+        }
+    }
+    pthread_mutex_unlock(&mbx);
+    return 1;
+}
+
 /* close connection ci and release any camid it owned, so a camera that
  * reconnects (same or new id) is accepted rather than locked out */
 static void release_conn(int ci)
@@ -789,7 +929,11 @@ static void write_summary(void)
     if (!f)
         return;
     fprintf(f, "multiview live session summary\n");
-    fprintf(f, "pitch %.4f mm\n\n", pitch * 1000.0);
+    fprintf(f, "pitch %.4f mm\n", pitch * 1000.0);
+    fprintf(f, "frame pairs %ld, mean |dt| %.2f ms, "
+            "counter-sanity drops %ld\n\n",
+            hub_pair_formed(&hpair), hub_pair_mean_dt(&hpair) * 1e3,
+            strict_ctr_drops);
     for (i = 0; i < MAXCAMS; i++) {
         cam_t *c = &cams[i];
         if (!c->used)
@@ -1017,6 +1161,10 @@ static void *decoder_main(void *arg)
             scene_step();
             continue;
         }
+        /* pair-then-decode: spend decodes on frames that already
+         * have a simultaneous partner before decoding singles */
+        if (try_pair_decode())
+            continue;
         pthread_mutex_lock(&mbx);
         for (i = 0; i < MAXCAMS; i++) {
             cam_t *c = &cams[(rr_next + i) % MAXCAMS];
@@ -1198,6 +1346,9 @@ int main(int argc, char **argv)
     struct tm *lt = localtime(&now);
 
     setvbuf(stdout, NULL, _IOLBF, 0); /* live logs must survive kill */
+    /* pair gate: half a 30 fps frame period -- nearly every frame has
+     * a true partner while simultaneity error stays <= 17 ms */
+    hub_pair_init(&hpair, 1.0 / 60.0);
     /* every argument is optional, with the deployment defaults baked in:
      *   hubengine [port] [pitch_mm] [logs_base_dir]   (9900 0.1133 logs) */
     port = argc > 1 ? atoi(argv[1]) : 9900;
@@ -1452,6 +1603,39 @@ int main(int argc, char **argv)
                                  "frames flowing (%ux%u) <<<\n",
                                  camid, w, h);
                             say("camera %u connected", camid);
+                        }
+                        /* pair-then-decode: bank the frame for
+                         * temporal pairing during the extrinsics
+                         * phase; the slot index mirrors the
+                         * collector's FIFO ring exactly */
+                        if (c->calibrated && !scene_mode) {
+                            int ci = (int)(c - cams);
+                            int slot =
+                                (int)(hpair.npush[ci] % HP_RING);
+                            struct fslot *fs = &fring[ci][slot];
+                            int need = (int)((size_t)w * h);
+                            if (fs->cap < need) {
+                                unsigned char *nb =
+                                    realloc(fs->buf, (size_t)need);
+                                if (nb) {
+                                    fs->buf = nb;
+                                    fs->cap = need;
+                                }
+                            }
+                            if (fs->cap >= need) {
+                                double tp;
+                                memcpy(fs->buf, cn->buf + 32,
+                                       (size_t)need);
+                                fs->w = (int)w;
+                                fs->h = (int)h;
+                                fs->t_cam = tcam;
+                                tp = hub_clock_err(camid) >= 0.0
+                                     ? hub_clock_map(camid, tcam)
+                                     : c->t_latest;
+                                hub_pair_push(&hpair, ci,
+                                              ci * HP_RING + slot,
+                                              tp);
+                            }
                         }
                     }
                 }

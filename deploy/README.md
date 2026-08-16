@@ -10,7 +10,7 @@ side of the repo inside an `ubuntu:24.04` container.
 | File | Role |
 |---|---|
 | `Dockerfile` | `ubuntu:24.04` + `build-essential` (+ `python3`), copies the repo in, hands off to the build script |
-| `Dockerfile.dockerignore` | keeps `.git`, `refs/`, PDFs, and host build artifacts out of the image (BuildKit) |
+| `Dockerfile.dockerignore` | keeps `.git`, `bibsrc/`, PDFs, and host build artifacts out of the image (BuildKit) |
 | `build-linux.sh` | in-container (or bare-Ubuntu) staged build+test; per-stage PASS/FAIL; exits nonzero on any failure |
 | `validate.sh` | host-side driver: finds docker/podman, builds the image, runs the container, prints the summary |
 | `LINUX-ISSUES.md` | every Linux issue found, with root cause and suggested one-line fix |

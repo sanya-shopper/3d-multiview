@@ -5,7 +5,7 @@ Checks, exiting nonzero on any failure:
   1. every refs.bib entry is cited somewhere in the body (via the .aux);
   2. every \\cite key in the .tex resolves to a refs.bib entry;
   3. every entry carries a local-copy note, and every claimed local copy
-     exists in refs/ and is a real PDF;
+     exists in bibsrc/ and is a real PDF;
   4. the last bibtex run produced zero warnings (via the .blg).
 Run after `make doc`; wired into `make check`.
 """
@@ -79,4 +79,4 @@ if fail:
         print('  -', f)
     sys.exit(1)
 print(f'bibliography ok: {len(keys)} entries, all cited, notes consistent, '
-      f'{sum(1 for k in keys if os.path.exists(f"../refs/multiview/{k}.pdf"))} local copies verified')
+      f'{sum(1 for k in keys if os.path.exists(f"../_refs/multiview/{k}.pdf"))} local copies verified')

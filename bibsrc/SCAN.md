@@ -1,11 +1,11 @@
 # refs retrieval and screening record
 
 Relocated 2026-08-12: the PDFs now live OUTSIDE the repository, in the
-sibling folder `../refs/multiview/` (one shared refs tree across
+sibling folder `../_refs/multiview/` (one shared refs tree across
 projects, one subdirectory per repo). This file stays in-repo as the
 screening record; bibliography local-copy notes and tests/check_bib.py
 point at the new location. The git history was rewritten on the same
-day (git filter-repo, refs/*.pdf purged from every commit), so the
+day (git filter-repo, bibsrc/*.pdf purged from every commit), so the
 repository no longer carries the PDFs at any point in its history; a
 pre-rewrite backup bundle is kept locally outside the repo.
 

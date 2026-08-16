@@ -47,9 +47,14 @@ def makefile_targets(text):
     for line in text.splitlines():
         if line.startswith("\t") or line.lstrip().startswith("#"):
             continue
-        m = re.match(r"^([A-Za-z0-9_./+-]+)\s*:(?!=)", line)
+        m = re.match(r"^(\$\(OUT\)/)?([A-Za-z0-9_./+-]+)\s*:(?!=)", line)
         if m:
-            out.add(m.group(1))
+            # Binaries are built into $(OUT) (CLAUDE.md T2), so a rule reads
+            # "$(OUT)/hubengine:". The scripts still invoke ./hubengine, and
+            # this check is about a target existing, not about where it lands.
+            out.add(m.group(2))
+            if m.group(1):
+                out.add(m.group(1) + m.group(2))
     return out
 
 

@@ -1,3 +1,8 @@
+# Build output goes to the disposable tree (CLAUDE.md T2/T4); the pdf stays
+# in the repo (T9). BUILD_TARGET_PREFIX comes from ~/.zshenv.
+BUILD_TARGET_PREFIX ?= /Users/thv/Claude/Projects
+OUT = $(BUILD_TARGET_PREFIX)/_buildoutput/3d-multiview
+
 CC      ?= cc
 CFLAGS  ?= -std=c99 -pedantic -Wall -Wextra -O2
 CPPFLAGS += -Iinclude
@@ -8,150 +13,189 @@ SRC = src/mat.c src/cam.c src/epipolar.c src/triangulate.c src/rectify.c \
       src/calib.c src/pattern.c src/render.c src/reader.c src/tsdf.c \
       src/refine.c src/optimal.c src/feat.c src/session.c src/photo.c src/bundle.c src/rot.c \
       src/plane.c src/sync.c src/track.c
-OBJ = $(SRC:.c=.o)
+OBJ = $(SRC:%.c=$(OUT)/%.o)
 
-all: libmv.a demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv
+all: $(OUT)/libmv.a $(OUT)/demo_synthetic $(OUT)/demo_calibrate $(OUT)/demo_track $(OUT)/demo_diagnose $(OUT)/demo_insects $(OUT)/demo_lightlog $(OUT)/demo_people $(OUT)/demo_patternsim $(OUT)/demo_tsdf $(OUT)/demo_room $(OUT)/test_mv
 
-libmv.a: $(OBJ)
+$(OUT)/libmv.a: $(OBJ)
 	ar rcs $@ $(OBJ)
 
-demo_synthetic: demo/synthetic.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/synthetic.o libmv.a $(LDLIBS)
+$(OUT)/demo_synthetic: $(OUT)/demo/synthetic.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/synthetic.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_calibrate: demo/calibrate.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/calibrate.o libmv.a $(LDLIBS)
+$(OUT)/demo_calibrate: $(OUT)/demo/calibrate.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/calibrate.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_tsdf: demo/tsdfsim.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/tsdfsim.o libmv.a $(LDLIBS)
+$(OUT)/demo_tsdf: $(OUT)/demo/tsdfsim.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/tsdfsim.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_room: demo/roomsim.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/roomsim.o libmv.a $(LDLIBS)
+$(OUT)/demo_room: $(OUT)/demo/roomsim.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/roomsim.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_slight: demo/slightsim.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/slightsim.o libmv.a $(LDLIBS)
+$(OUT)/demo_slight: $(OUT)/demo/slightsim.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/slightsim.o $(OUT)/libmv.a $(LDLIBS)
 
-calibreal: tools/calibreal.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/calibreal.o libmv.a $(LDLIBS)
+$(OUT)/calibreal: $(OUT)/tools/calibreal.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/calibreal.o $(OUT)/libmv.a $(LDLIBS)
 
-scenecloud: tools/scenecloud.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/scenecloud.o libmv.a $(LDLIBS)
+$(OUT)/scenecloud: $(OUT)/tools/scenecloud.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/scenecloud.o $(OUT)/libmv.a $(LDLIBS)
 
-rigcalib: tools/rigcalib.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/rigcalib.o libmv.a $(LDLIBS)
+$(OUT)/rigcalib: $(OUT)/tools/rigcalib.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/rigcalib.o $(OUT)/libmv.a $(LDLIBS)
 
-annotate: tools/annotate.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/annotate.o libmv.a $(LDLIBS)
+$(OUT)/annotate: $(OUT)/tools/annotate.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/annotate.o $(OUT)/libmv.a $(LDLIBS)
 
-slreal: tools/slreal.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/slreal.o libmv.a $(LDLIBS)
+$(OUT)/slreal: $(OUT)/tools/slreal.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/slreal.o $(OUT)/libmv.a $(LDLIBS)
 
-replaycam: tools/replaycam.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/replaycam.o libmv.a $(LDLIBS)
+$(OUT)/replaycam: $(OUT)/tools/replaycam.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/replaycam.o $(OUT)/libmv.a $(LDLIBS)
 
-hubengine: tools/livehub.o tools/hub_clock.o tools/hub_solve.o tools/hub_pair.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/livehub.o tools/hub_clock.o \
-	  tools/hub_solve.o tools/hub_pair.o libmv.a $(LDLIBS)
+$(OUT)/hubengine: $(OUT)/tools/livehub.o $(OUT)/tools/hub_clock.o $(OUT)/tools/hub_solve.o $(OUT)/tools/hub_pair.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/livehub.o $(OUT)/tools/hub_clock.o \
+	  $(OUT)/tools/hub_solve.o $(OUT)/tools/hub_pair.o $(OUT)/libmv.a $(LDLIBS)
 
-nettest: tools/nettest.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/nettest.o libmv.a $(LDLIBS)
+$(OUT)/nettest: $(OUT)/tools/nettest.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/nettest.o $(OUT)/libmv.a $(LDLIBS)
 
-genframes: tools/genframes.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/genframes.o libmv.a $(LDLIBS)
+$(OUT)/genframes: $(OUT)/tools/genframes.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/genframes.o $(OUT)/libmv.a $(LDLIBS)
 
-densereal: tools/densereal.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tools/densereal.o libmv.a $(LDLIBS)
+$(OUT)/densereal: $(OUT)/tools/densereal.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/densereal.o $(OUT)/libmv.a $(LDLIBS)
 
-stream_cam_v4l2: tools/stream_cam_v4l2.o
-	$(CC) $(CFLAGS) -o $@ tools/stream_cam_v4l2.o $(LDLIBS)
+$(OUT)/stream_cam_v4l2: $(OUT)/tools/stream_cam_v4l2.o
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/stream_cam_v4l2.o $(LDLIBS)
 
-demo_patternsim: demo/patternsim.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/patternsim.o libmv.a $(LDLIBS)
+$(OUT)/demo_patternsim: $(OUT)/demo/patternsim.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/patternsim.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_insects: demo/track_insects.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/track_insects.o libmv.a $(LDLIBS)
+$(OUT)/demo_insects: $(OUT)/demo/track_insects.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/track_insects.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_lightlog: demo/lightlog.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/lightlog.o libmv.a $(LDLIBS)
+$(OUT)/demo_lightlog: $(OUT)/demo/lightlog.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/lightlog.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_people: demo/track_people.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/track_people.o libmv.a $(LDLIBS)
+$(OUT)/demo_people: $(OUT)/demo/track_people.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/track_people.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_diagnose: demo/diagnose.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/diagnose.o libmv.a $(LDLIBS)
+$(OUT)/demo_diagnose: $(OUT)/demo/diagnose.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/diagnose.o $(OUT)/libmv.a $(LDLIBS)
 
-demo_track: demo/track_robot.o libmv.a
-	$(CC) $(CFLAGS) -o $@ demo/track_robot.o libmv.a $(LDLIBS)
+$(OUT)/demo_track: $(OUT)/demo/track_robot.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/demo/track_robot.o $(OUT)/libmv.a $(LDLIBS)
 
-test_mv: tests/test_mv.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_mv.o libmv.a $(LDLIBS)
+$(OUT)/test_mv: $(OUT)/tests/test_mv.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_mv.o $(OUT)/libmv.a $(LDLIBS)
 
-test_refine: tests/test_refine.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_refine.o libmv.a $(LDLIBS)
+$(OUT)/test_refine: $(OUT)/tests/test_refine.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_refine.o $(OUT)/libmv.a $(LDLIBS)
 
-test_optimal: tests/test_optimal.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_optimal.o libmv.a $(LDLIBS)
+$(OUT)/test_optimal: $(OUT)/tests/test_optimal.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_optimal.o $(OUT)/libmv.a $(LDLIBS)
 
-test_feat: tests/test_feat.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_feat.o libmv.a $(LDLIBS)
+$(OUT)/test_feat: $(OUT)/tests/test_feat.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_feat.o $(OUT)/libmv.a $(LDLIBS)
 
-test_session: tests/test_session.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_session.o libmv.a $(LDLIBS)
+$(OUT)/test_session: $(OUT)/tests/test_session.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_session.o $(OUT)/libmv.a $(LDLIBS)
 
-test_photo: tests/test_photo.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_photo.o libmv.a $(LDLIBS)
+$(OUT)/test_photo: $(OUT)/tests/test_photo.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_photo.o $(OUT)/libmv.a $(LDLIBS)
 
-test_bundle: tests/test_bundle.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_bundle.o libmv.a $(LDLIBS)
+$(OUT)/test_bundle: $(OUT)/tests/test_bundle.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_bundle.o $(OUT)/libmv.a $(LDLIBS)
 
-test_mux: tests/test_mux.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_mux.o libmv.a $(LDLIBS)
+$(OUT)/test_mux: $(OUT)/tests/test_mux.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_mux.o $(OUT)/libmv.a $(LDLIBS)
 
-test_reader_speed: tests/test_reader_speed.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_reader_speed.o libmv.a $(LDLIBS)
+$(OUT)/test_reader_speed: $(OUT)/tests/test_reader_speed.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_reader_speed.o $(OUT)/libmv.a $(LDLIBS)
 
-test_clock_sync: tests/test_clock_sync.o tools/hub_clock.o
-	$(CC) $(CFLAGS) -o $@ tests/test_clock_sync.o tools/hub_clock.o $(LDLIBS)
+$(OUT)/test_clock_sync: $(OUT)/tests/test_clock_sync.o $(OUT)/tools/hub_clock.o
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_clock_sync.o $(OUT)/tools/hub_clock.o $(LDLIBS)
 
-test_hub_solve: tests/test_hub_solve.o tools/hub_solve.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_hub_solve.o tools/hub_solve.o libmv.a $(LDLIBS)
+$(OUT)/test_hub_solve: $(OUT)/tests/test_hub_solve.o $(OUT)/tools/hub_solve.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_hub_solve.o $(OUT)/tools/hub_solve.o $(OUT)/libmv.a $(LDLIBS)
 
-test_hub_pair: tests/test_hub_pair.o tools/hub_pair.o
-	$(CC) $(CFLAGS) -o $@ tests/test_hub_pair.o tools/hub_pair.o $(LDLIBS)
+$(OUT)/test_hub_pair: $(OUT)/tests/test_hub_pair.o $(OUT)/tools/hub_pair.o
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_hub_pair.o $(OUT)/tools/hub_pair.o $(LDLIBS)
 
-test_tsdffast: tests/test_tsdffast.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_tsdffast.o libmv.a $(LDLIBS)
+$(OUT)/test_tsdffast: $(OUT)/tests/test_tsdffast.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_tsdffast.o $(OUT)/libmv.a $(LDLIBS)
 
-test_plane: tests/test_plane.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_plane.o libmv.a $(LDLIBS)
+$(OUT)/test_plane: $(OUT)/tests/test_plane.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_plane.o $(OUT)/libmv.a $(LDLIBS)
 
-test_sync: tests/test_sync.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_sync.o libmv.a $(LDLIBS)
+$(OUT)/test_sync: $(OUT)/tests/test_sync.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_sync.o $(OUT)/libmv.a $(LDLIBS)
 
-test_track: tests/test_track.o libmv.a
-	$(CC) $(CFLAGS) -o $@ tests/test_track.o libmv.a $(LDLIBS)
+$(OUT)/test_track: $(OUT)/tests/test_track.o $(OUT)/libmv.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_track.o $(OUT)/libmv.a $(LDLIBS)
 
-%.o: %.c
+$(OUT)/%.o: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-check: test_mv test_refine test_optimal test_feat test_session test_photo test_bundle test_mux test_reader_speed test_clock_sync test_hub_solve test_hub_pair test_tsdffast test_plane test_sync test_track
-	./test_mv
-	./test_refine
-	./test_optimal
-	./test_feat
-	./test_session
-	./test_photo
-	./test_bundle
-	./test_mux
-	./test_reader_speed
-	./test_clock_sync
-	./test_hub_solve
-	./test_hub_pair
-	./test_tsdffast
-	./test_plane
-	./test_sync
-	./test_track
+check: $(OUT)/test_mv $(OUT)/test_refine $(OUT)/test_optimal $(OUT)/test_feat $(OUT)/test_session $(OUT)/test_photo $(OUT)/test_bundle $(OUT)/test_mux $(OUT)/test_reader_speed $(OUT)/test_clock_sync $(OUT)/test_hub_solve $(OUT)/test_hub_pair $(OUT)/test_tsdffast $(OUT)/test_plane $(OUT)/test_sync $(OUT)/test_track
+	$(OUT)/test_mv
+	$(OUT)/test_refine
+	$(OUT)/test_optimal
+	$(OUT)/test_feat
+	$(OUT)/test_session
+	$(OUT)/test_photo
+	$(OUT)/test_bundle
+	$(OUT)/test_mux
+	$(OUT)/test_reader_speed
+	$(OUT)/test_clock_sync
+	$(OUT)/test_hub_solve
+	$(OUT)/test_hub_pair
+	$(OUT)/test_tsdffast
+	$(OUT)/test_plane
+	$(OUT)/test_sync
+	$(OUT)/test_track
 	python3 tests/check_targets.py
-	$(MAKE) doc/multiview.aux
+	$(MAKE) $(OUT)/doc/multiview.aux
 	python3 tests/check_bib.py
 	$(MAKE) checkweb
 
@@ -194,21 +238,21 @@ drv_pgm: fuzz/standalone.c fuzz/fuzz_pgm.c $(SRC)
 	$(CC) -std=c99 -O1 -g -fsanitize=address,undefined -Iinclude \
 	  fuzz/standalone.c fuzz/fuzz_pgm.c $(SRC) -lm -o $@
 
-demo: demo_synthetic demo_calibrate demo_track demo_diagnose \
-      demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf \
-      demo_room
-	./demo_synthetic
-	./demo_calibrate
-	./demo_track
-	./demo_diagnose
-	./demo_insects
-	./demo_lightlog
-	./demo_people
-	./demo_patternsim
-	./demo_tsdf
-	./demo_room
+demo: $(OUT)/demo_synthetic $(OUT)/demo_calibrate $(OUT)/demo_track $(OUT)/demo_diagnose \
+      $(OUT)/demo_insects $(OUT)/demo_lightlog $(OUT)/demo_people $(OUT)/demo_patternsim $(OUT)/demo_tsdf \
+      $(OUT)/demo_room
+	$(OUT)/demo_synthetic
+	$(OUT)/demo_calibrate
+	$(OUT)/demo_track
+	$(OUT)/demo_diagnose
+	$(OUT)/demo_insects
+	$(OUT)/demo_lightlog
+	$(OUT)/demo_people
+	$(OUT)/demo_patternsim
+	$(OUT)/demo_tsdf
+	$(OUT)/demo_room
 
-doc: doc/multiview.pdf doc/multiview.aux
+doc: doc/multiview.pdf $(OUT)/doc/multiview.aux
 
 # tests/check_bib.py reads doc/multiview.aux, a latex byproduct that
 # `make clean` removes while the versioned pdf stays. The pdf is then
@@ -216,19 +260,25 @@ doc: doc/multiview.pdf doc/multiview.aux
 # cannot restore the aux -- which made `make check` fail after a clean
 # with advice ("run make doc first") that did not work. Keying a rule
 # on the aux itself forces the one rebuild that regenerates it.
-doc/multiview.aux:
+$(OUT)/doc/multiview.aux:
 	$(MAKE) -B doc/multiview.pdf
 
+# bibtex refuses to write outside the current directory (TeX Live ships
+# openout_any = p), so the run happens inside $(OUT)/doc with the sources found
+# through TEXINPUTS/BIBINPUTS. The pdf is copied back into the repo (T9).
 doc/multiview.pdf: doc/multiview.tex doc/refs.bib
-	cd doc && pdflatex -interaction=nonstopmode multiview >/dev/null \
-	&& bibtex multiview >/dev/null \
-	&& pdflatex -interaction=nonstopmode multiview >/dev/null \
-	&& pdflatex -interaction=nonstopmode multiview >/dev/null
+	@mkdir -p $(OUT)/doc
+	cd $(OUT)/doc \
+	&& TEXINPUTS=$(CURDIR)/doc//: BIBINPUTS=$(CURDIR)/doc//: \
+	   pdflatex -interaction=nonstopmode $(CURDIR)/doc/multiview.tex >/dev/null \
+	&& BIBINPUTS=$(CURDIR)/doc//: bibtex multiview >/dev/null \
+	&& TEXINPUTS=$(CURDIR)/doc//: BIBINPUTS=$(CURDIR)/doc//: \
+	   pdflatex -interaction=nonstopmode $(CURDIR)/doc/multiview.tex >/dev/null \
+	&& TEXINPUTS=$(CURDIR)/doc//: BIBINPUTS=$(CURDIR)/doc//: \
+	   pdflatex -interaction=nonstopmode $(CURDIR)/doc/multiview.tex >/dev/null
+	cp $(OUT)/doc/multiview.pdf doc/multiview.pdf
 
 clean:
-	rm -f $(OBJ) demo/synthetic.o demo/calibrate.o demo/track_robot.o demo/diagnose.o demo/track_insects.o demo/lightlog.o demo/track_people.o demo/patternsim.o demo/tsdfsim.o demo/roomsim.o demo/slightsim.o tools/calibreal.o tools/scenecloud.o tools/rigcalib.o tools/annotate.o tools/slreal.o tools/replaycam.o tools/livehub.o tools/nettest.o tools/genframes.o tools/stream_cam_v4l2.o tests/test_mv.o tests/test_refine.o tests/test_optimal.o tests/test_feat.o tests/test_session.o tests/test_photo.o tests/test_bundle.o tests/test_mux.o libmv.a \
-	      demo_synthetic demo_calibrate demo_track demo_diagnose demo_insects demo_lightlog demo_people demo_patternsim demo_tsdf demo_room test_mv out_cloud.ply out_track.ply \
-	      target_letter.pgm \
-	      doc/*.aux doc/*.log doc/*.bbl doc/*.blg doc/*.out doc/*.toc doc/*.brf
+	rm -rf $(OUT)
 
 .PHONY: all check demo doc clean

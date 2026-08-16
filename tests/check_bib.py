@@ -21,8 +21,11 @@ bib = open('doc/refs.bib').read()
 keys = set(re.findall(r'@\w+\{(\w+),', bib))
 
 aux_cited = set()
-if os.path.exists('doc/multiview.aux'):
-    for m in re.findall(r'\\citation\{([^}]+)\}', open('doc/multiview.aux').read()):
+AUX = os.path.join(
+    os.environ.get('BUILD_TARGET_PREFIX', os.path.expanduser('~/Claude/Projects')),
+    '_buildoutput', '3d-multiview', 'doc', 'multiview.aux')
+if os.path.exists(AUX):
+    for m in re.findall(r'\\citation\{([^}]+)\}', open(AUX).read()):
         aux_cited.update(m.split(','))
 else:
     fail.append('doc/multiview.aux missing (run make doc first)')
@@ -55,9 +58,11 @@ for m in re.finditer(r'@\w+\{(\w+),', bib):
         fail.append(f'entry missing local-copy note: {key}')
         continue
     note = nm.group(1)
-    pm = re.search(r'Local copy: (\.\./_refs/3d-multiview/[\w.-]+\.pdf)', note)
+    pm = re.search(r'Local copy: (\.\./\\\\?_refs/3d-multiview/[\w.-]+\.pdf)', note)
     if pm:
-        path = pm.group(1)
+        # The note is typeset, so the underscore in _refs is escaped there;
+        # the filesystem path is not.
+        path = pm.group(1).replace('\\_', '_')
         if not os.path.exists(path):
             fail.append(f'{key}: claimed local copy missing: {path}')
         elif open(path, 'rb').read(4) != b'%PDF':

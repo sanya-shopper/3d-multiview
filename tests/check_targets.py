@@ -49,12 +49,20 @@ def makefile_targets(text):
             continue
         m = re.match(r"^(\$\(OUT\)/)?([A-Za-z0-9_./+-]+)\s*:(?!=)", line)
         if m:
-            # Binaries are built into $(OUT) (CLAUDE.md T2), so a rule reads
-            # "$(OUT)/hubengine:". The scripts still invoke ./hubengine, and
-            # this check is about a target existing, not about where it lands.
-            out.add(m.group(2))
-            if m.group(1):
-                out.add(m.group(1) + m.group(2))
+            # Binaries are built into $(OUT) (CLAUDE.md T2), so a rule
+            # reads "$(OUT)/hubengine:".  That does NOT make bare
+            # `make hubengine` work -- only the ALIASBIN block below
+            # does -- so the bare name is credited only to real bare
+            # rules and to ALIASBIN members.  (This check once credited
+            # bare names to $(OUT)/ rules and went blind to exactly the
+            # breakage it exists to catch.)
+            out.add((m.group(1) or "") + m.group(2))
+    # bare-name aliases: ALIASBIN = a b c \ ... (line continuations)
+    m = re.search(r"^ALIASBIN\s*=\s*((?:[^\n\\]*\\\n)*[^\n]*)", text,
+                  re.M)
+    if m:
+        for w in m.group(1).replace("\\\n", " ").split():
+            out.add(w)
     return out
 
 
@@ -90,12 +98,13 @@ def for_loop_targets(text):
 
 
 def check_suite_binaries(text):
-    """Binaries the `check` target runs, i.e. ./test_foo lines."""
+    """Binaries the `check` target runs -- $(OUT)/test_foo (or a
+    legacy ./test_foo) recipe lines, reported by bare name."""
     out = set()
     m = re.search(r"^check:.*?(?=^\S)", text, re.M | re.S)
     if m:
         for line in m.group(0).splitlines():
-            b = re.match(r"^\t\./(\S+)", line)
+            b = re.match(r"^\t(?:\$\(OUT\)/|\./)(test_\S+)", line)
             if b:
                 out.add(b.group(1))
     return out
@@ -122,16 +131,20 @@ def main():
                              "Makefile" % (rel, t))
 
     # 2. binaries the scripts execute directly must be built by a target
-    #    of the same name (./hubengine, ./replaycam, ...)
-    for rel in ("deploy/stress-live.sh", "deploy/valgrind-hub.sh"):
+    #    of the same name -- both legacy ./hubengine and the current
+    #    "$OUT/hubengine" form (CLAUDE.md T2 build tree)
+    for rel in ("deploy/stress-live.sh", "deploy/valgrind-hub.sh",
+                "deploy/build-linux.sh"):
         text = strip_prose(read(rel))
-        for m in re.finditer(r"\./([A-Za-z0-9_]+)\s", text):
+        for m in re.finditer(
+                r"(?:\./|\$OUT/|\$\{OUT\}/)([A-Za-z0-9_]+)[\s\"]",
+                text):
             b = m.group(1)
             if b.startswith("test_") or b in targets:
                 continue
             if b in ("configure",):
                 continue
-            fails.append("%s: runs ./%s but no Makefile target builds "
+            fails.append("%s: runs %s but no Makefile target builds "
                          "it" % (rel, b))
 
     # 3. every suite in `make check` also runs on Linux CI

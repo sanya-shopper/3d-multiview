@@ -33,7 +33,7 @@ jobs:
       - name: build and test (Linux)
         run: sh deploy/build-linux.sh
       - name: nettest selftest
-        run: ./nettest --selftest
+        run: '"$(cd .. && pwd)/_buildoutput/3d-multiview/nettest" --selftest'
 
   macos:
     runs-on: macos-14
@@ -42,7 +42,7 @@ jobs:
       - name: build and test (macOS)
         run: sh deploy/build-linux.sh
       - name: nettest selftest
-        run: ./nettest --selftest
+        run: '"$(cd .. && pwd)/_buildoutput/3d-multiview/nettest" --selftest'
 
   ubuntu-sanitizers:
     runs-on: ubuntu-24.04
@@ -77,7 +77,9 @@ jobs:
           TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1
         run: |
           make libmv.a replaycam nettest genframes
-          rm -f tools/livehub.o tools/hub_clock.o tools/hub_solve.o
+          OUT="$(cd .. && pwd)/_buildoutput/3d-multiview"
+          rm -f "$OUT"/tools/livehub.o "$OUT"/tools/hub_clock.o \
+                "$OUT"/tools/hub_solve.o "$OUT"/tools/hub_pair.o
           CFLAGS="-std=c99 -pedantic -Wall -Wextra -O1 -g -fsanitize=thread" make hubengine
           sh deploy/stress-live.sh 0
 
@@ -131,14 +133,15 @@ jobs:
         run: make test_session test_optimal test_feat test_mux test_photo test_sync test_track nettest
       - name: valgrind quick suites
         run: |
+          OUT="$(cd .. && pwd)/_buildoutput/3d-multiview"
           for t in test_session test_optimal test_feat test_mux test_photo \
                    test_sync test_track; do
             echo "=== valgrind $t ==="
             valgrind --error-exitcode=1 --leak-check=full \
-                     --errors-for-leak-kinds=definite ./$t || exit 1
+                     --errors-for-leak-kinds=definite "$OUT/$t" || exit 1
           done
           valgrind --error-exitcode=1 --leak-check=full \
-                   --errors-for-leak-kinds=definite ./nettest --selftest
+                   --errors-for-leak-kinds=definite "$OUT/nettest" --selftest
       - name: build live tools
         env:
           CFLAGS: -std=c99 -pedantic -Wall -Wextra -O1 -g
@@ -161,10 +164,11 @@ jobs:
         run: make test_mv test_refine test_bundle
       - name: valgrind heavy suites
         run: |
+          OUT="$(cd .. && pwd)/_buildoutput/3d-multiview"
           for t in test_mv test_refine test_bundle; do
             echo "=== valgrind $t ==="
             valgrind --error-exitcode=1 --leak-check=full \
-                     --errors-for-leak-kinds=definite ./$t || exit 1
+                     --errors-for-leak-kinds=definite "$OUT/$t" || exit 1
           done
 
   static-analysis:
@@ -184,7 +188,7 @@ jobs:
         run: |
           scan-build -o scanout --status-bugs \
             make CC=clang libmv.a calibreal rigcalib scenecloud slreal \
-                 annotate replaycam hubengine nettest genframes || \
+                 annotate replaycam hubengine nettest genframes dthub || \
             { echo "scan-build found issues"; exit 1; }
 
   fuzz:
@@ -215,8 +219,11 @@ jobs:
         run: |
           make CC=${{ matrix.cc }} libmv.a test_mv test_refine test_optimal \
                test_feat test_session test_photo test_bundle test_mux \
-               test_tsdffast test_plane test_sync test_track
+               test_dtstats test_tsdffast test_plane test_sync test_track
+          OUT="$(cd .. && pwd)/_buildoutput/3d-multiview"
           for t in test_mv test_refine test_optimal test_feat test_session \
-                   test_photo test_bundle test_mux test_tsdffast test_plane \
-                   test_sync test_track; do ./$t >/dev/null || exit 1; done
+                   test_photo test_bundle test_mux test_dtstats test_tsdffast \
+                   test_plane test_sync test_track; do
+            "$OUT/$t" >/dev/null || exit 1
+          done
           echo "${{ matrix.cc }} ${{ matrix.opt }}: all suites pass"

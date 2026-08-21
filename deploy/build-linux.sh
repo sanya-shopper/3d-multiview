@@ -32,6 +32,12 @@ set -u
 # Run from the repo root regardless of invocation directory.
 cd "$(dirname "$0")/.." || exit 2
 
+# Binaries land in the disposable build tree (CLAUDE.md T2); mirror the
+# Makefile's default so we can run what we build.
+BUILD_TARGET_PREFIX="${BUILD_TARGET_PREFIX:-$(cd .. && pwd)}"
+export BUILD_TARGET_PREFIX
+OUT="$BUILD_TARGET_PREFIX/_buildoutput/3d-multiview"
+
 LOG="${TMPDIR:-/tmp}/mv_stage_$$.log"
 trap 'rm -f "$LOG"' EXIT
 
@@ -77,7 +83,7 @@ stage "libmv.a" make libmv.a
 
 # Stage 2: C tools, one target at a time so each failure is attributed.
 for t in calibreal scenecloud rigcalib annotate slreal replaycam \
-         hubengine nettest; do
+         hubengine nettest dthub; do
     stage "tool $t" make "$t"
 done
 
@@ -87,18 +93,18 @@ stage "tool stream_cam_v4l2" make stream_cam_v4l2
 # Stage 4: build test binaries.
 for t in test_mv test_refine test_optimal test_feat test_session \
          test_photo test_bundle test_mux test_reader_speed \
-         test_clock_sync test_hub_solve test_hub_pair test_tsdffast \
-         test_plane test_sync test_track; do
+         test_clock_sync test_hub_solve test_hub_pair test_dtstats \
+         test_tsdffast test_plane test_sync test_track; do
     stage "build $t" make "$t"
 done
 
 # Stage 5: run test binaries (only those that were built).
 for t in test_mv test_refine test_optimal test_feat test_session \
          test_photo test_bundle test_mux test_reader_speed \
-         test_clock_sync test_hub_solve test_hub_pair test_tsdffast \
-         test_plane test_sync test_track; do
-    if [ -x "./$t" ]; then
-        stage "run $t" "./$t"
+         test_clock_sync test_hub_solve test_hub_pair test_dtstats \
+         test_tsdffast test_plane test_sync test_track; do
+    if [ -x "$OUT/$t" ]; then
+        stage "run $t" "$OUT/$t"
     else
         printf '=== %-28s SKIP (binary missing: build stage failed)\n' \
                "run $t"

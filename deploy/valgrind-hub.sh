@@ -7,16 +7,19 @@
 # the loopback already prove calibration). Success = memcheck clean
 # (--error-exitcode=1) AND the hub actually received/decoded frames AND
 # it shut down cleanly.
+cd "$(dirname "$0")/.." || exit 2
+BUILD_TARGET_PREFIX="${BUILD_TARGET_PREFIX:-$(cd .. && pwd)}"
+OUT="$BUILD_TARGET_PREFIX/_buildoutput/3d-multiview"
 PORT=9931
 FDIR=/tmp/mv_vg_frames
 VLOG=/tmp/mv_vg_hub.log
-./genframes "$FDIR" 24
+"$OUT/genframes" "$FDIR" 24
 valgrind --leak-check=full --show-leak-kinds=definite,indirect \
          --errors-for-leak-kinds=definite,indirect --error-exitcode=1 \
-         ./hubengine $PORT 0.1133 > "$VLOG" 2>&1 &
+         "$OUT/hubengine" $PORT 0.1133 > "$VLOG" 2>&1 &
 VG=$!
 sleep 12   # valgrind startup
-./replaycam 127.0.0.1 $PORT 1 0.4 $(ls "$FDIR"/f*.pgm) >/dev/null 2>&1
+"$OUT/replaycam" 127.0.0.1 $PORT 1 0.4 $(ls "$FDIR"/f*.pgm) >/dev/null 2>&1
 sleep 10   # let the hub drain and decode some frames under memcheck
 kill -TERM $VG
 wait $VG

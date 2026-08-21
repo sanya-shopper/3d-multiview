@@ -72,3 +72,5 @@ test_plane
 test_sync
 test_track
 densereal
+test_dtstats
+dthub

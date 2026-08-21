@@ -1,6 +1,8 @@
 # Build output goes to the disposable tree (CLAUDE.md T2/T4); the pdf stays
-# in the repo (T9). BUILD_TARGET_PREFIX comes from ~/.zshenv.
-BUILD_TARGET_PREFIX ?= /Users/thv/Claude/Projects
+# in the repo (T9). BUILD_TARGET_PREFIX comes from ~/.zshenv; the default
+# (the repo's parent) matches it on the dev machine and keeps CI runners --
+# where /Users/thv does not exist -- working without configuration.
+BUILD_TARGET_PREFIX ?= $(abspath $(CURDIR)/..)
 OUT = $(BUILD_TARGET_PREFIX)/_buildoutput/3d-multiview
 
 CC      ?= cc
@@ -72,6 +74,11 @@ $(OUT)/hubengine: $(OUT)/tools/livehub.o $(OUT)/tools/hub_clock.o $(OUT)/tools/h
 $(OUT)/nettest: $(OUT)/tools/nettest.o $(OUT)/libmv.a
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/nettest.o $(OUT)/libmv.a $(LDLIBS)
+
+# section-8 measurement harness: arrival dt, no decode, no libmv
+$(OUT)/dthub: $(OUT)/tools/dthub.o $(OUT)/tools/dtstats.o
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tools/dthub.o $(OUT)/tools/dtstats.o $(LDLIBS)
 
 $(OUT)/genframes: $(OUT)/tools/genframes.o $(OUT)/libmv.a
 	@mkdir -p $(OUT)
@@ -157,6 +164,10 @@ $(OUT)/test_hub_pair: $(OUT)/tests/test_hub_pair.o $(OUT)/tools/hub_pair.o
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_hub_pair.o $(OUT)/tools/hub_pair.o $(LDLIBS)
 
+$(OUT)/test_dtstats: $(OUT)/tests/test_dtstats.o $(OUT)/tools/dtstats.o
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_dtstats.o $(OUT)/tools/dtstats.o $(LDLIBS)
+
 $(OUT)/test_tsdffast: $(OUT)/tests/test_tsdffast.o $(OUT)/libmv.a
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -o $@ $(OUT)/tests/test_tsdffast.o $(OUT)/libmv.a $(LDLIBS)
@@ -177,7 +188,7 @@ $(OUT)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-check: $(OUT)/test_mv $(OUT)/test_refine $(OUT)/test_optimal $(OUT)/test_feat $(OUT)/test_session $(OUT)/test_photo $(OUT)/test_bundle $(OUT)/test_mux $(OUT)/test_reader_speed $(OUT)/test_clock_sync $(OUT)/test_hub_solve $(OUT)/test_hub_pair $(OUT)/test_tsdffast $(OUT)/test_plane $(OUT)/test_sync $(OUT)/test_track
+check: $(OUT)/test_mv $(OUT)/test_refine $(OUT)/test_optimal $(OUT)/test_feat $(OUT)/test_session $(OUT)/test_photo $(OUT)/test_bundle $(OUT)/test_mux $(OUT)/test_reader_speed $(OUT)/test_clock_sync $(OUT)/test_hub_solve $(OUT)/test_hub_pair $(OUT)/test_dtstats $(OUT)/test_tsdffast $(OUT)/test_plane $(OUT)/test_sync $(OUT)/test_track
 	$(OUT)/test_mv
 	$(OUT)/test_refine
 	$(OUT)/test_optimal
@@ -190,6 +201,7 @@ check: $(OUT)/test_mv $(OUT)/test_refine $(OUT)/test_optimal $(OUT)/test_feat $(
 	$(OUT)/test_clock_sync
 	$(OUT)/test_hub_solve
 	$(OUT)/test_hub_pair
+	$(OUT)/test_dtstats
 	$(OUT)/test_tsdffast
 	$(OUT)/test_plane
 	$(OUT)/test_sync
@@ -281,4 +293,21 @@ doc/multiview.pdf: doc/multiview.tex doc/refs.bib
 clean:
 	rm -rf $(OUT)
 
-.PHONY: all check demo doc clean
+# Bare-name convenience targets: `make hubengine` builds
+# $(OUT)/hubengine.  CI and the deploy scripts invoke these; the
+# binaries themselves stay out of the repo tree (CLAUDE.md T2) --
+# scripts locate them via the same $(OUT) computation.
+ALIASBIN = libmv.a calibreal scenecloud rigcalib annotate slreal \
+	replaycam hubengine nettest genframes densereal dthub \
+	stream_cam_v4l2 \
+	demo_synthetic demo_calibrate demo_track demo_diagnose \
+	demo_insects demo_lightlog demo_people demo_patternsim \
+	demo_tsdf demo_room demo_slight \
+	test_mv test_refine test_optimal test_feat test_session \
+	test_photo test_bundle test_mux test_reader_speed \
+	test_clock_sync test_hub_solve test_hub_pair test_dtstats \
+	test_tsdffast test_plane test_sync test_track
+
+$(ALIASBIN): %: $(OUT)/%
+
+.PHONY: all check demo doc clean $(ALIASBIN)

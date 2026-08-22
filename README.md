@@ -48,15 +48,17 @@ section to its module and its validating test or experiment.
   (`diagnose`), the calibration-pattern pipeline (`patternsim`), TSDF
   fusion (`tsdfsim`), and the dense room model with change detection
   (`roomsim`) — `make demo` runs them all
-- `tests/test_mv.c` — exact-property unit tests on noiseless data
+- `tests/` — 17 C suites (`test_mv.c` is the core exact-property suite
+  on noiseless data), two headless JS suites for the web apps, and
+  Python consistency checks (build targets, bibliography, web stamp)
 - `doc/` — self-contained LaTeX documentation with local bibliography
 
 ## Build & verify
 
 ```sh
 make          # builds libmv.a, the demo, and the tests (strict C99, libm only)
-make check    # runs the unit tests
-make demo     # runs the synthetic experiment, writes out_cloud.ply
+make check    # runs all test suites and consistency checks (bib check needs TeX)
+make demo     # runs all the deterministic experiments (writes out_cloud.ply etc.)
 make doc      # builds doc/multiview.pdf
 ```
 

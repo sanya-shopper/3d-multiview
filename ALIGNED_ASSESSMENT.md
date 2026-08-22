@@ -12,7 +12,7 @@ correspondence logic, and we intend to refactor along those lines.
 
 ## 1. What `aligned` is
 
-`aligned` is a sibling project at `../aligned`, independent of this repo. Its
+`aligned` is a sibling project at `../3d-aligned`, independent of this repo. Its
 `NOTES.md:17-33` states its purpose: a portable C99 library for **temporally
 aligning camera frames captured on two different Macs**. Two laptops joined by
 USB-C, `BA` (conductor, machine MA) and `BB` (follower, MB); MB streams frames

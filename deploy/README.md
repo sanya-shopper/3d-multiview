@@ -31,11 +31,11 @@ Inside Ubuntu 24.04 (gcc 13, glibc 2.39), `build-linux.sh` runs:
 1. `make libmv.a` — the core library;
 2. every Linux-relevant C tool, one target at a time: `calibreal`,
    `scenecloud`, `rigcalib`, `annotate`, `slreal`, `replaycam`,
-   `hubengine`, `nettest`;
+   `hubengine`, `nettest`, `dthub`;
 3. `stream_cam_v4l2` — the real V4L2 streamer, a required build;
-4. builds the eleven C test binaries `test_mv test_refine test_optimal
-   test_feat test_session test_photo test_bundle test_mux
-   test_reader_speed test_clock_sync test_hub_solve`;
+4. builds the seventeen C test binaries (`test_mv` through
+   `test_track`; the authoritative list is the loop in
+   `build-linux.sh`);
 5. runs each test binary directly (deliberately *not* `make check`: the
    python bib checker validates the LaTeX doc, which is out of scope
    in-container).
@@ -80,7 +80,7 @@ before CI existed, and CI now guards against regression.
 ## Instrumented CI (measured)
 
 Every push runs, on ubuntu-24.04:
-- build + all 8 test suites (also on macos-14)
+- build + all C test suites (17 today; also on macos-14)
 - ASan+UBSan over the suites and the live fuzz-then-calibrate stress
 - ThreadSanitizer over the live hub stack (the network/decoder threads)
 - Valgrind memcheck over the quick suites (heavy suites weekly/on-demand)

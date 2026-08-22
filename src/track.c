@@ -67,7 +67,12 @@ int mv_tracks_build(mv_track **tracks, int *ntracks,
     imgof = (int *)malloc((size_t)N * sizeof(int));
     cnt = (int *)calloc((size_t)N, sizeof(int));
     start = (int *)malloc((size_t)(N + 1) * sizeof(int));
-    order = (int *)malloc((size_t)N * sizeof(int));
+    /* calloc, not malloc: the counting sort below provably writes every
+     * slot (each g lands in its root's range exactly once), but the
+     * static analyzer cannot see the bijection and flags the later
+     * order[start[g] + k] reads as undefined.  Zero-initializing costs
+     * one memset and keeps scan-build's CI gate meaningful. */
+    order = (int *)calloc((size_t)N, sizeof(int));
     if (!off || !parent || !imgof || !cnt || !start || !order)
         goto fail;
     off[0] = 0;

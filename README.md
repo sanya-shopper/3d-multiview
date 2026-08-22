@@ -8,11 +8,11 @@ range-finder data, and extensible to tracked mobile cameras that borrow
 their poses from the fixed backbone.
 
 **Interactive companions** (GitHub Pages):
-[two cameras watching a molecule](https://sanya-shopper.github.io/multiview/web/index.html)
+[two cameras watching a molecule](https://sanya-shopper.github.io/3d-multiview/web/index.html)
 (explore a solved rig) and
-[earn the rig](https://sanya-shopper.github.io/multiview/web/rig.html)
+[earn the rig](https://sanya-shopper.github.io/3d-multiview/web/rig.html)
 (solve one yourself) — see
-[the landing page](https://sanya-shopper.github.io/multiview/) for both,
+[the landing page](https://sanya-shopper.github.io/3d-multiview/) for both,
 plus the built document.
 
 Calibration is part of the system: the rig calibrates itself (Zhang's
